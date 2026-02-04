@@ -1,0 +1,131 @@
+{
+  "username": "chef_creator_358",
+  "bio": "\ud83c\udf55 Food lover sharing daily recipes",
+  "niche": "food",
+  "tier": "micro",
+  "followers": 3910,
+  "following": 840,
+  "total_posts": 371,
+  "estimated_posts_per_week": 5.9,
+  "avg_likes": 105,
+  "avg_comments": 18,
+  "avg_views": 1400,
+  "posts": [
+    {
+      "post_id": "post_001",
+      "post_type": "reel",
+      "caption": "Easy recipe anyone can make",
+      "hashtags": [
+        "foodporn",
+        "foodie",
+        "chef",
+        "cooking"
+      ],
+      "likes": 131,
+      "comments": 23,
+      "views": 1770,
+      "audio_name": "Chill Vibes"
+    },
+    {
+      "post_id": "post_002",
+      "post_type": "reel",
+      "caption": "This dessert is to die for \ud83c\udf70",
+      "hashtags": [
+        "homemade",
+        "foodporn",
+        "foodie"
+      ],
+      "likes": 187,
+      "comments": 33,
+      "views": 2429,
+      "audio_name": "Popular Track"
+    },
+    {
+      "post_id": "post_003",
+      "post_type": "reel",
+      "caption": "Healthy meal prep for the week \ud83d\udce6",
+      "hashtags": [],
+      "likes": 120,
+      "comments": 21,
+      "views": 1493,
+      "audio_name": "Trending Beat 2024"
+    },
+    {
+      "post_id": "post_004",
+      "post_type": "reel",
+      "caption": "Cooking tip: always season at every step!",
+      "hashtags": [
+        "recipe",
+        "foodie",
+        "yummy",
+        "delicious",
+        "homemade"
+      ],
+      "likes": 145,
+      "comments": 25,
+      "views": 1745,
+      "audio_name": "Viral Sound"
+    },
+    {
+      "post_id": "post_005",
+      "post_type": "reel",
+      "caption": "When comfort food hits different \ud83c\udf5d",
+      "hashtags": [
+        "cooking",
+        "recipe",
+        "chef",
+        "foodporn",
+        "foodie"
+      ],
+      "likes": 139,
+      "comments": 24,
+      "views": 2255,
+      "audio_name": "original audio"
+    },
+    {
+      "post_id": "post_006",
+      "post_type": "reel",
+      "caption": "This dessert is to die for \ud83c\udf70",
+      "hashtags": [
+        "foodie",
+        "foodporn",
+        "yummy",
+        "delicious",
+        "chef"
+      ],
+      "likes": 46,
+      "comments": 8,
+      "views": 746,
+      "audio_name": "original audio"
+    },
+    {
+      "post_id": "post_007",
+      "post_type": "reel",
+      "caption": "Cooking tip: always season at every step!",
+      "hashtags": [
+        "foodporn",
+        "chef",
+        "cooking"
+      ],
+      "likes": 78,
+      "comments": 13,
+      "views": 1161,
+      "audio_name": "original audio"
+    },
+    {
+      "post_id": "post_008",
+      "post_type": "reel",
+      "caption": "Cooking tip: always season at every step!",
+      "hashtags": [
+        "delicious",
+        "cooking",
+        "homemade",
+        "yummy"
+      ],
+      "likes": 203,
+      "comments": 35,
+      "views": 2428,
+      "audio_name": "Popular Track"
+    }
+  ]
+}

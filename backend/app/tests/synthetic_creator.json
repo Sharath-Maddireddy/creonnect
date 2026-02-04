@@ -1,0 +1,169 @@
+{
+  "profile": {
+    "username": "demo_fitness_creator",
+    "bio": "Personal Trainer | DM for coaching",
+    "followers": 75000,
+    "following": 1236,
+    "total_posts": 442,
+    "avg_likes": 3721,
+    "avg_comments": 656,
+    "avg_views": 92606,
+    "posts_per_week": 5.1,
+    "niche": "fitness"
+  },
+  "posts": [
+    {
+      "post_id": "post_001",
+      "post_type": "reel",
+      "caption_text": "Quick protein shake recipe for post-workout gains \ud83e\udd64",
+      "hashtags": [
+        "training",
+        "workout",
+        "health",
+        "bodybuilding",
+        "gym"
+      ],
+      "likes": 5319,
+      "comments": 566,
+      "views": 149730,
+      "posted_at": "2026-02-01T18:46:32.698053"
+    },
+    {
+      "post_id": "post_002",
+      "post_type": "post",
+      "caption_text": "Rest day vibes. Recovery is just as important as training \ud83e\uddd8\u200d\u2642\ufe0f",
+      "hashtags": [
+        "fitness",
+        "gym",
+        "health",
+        "gains"
+      ],
+      "likes": 1990,
+      "comments": 595,
+      "views": 59472,
+      "posted_at": "2026-01-30T18:46:32.698053"
+    },
+    {
+      "post_id": "post_003",
+      "post_type": "post",
+      "caption_text": "Leg day never gets easier, you just get stronger \ud83e\uddb5",
+      "hashtags": [
+        "health",
+        "fitfam",
+        "fitness",
+        "gains",
+        "training"
+      ],
+      "likes": 3075,
+      "comments": 799,
+      "views": 93366,
+      "posted_at": "2026-01-29T18:46:32.698053"
+    },
+    {
+      "post_id": "post_004",
+      "post_type": "post",
+      "caption_text": "Rest day vibes. Recovery is just as important as training \ud83e\uddd8\u200d\u2642\ufe0f",
+      "hashtags": [
+        "fitfam",
+        "training",
+        "gains",
+        "health"
+      ],
+      "likes": 5058,
+      "comments": 1213,
+      "views": 130778,
+      "posted_at": "2026-01-27T18:46:32.698053"
+    },
+    {
+      "post_id": "post_005",
+      "post_type": "reel",
+      "caption_text": "Full body workout - no equipment needed! Perfect for home",
+      "hashtags": [
+        "bodybuilding",
+        "fitness",
+        "training",
+        "workout"
+      ],
+      "likes": 4903,
+      "comments": 740,
+      "views": 111231,
+      "posted_at": "2026-01-24T18:46:32.698053"
+    },
+    {
+      "post_id": "post_006",
+      "post_type": "post",
+      "caption_text": "Quick protein shake recipe for post-workout gains \ud83e\udd64",
+      "hashtags": [
+        "fitness",
+        "health",
+        "workout"
+      ],
+      "likes": 5271,
+      "comments": 1246,
+      "views": 126230,
+      "posted_at": "2026-01-23T18:46:32.698053"
+    },
+    {
+      "post_id": "post_007",
+      "post_type": "post",
+      "caption_text": "\ud83d\udcaa Morning workout complete! Who else hits the gym early?",
+      "hashtags": [
+        "health",
+        "gym",
+        "fitness",
+        "bodybuilding"
+      ],
+      "likes": 2252,
+      "comments": 512,
+      "views": 54404,
+      "posted_at": "2026-01-21T18:46:32.698053"
+    },
+    {
+      "post_id": "post_008",
+      "post_type": "post",
+      "caption_text": "Quick protein shake recipe for post-workout gains \ud83e\udd64",
+      "hashtags": [
+        "fitness",
+        "training",
+        "health"
+      ],
+      "likes": 3622,
+      "comments": 662,
+      "views": 90319,
+      "posted_at": "2026-01-19T18:46:32.698053"
+    },
+    {
+      "post_id": "post_009",
+      "post_type": "reel",
+      "caption_text": "Quick protein shake recipe for post-workout gains \ud83e\udd64",
+      "hashtags": [
+        "fitness",
+        "fitfam",
+        "health",
+        "training"
+      ],
+      "likes": 3751,
+      "comments": 917,
+      "views": 106214,
+      "posted_at": "2026-01-16T18:46:32.698053"
+    },
+    {
+      "post_id": "post_010",
+      "post_type": "reel",
+      "caption_text": "Rest day vibes. Recovery is just as important as training \ud83e\uddd8\u200d\u2642\ufe0f",
+      "hashtags": [
+        "training",
+        "gym",
+        "gains",
+        "bodybuilding",
+        "workout",
+        "fitness"
+      ],
+      "likes": 7603,
+      "comments": 1036,
+      "views": 174204,
+      "posted_at": "2026-01-15T18:46:32.698053"
+    }
+  ],
+  "generated_at": "2026-02-02T18:46:32.698206"
+}

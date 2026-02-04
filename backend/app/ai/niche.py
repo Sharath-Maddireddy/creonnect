@@ -2,7 +2,7 @@ from typing import List
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from backend.app.ai.schemas import CreatorProfileAIInput
+from backend.app.ai.schemas import CreatorProfileAIInput, CreatorPostAIInput
 
 
 # -----------------------------
@@ -41,18 +41,22 @@ _model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 # -----------------------------
-# Public API (THIS is what we import)
+# Public API
 # -----------------------------
 
 def detect_creator_niche(
     profile: CreatorProfileAIInput,
-    recent_captions: List[str]
+    posts: List[CreatorPostAIInput]
 ) -> dict:
     """
-    Detect primary and secondary niche using bio + captions
+    Detect primary and secondary niche using bio + post captions.
+    Accepts posts as List[CreatorPostAIInput] and extracts captions internally.
     """
 
-    combined_text = profile.bio_text + " " + " ".join(recent_captions)
+    # Extract captions from posts
+    recent_captions = [p.caption_text for p in posts if p.caption_text]
+
+    combined_text = (profile.bio_text or "") + " " + " ".join(recent_captions)
 
     if not combined_text.strip():
         return {
@@ -91,4 +95,3 @@ def detect_creator_niche(
         "secondary_niche": NICHES[secondary_idx],
         "confidence": confidence
     }
-

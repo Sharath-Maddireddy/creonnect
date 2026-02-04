@@ -1,20 +1,69 @@
-from typing import Dict
+from typing import Dict, List, Optional
 from datetime import datetime
 
 from backend.app.ai.schemas import CreatorPostAIInput, CreatorProfileAIInput
 
 
 # ------------------------------------------------
-# Helper functions
+# PDF-Based Instagram Metric Calculations
 # ------------------------------------------------
 
-def _engagement_rate(likes: int, comments: int, followers: int) -> float:
-    if followers <= 0:
-        return 0.0
-    return round((likes + comments) / followers * 100, 2)
+def _calculate_total_interactions(likes: int, comments: int) -> int:
+    """Total interactions = likes + comments"""
+    return likes + comments
+
+
+def _calculate_engagement_rate_by_views(
+    total_interactions: int,
+    views: Optional[int]
+) -> Optional[float]:
+    """
+    Engagement Rate by Views = (total_interactions / views) * 100
+    This is the PRIMARY metric for Instagram in 2025+
+    """
+    if not views or views <= 0:
+        return None
+    return round((total_interactions / views) * 100, 2)
+
+
+def _calculate_like_rate(likes: int, views: Optional[int]) -> Optional[float]:
+    """Like Rate = (likes / views) * 100"""
+    if not views or views <= 0:
+        return None
+    return round((likes / views) * 100, 2)
+
+
+def _calculate_comment_rate(comments: int, views: Optional[int]) -> Optional[float]:
+    """Comment Rate = (comments / views) * 100"""
+    if not views or views <= 0:
+        return None
+    return round((comments / views) * 100, 2)
+
+
+def _calculate_relative_performance(
+    post_engagement_rate: Optional[float],
+    creator_avg_engagement_rate: Optional[float]
+) -> Optional[float]:
+    """
+    Relative Performance = post_engagement_rate / creator_average_engagement_rate
+    > 1.0 means above average, < 1.0 means below average
+    """
+    if post_engagement_rate is None or creator_avg_engagement_rate is None:
+        return None
+    if creator_avg_engagement_rate <= 0:
+        return None
+    return round(post_engagement_rate / creator_avg_engagement_rate, 2)
+
+
+def _has_caption_context(caption: str) -> bool:
+    """Caption has context if >=3 words"""
+    if not caption:
+        return False
+    return len(caption.split()) >= 3
 
 
 def _has_cta(caption: str) -> bool:
+    """Check for call-to-action keywords"""
     if not caption:
         return False
 
@@ -26,8 +75,89 @@ def _has_cta(caption: str) -> bool:
     return any(k in text for k in cta_keywords)
 
 
+def _generate_insights(
+    engagement_rate_by_views: Optional[float],
+    relative_performance: Optional[float],
+    like_rate: Optional[float],
+    comment_rate: Optional[float],
+    caption_context_present: bool,
+    cta_present: bool,
+    views: Optional[int]
+) -> List[str]:
+    """Generate human-readable insights based on metrics"""
+    insights = []
+
+    # View-based engagement insight
+    if engagement_rate_by_views is not None:
+        if engagement_rate_by_views >= 10:
+            insights.append(
+                f"Excellent engagement rate by views ({engagement_rate_by_views}%). "
+                "Content is resonating strongly with viewers."
+            )
+        elif engagement_rate_by_views >= 5:
+            insights.append(
+                f"Good engagement rate by views ({engagement_rate_by_views}%). "
+                "Above average for Instagram content."
+            )
+        elif engagement_rate_by_views >= 2:
+            insights.append(
+                f"Average engagement rate by views ({engagement_rate_by_views}%). "
+                "Room for improvement in viewer engagement."
+            )
+        else:
+            insights.append(
+                f"Low engagement rate by views ({engagement_rate_by_views}%). "
+                "Consider optimizing content for better viewer interaction."
+            )
+    elif views is None or views == 0:
+        insights.append(
+            "No view data available. Engagement rate by views cannot be calculated."
+        )
+
+    # Relative performance insight
+    if relative_performance is not None:
+        if relative_performance >= 1.5:
+            insights.append(
+                f"This post performed {relative_performance}x your average - "
+                "a standout piece of content."
+            )
+        elif relative_performance >= 1.0:
+            insights.append(
+                f"This post performed {relative_performance}x your average - "
+                "in line with or above your typical content."
+            )
+        else:
+            insights.append(
+                f"This post performed {relative_performance}x your average - "
+                "below your typical engagement."
+            )
+
+    # Comment rate insight
+    if comment_rate is not None and like_rate is not None:
+        if comment_rate > 0 and like_rate > 0:
+            comment_to_like_ratio = comment_rate / like_rate
+            if comment_to_like_ratio >= 0.1:
+                insights.append(
+                    "High comment-to-like ratio indicates strong audience conversation."
+                )
+
+    # Caption context insight
+    if not caption_context_present:
+        insights.append(
+            "Caption provides minimal context. Adding more detail could improve retention."
+        )
+
+    # CTA insight
+    if not cta_present:
+        insights.append(
+            "No call-to-action detected. Adding a CTA can boost interactions."
+        )
+
+    return insights
+
+
 # ------------------------------------------------
-# Public API: Modern Post Insights
+# Public API: Single Post Analysis
 # ------------------------------------------------
 
 def analyze_post(
@@ -35,127 +165,87 @@ def analyze_post(
     creator_profile: CreatorProfileAIInput
 ) -> Dict:
     """
-    Analyze a single Instagram post or reel using
-    2025+ best practices (context-first, engagement-driven).
+    Analyze a single Instagram post using PDF-based metrics.
+    
+    Primary metrics:
+    - engagement_rate_by_views (interactions / views)
+    - like_rate (likes / views)
+    - comment_rate (comments / views)
+    - relative_performance (vs creator average)
     """
 
-    # -----------------------------
-    # Engagement analysis
-    # -----------------------------
+    # Calculate total interactions
+    total_interactions = _calculate_total_interactions(post.likes, post.comments)
 
-    post_engagement = _engagement_rate(
-        post.likes,
-        post.comments,
-        creator_profile.followers_count
+    # Get views (may be None for static posts)
+    views = post.views
+
+    # Calculate view-based metrics
+    engagement_rate_by_views = _calculate_engagement_rate_by_views(
+        total_interactions, views
+    )
+    like_rate = _calculate_like_rate(post.likes, views)
+    comment_rate = _calculate_comment_rate(post.comments, views)
+
+    # Get creator's average engagement rate for relative performance
+    hist_engagement = creator_profile.historical_engagement or {}
+    creator_avg_engagement_rate = hist_engagement.get("avg_engagement_rate_by_views")
+
+    relative_performance = _calculate_relative_performance(
+        engagement_rate_by_views,
+        creator_avg_engagement_rate
     )
 
-    avg_engagement = _engagement_rate(
-        creator_profile.historical_engagement.get("avg_likes", 0),
-        creator_profile.historical_engagement.get("avg_comments", 0),
-        creator_profile.followers_count
+    # Caption analysis
+    caption_context_present = _has_caption_context(post.caption_text)
+    cta_present = _has_cta(post.caption_text)
+
+    # Generate insights
+    insights = _generate_insights(
+        engagement_rate_by_views,
+        relative_performance,
+        like_rate,
+        comment_rate,
+        caption_context_present,
+        cta_present,
+        views
     )
-
-    if post_engagement > avg_engagement:
-        engagement_verdict = "above your recent average"
-    elif post_engagement < avg_engagement:
-        engagement_verdict = "below your recent average"
-    else:
-        engagement_verdict = "in line with your recent average"
-
-    # -----------------------------
-    # Caption context (not “hook”)
-    # -----------------------------
-
-    caption_text = post.caption_text or ""
-    caption_word_count = len(caption_text.split())
-
-    provides_context = caption_word_count >= 3
-
-    # -----------------------------
-    # CTA (optional optimization)
-    # -----------------------------
-
-    cta_present = _has_cta(caption_text)
-
-    # -----------------------------
-    # Hashtags (contextual signal)
-    # -----------------------------
-
-    hashtag_count = len(post.hashtags)
-
-    # -----------------------------
-    # Timing (descriptive only)
-    # -----------------------------
-
-    posted_time = post.posted_at
-    posting_hour = posted_time.hour
-    weekday = posted_time.strftime("%A")
-
-    # -----------------------------
-    # Insight generation
-    # -----------------------------
-
-    insights = []
-
-    # Engagement insight
-    insights.append(
-        f"This post performed {engagement_verdict} "
-        f"({post_engagement}% vs {avg_engagement}%)."
-    )
-
-    # Caption insight (modern)
-    if not provides_context:
-        insights.append(
-            "The caption provides minimal context. While short captions are fine, "
-            "adding a bit more clarity can help viewers quickly understand the content."
-        )
-    else:
-        insights.append(
-            "Caption length provides enough context for the content."
-        )
-
-    # CTA insight (soft recommendation)
-    if not cta_present:
-        insights.append(
-            "There is no call-to-action. Adding a light prompt (question, save, or comment) "
-            "can increase interactions, which Instagram tends to reward."
-        )
-
-    # Hashtag insight (2025+ aligned)
-    if hashtag_count == 0:
-        insights.append(
-            "No hashtags were used. Adding 1–5 relevant hashtags can help Instagram "
-            "categorize the content for search and recommendations."
-        )
-    elif hashtag_count > 5:
-        insights.append(
-            "Using many hashtags is no longer necessary. A smaller set of highly relevant "
-            "hashtags generally performs better."
-        )
-    else:
-        insights.append(
-            "Hashtag usage is aligned with current best practices."
-        )
-
-    # Timing insight (non-prescriptive)
-    insights.append(
-        f"Posted on {weekday} around {posting_hour}:00. "
-        "Track performance over time to identify which posting windows work best for your audience."
-    )
-
-    # -----------------------------
-    # Final structured output
-    # -----------------------------
 
     return {
         "post_id": post.post_id,
-        "engagement_rate": post_engagement,
-        "caption_context": provides_context,
+        "total_interactions": total_interactions,
+        "engagement_rate_by_views": engagement_rate_by_views,
+        "like_rate": like_rate,
+        "comment_rate": comment_rate,
+        "relative_performance": relative_performance,
+        "caption_context_present": caption_context_present,
         "cta_present": cta_present,
-        "hashtag_count": hashtag_count,
-        "posting_time": {
-            "weekday": weekday,
-            "hour": posting_hour
-        },
         "insights": insights
     }
+
+
+# ------------------------------------------------
+# Public API: Batch Post Analysis
+# ------------------------------------------------
+
+def analyze_posts(
+    creator_profile: CreatorProfileAIInput,
+    posts: List[CreatorPostAIInput]
+) -> List[Dict]:
+    """
+    Batch wrapper for analyze_post.
+    Analyzes all posts and returns list of results.
+    """
+
+    results = []
+
+    for post in posts:
+        try:
+            results.append(analyze_post(post, creator_profile))
+        except Exception as e:
+            results.append({
+                "post_id": post.post_id,
+                "error": str(e)
+            })
+
+    return results
