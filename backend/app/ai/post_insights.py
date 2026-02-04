@@ -2,6 +2,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 
 from backend.app.ai.schemas import CreatorPostAIInput, CreatorProfileAIInput
+from backend.core.post_comparison import compare_posts
 
 
 # ------------------------------------------------
@@ -18,12 +19,12 @@ def _calculate_engagement_rate_by_views(
     views: Optional[int]
 ) -> Optional[float]:
     """
-    Engagement Rate by Views = (total_interactions / views) * 100
+    Engagement Rate by Views = total_interactions / views
     This is the PRIMARY metric for Instagram in 2025+
     """
     if not views or views <= 0:
         return None
-    return round((total_interactions / views) * 100, 2)
+    return round(total_interactions / views, 4)
 
 
 def _calculate_like_rate(likes: int, views: Optional[int]) -> Optional[float]:
@@ -89,24 +90,24 @@ def _generate_insights(
 
     # View-based engagement insight
     if engagement_rate_by_views is not None:
-        if engagement_rate_by_views >= 10:
+        if engagement_rate_by_views >= 0.10:
             insights.append(
-                f"Excellent engagement rate by views ({engagement_rate_by_views}%). "
+                f"Excellent engagement rate by views ({engagement_rate_by_views * 100:.2f}%). "
                 "Content is resonating strongly with viewers."
             )
-        elif engagement_rate_by_views >= 5:
+        elif engagement_rate_by_views >= 0.05:
             insights.append(
-                f"Good engagement rate by views ({engagement_rate_by_views}%). "
+                f"Good engagement rate by views ({engagement_rate_by_views * 100:.2f}%). "
                 "Above average for Instagram content."
             )
-        elif engagement_rate_by_views >= 2:
+        elif engagement_rate_by_views >= 0.02:
             insights.append(
-                f"Average engagement rate by views ({engagement_rate_by_views}%). "
+                f"Average engagement rate by views ({engagement_rate_by_views * 100:.2f}%). "
                 "Room for improvement in viewer engagement."
             )
         else:
             insights.append(
-                f"Low engagement rate by views ({engagement_rate_by_views}%). "
+                f"Low engagement rate by views ({engagement_rate_by_views * 100:.2f}%). "
                 "Consider optimizing content for better viewer interaction."
             )
     elif views is None or views == 0:
@@ -235,13 +236,33 @@ def analyze_posts(
     """
     Batch wrapper for analyze_post.
     Analyzes all posts and returns list of results.
+    Includes comparison_to_previous for each post (except the first).
     """
 
     results = []
 
-    for post in posts:
+    for i, post in enumerate(posts):
         try:
-            results.append(analyze_post(post, creator_profile))
+            result = analyze_post(post, creator_profile)
+            
+            # Add comparison to previous post (except for first post)
+            if i > 0:
+                current_post_data = {
+                    "views": post.views or 0,
+                    "likes": post.likes,
+                    "comments": post.comments
+                }
+                previous_post = posts[i - 1]
+                previous_post_data = {
+                    "views": previous_post.views or 0,
+                    "likes": previous_post.likes,
+                    "comments": previous_post.comments
+                }
+                result["comparison_to_previous"] = compare_posts(
+                    current_post_data, previous_post_data
+                )
+            
+            results.append(result)
         except Exception as e:
             results.append({
                 "post_id": post.post_id,
@@ -249,3 +270,4 @@ def analyze_posts(
             })
 
     return results
+

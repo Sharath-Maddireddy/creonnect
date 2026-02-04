@@ -7,7 +7,7 @@ Converts Instagram API responses (Graph API format) into AI schemas:
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Tuple
 
 from backend.app.ai.schemas import CreatorProfileAIInput, CreatorPostAIInput
@@ -75,9 +75,9 @@ def map_instagram_profile(api_profile: Dict, api_media: List[Dict]) -> CreatorPr
         if days > 0:
             posts_per_week = round((len(timestamps) / days) * 7, 2)
 
-    # Calculate engagement rate
+    # Calculate engagement rate by views (ratio)
     if avg_views and avg_views > 0:
-        avg_engagement_rate = ((avg_likes + avg_comments) / avg_views) * 100
+        avg_engagement_rate = (avg_likes + avg_comments) / avg_views
     else:
         avg_engagement_rate = 0
 
@@ -101,7 +101,7 @@ def map_instagram_profile(api_profile: Dict, api_media: List[Dict]) -> CreatorPr
             "avg_engagement_rate_by_views": avg_engagement_rate
         },
         posting_frequency_per_week=posts_per_week,
-        profile_last_updated=datetime.utcnow()
+        profile_last_updated=datetime.now(timezone.utc)
     )
 
 
@@ -127,7 +127,7 @@ def map_instagram_posts(api_media: List[Dict]) -> List[CreatorPostAIInput]:
             try:
                 posted_at = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except Exception:
-                posted_at = datetime.utcnow()
+                posted_at = datetime.now(timezone.utc)
 
         # Get views (only for videos)
         views = None

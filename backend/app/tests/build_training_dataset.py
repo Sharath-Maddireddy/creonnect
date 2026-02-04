@@ -46,9 +46,9 @@ def convert_to_ai_inputs(snapshot: dict):
     estimated_posts_per_week = snapshot.get("estimated_posts_per_week", 3.0)
     bio = snapshot.get("bio", "")
     
-    # Calculate avg_engagement_rate_by_views
+    # Calculate avg_engagement_rate_by_views (ratio)
     if avg_views > 0:
-        avg_engagement_rate_by_views = ((avg_likes + avg_comments) / avg_views) * 100
+        avg_engagement_rate_by_views = (avg_likes + avg_comments) / avg_views
     else:
         avg_engagement_rate_by_views = 0.0
     

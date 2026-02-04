@@ -33,6 +33,13 @@ def build_creator_explanation_prompt(context: Dict) -> Dict:
         "Do not invent metrics or make promises."
     )
 
+    avg_engagement_rate_by_views = ai.get("avg_engagement_rate_by_views")
+    avg_engagement_pct = (
+        f"{avg_engagement_rate_by_views * 100:.2f}%"
+        if isinstance(avg_engagement_rate_by_views, (int, float))
+        else "N/A"
+    )
+
     user_message = f"""
 Creator Summary:
 - Username: {creator['username']}
@@ -40,7 +47,7 @@ Creator Summary:
 - Followers: {creator['followers']:,}
 - Primary niche: {primary_niche}
 - Growth score: {ai.get('growth_score', 'N/A')}/100
-- Avg engagement by views: {ai.get('avg_engagement_rate_by_views', 'N/A')}%
+- Avg engagement by views: {avg_engagement_pct}
 - Views/followers ratio: {ai.get('views_to_followers_ratio', 'N/A')}
 
 Creator Profile:
@@ -51,7 +58,7 @@ Creator Profile:
 - Posting frequency: {creator.get('posting_frequency_per_week', 'N/A')} posts/week
 
 Key Metrics:
-- Avg Engagement Rate by Views: {ai.get('avg_engagement_rate_by_views', 'N/A')}%
+- Avg Engagement Rate by Views: {avg_engagement_pct}
 - Views to Followers Ratio: {ai.get('views_to_followers_ratio', 'N/A')}
 - Primary Niche: {primary_niche}
 - Growth Score: {ai.get('growth_score', 'N/A')}/100
@@ -96,8 +103,8 @@ def _format_posts_summary(posts: list) -> str:
     lines = []
     for p in posts[:5]:  # Limit to 5 posts
         engagement_str = ""
-        if p.get("engagement_rate_by_views"):
-            engagement_str = f", Engagement by Views: {p['engagement_rate_by_views']}%"
+        if isinstance(p.get("engagement_rate_by_views"), (int, float)):
+            engagement_str = f", Engagement by Views: {p['engagement_rate_by_views'] * 100:.2f}%"
 
         lines.append(
             f"- Post {p['post_id']}: {p['likes']} likes, {p['comments']} comments, "
@@ -120,9 +127,16 @@ def _format_post_insights(insights: list) -> str:
         perf = p.get("relative_performance")
         perf_str = f"{perf}x average" if perf else "N/A"
 
+        engagement = p.get("engagement_rate_by_views")
+        engagement_str = (
+            f"{engagement * 100:.2f}%"
+            if isinstance(engagement, (int, float))
+            else "N/A"
+        )
+
         lines.append(
             f"- Post {p['post_id']}: "
-            f"Engagement by Views: {p.get('engagement_rate_by_views', 'N/A')}%, "
+            f"Engagement by Views: {engagement_str}, "
             f"Relative Performance: {perf_str}"
         )
 

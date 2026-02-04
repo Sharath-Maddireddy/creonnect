@@ -24,38 +24,38 @@ from backend.app.ingestion.instagram_mapper import map_instagram_to_ai_inputs
 DUMMY_SCRAPED_DATA = {
     "profile": {
         "username": "test_creator",
-        "bio": "Fitness and lifestyle content creator",
-        "followers": 50000,
-        "following": 500,
-        "total_posts": 150
+        "biography": "Fitness and lifestyle content creator",
+        "followers_count": 50000,
+        "follows_count": 500,
+        "media_count": 150
     },
     "posts": [
         {
-            "post_id": "post_001",
-            "caption": "Morning workout routine! 💪 #fitness #gym",
-            "likes": 2500,
-            "comments": 150,
-            "views": 45000,
-            "is_video": True,
-            "timestamp": 1706800000
+            "id": "post_001",
+            "caption": "Morning workout routine! ???? #fitness #gym",
+            "like_count": 2500,
+            "comments_count": 150,
+            "video_view_count": 45000,
+            "media_type": "VIDEO",
+            "timestamp": "2024-01-31T12:00:00Z"
         },
         {
-            "post_id": "post_002",
+            "id": "post_002",
             "caption": "Healthy meal prep for the week",
-            "likes": 1800,
-            "comments": 80,
-            "views": 30000,
-            "is_video": True,
-            "timestamp": 1706700000
+            "like_count": 1800,
+            "comments_count": 80,
+            "video_view_count": 30000,
+            "media_type": "VIDEO",
+            "timestamp": "2024-01-30T12:00:00Z"
         },
         {
-            "post_id": "post_003",
+            "id": "post_003",
             "caption": "Before and after transformation",
-            "likes": 5000,
-            "comments": 300,
-            "views": 80000,
-            "is_video": True,
-            "timestamp": 1706600000
+            "like_count": 5000,
+            "comments_count": 300,
+            "video_view_count": 80000,
+            "media_type": "VIDEO",
+            "timestamp": "2024-01-29T12:00:00Z"
         }
     ]
 }
@@ -67,7 +67,10 @@ DUMMY_SCRAPED_DATA = {
 
 def test_ingestion_mapping():
     """Test that ingestion correctly maps scraped data."""
-    profile, posts = map_instagram_to_ai_inputs(DUMMY_SCRAPED_DATA)
+    profile, posts = map_instagram_to_ai_inputs(
+        DUMMY_SCRAPED_DATA["profile"],
+        DUMMY_SCRAPED_DATA["posts"]
+    )
 
     assert profile is not None, "Profile should not be None"
     assert profile.username == "test_creator"
@@ -85,7 +88,10 @@ def test_ingestion_mapping():
 
 def test_growth_score_computation():
     """Test that growth score is computed correctly."""
-    profile, posts = map_instagram_to_ai_inputs(DUMMY_SCRAPED_DATA)
+    profile, posts = map_instagram_to_ai_inputs(
+        DUMMY_SCRAPED_DATA["profile"],
+        DUMMY_SCRAPED_DATA["posts"]
+    )
 
     growth_result = compute_growth_score(profile, posts)
 
@@ -101,7 +107,10 @@ def test_growth_score_computation():
 
 def test_context_builds():
     """Test that context builds without errors."""
-    profile, posts = map_instagram_to_ai_inputs(DUMMY_SCRAPED_DATA)
+    profile, posts = map_instagram_to_ai_inputs(
+        DUMMY_SCRAPED_DATA["profile"],
+        DUMMY_SCRAPED_DATA["posts"]
+    )
     growth_result = compute_growth_score(profile, posts)
 
     ai_outputs = {
@@ -123,7 +132,10 @@ def test_context_builds():
 
 def test_explain_returns_without_exception():
     """Test that explain() returns without crashing (uses fallback if no API key)."""
-    profile, posts = map_instagram_to_ai_inputs(DUMMY_SCRAPED_DATA)
+    profile, posts = map_instagram_to_ai_inputs(
+        DUMMY_SCRAPED_DATA["profile"],
+        DUMMY_SCRAPED_DATA["posts"]
+    )
     growth_result = compute_growth_score(profile, posts)
 
     ai_outputs = {

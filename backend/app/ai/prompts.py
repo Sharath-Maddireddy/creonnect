@@ -45,8 +45,8 @@ def post_performance_explanation(
     Explain post-level performance using modern Instagram signals.
     """
 
-    engagement = post_insights.get("engagement_rate", 0)
-    caption_context = post_insights.get("caption_context", False)
+    engagement = post_insights.get("engagement_rate_by_views", 0)
+    caption_context = post_insights.get("caption_context_present", False)
     cta = post_insights.get("cta_present", False)
     insights = post_insights.get("insights", [])
 
@@ -62,8 +62,14 @@ def post_performance_explanation(
             "You could experiment with a light call-to-action (question, save, or comment) to encourage interaction."
         )
 
+    engagement_pct = (
+        f"{engagement * 100:.2f}"
+        if isinstance(engagement, (int, float))
+        else "N/A"
+    )
+
     return f"""
-This post achieved an engagement rate of {engagement}%.
+This post achieved an engagement rate of {engagement_pct}%.
 
 Key observations:
 - Caption provides context: {"Yes" if caption_context else "No"}

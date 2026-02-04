@@ -5,11 +5,10 @@ Exposes creator metrics in a frontend-friendly format for charts and graphs.
 All computations are done server-side - frontend only plots.
 """
 
-from fastapi import APIRouter
-from backend.app.tests.load_synthetic import load_synthetic
-from backend.app.ai.niche import detect_creator_niche
-from backend.app.ai.growth_score import compute_growth_score
-from backend.app.ai.post_insights import analyze_posts
+from fastapi import APIRouter, HTTPException
+from backend.app.services.dashboard_service import build_creator_dashboard
+from backend.app.services.snapshot_service import build_creator_snapshot_service
+from backend.app.services.script_service import generate_creator_script_service
 
 
 router = APIRouter(prefix="/api", tags=["Dashboard"])
@@ -23,43 +22,38 @@ def creator_dashboard():
     - Post insights
     - Time-series data for charts
     """
-    profile, posts = load_synthetic()
+    try:
+        return build_creator_dashboard("demo")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Creator not found")
 
-    niche = detect_creator_niche(profile, posts)
-    growth = compute_growth_score(profile, posts)
-    post_insights = analyze_posts(profile, posts)
 
-    # Time-series for charts
-    engagement_series = []
-    views_series = []
+@router.get("/creators/{creator_id}/snapshot")
+def get_creator_snapshot(creator_id: str):
+    """
+    Get daily snapshot for a creator.
+    
+    Returns current metrics snapshot including:
+    - Follower count
+    - Engagement metrics
+    - Growth score
+    """
+    try:
+        return build_creator_snapshot_service(creator_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Creator '{creator_id}' not found")
 
-    for p, insight in zip(posts, post_insights):
-        engagement_series.append({
-            "date": p.posted_at.isoformat() if p.posted_at else None,
-            "value": insight.get("engagement_rate_by_views")
-        })
 
-        views_series.append({
-            "date": p.posted_at.isoformat() if p.posted_at else None,
-            "value": p.views
-        })
+@router.post("/creators/{creator_id}/generate-script")
+def generate_script(creator_id: str):
+    """
+    Generate a reel script for a creator.
+    
+    Returns:
+        Script dict with hook, body, cta tailored to creator's niche
+    """
+    try:
+        return generate_creator_script_service(creator_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Creator '{creator_id}' not found")
 
-    return {
-        "summary": {
-            "username": profile.username,
-            "followers": profile.followers_count,
-            "growth_score": growth["growth_score"],
-            "avg_engagement_rate_by_views": growth["metrics"]["avg_engagement_rate_by_views"],
-            "avg_views": growth["metrics"]["avg_views"],
-            "views_to_followers_ratio": growth["metrics"]["views_to_followers_ratio"],
-            "posts_per_week": growth["metrics"]["posts_per_week"],
-            "niche": niche
-        },
-
-        "posts": post_insights,
-
-        "charts": {
-            "engagement_over_time": engagement_series,
-            "views_over_time": views_series
-        }
-    }

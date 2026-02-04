@@ -1,5 +1,5 @@
 from typing import Dict, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.app.ai.schemas import (
     CreatorProfileAIInput,
@@ -43,7 +43,7 @@ def _build_rag_query(profile: CreatorProfileAIInput, ai_outputs: Dict) -> str:
     )
 
     if avg_eng is not None:
-        if avg_eng >= 5:
+        if avg_eng >= 0.05:
             parts.append("high engagement scaling content")
         else:
             parts.append("engagement improvement tactics")
@@ -80,7 +80,7 @@ def build_creator_context(
         if not post.views or post.views <= 0:
             continue
 
-        engagement_rate = ((post.likes + post.comments) / post.views) * 100
+        engagement_rate = (post.likes + post.comments) / post.views
         post_summary = {
             "post_id": post.post_id,
             "type": post.post_type,
@@ -89,7 +89,7 @@ def build_creator_context(
             "views": post.views,
             "total_interactions": post.likes + post.comments,
             "caption_length": len(post.caption_text.split()) if post.caption_text else 0,
-            "engagement_rate_by_views": round(engagement_rate, 2)
+            "engagement_rate_by_views": round(engagement_rate, 4)
         }
         posts_with_engagement.append((engagement_rate, post_summary))
 
@@ -114,7 +114,7 @@ def build_creator_context(
     retrieved_knowledge = retrieve(rag_query, k=3)
     logger.info(f"[Context] Retrieved {len(retrieved_knowledge)} knowledge chunks")
     context = {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
 
         # Creator snapshot
         "creator_profile": {

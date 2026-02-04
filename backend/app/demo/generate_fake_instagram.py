@@ -157,7 +157,7 @@ def save_synthetic_creator(
     )
     
     if output_path is None:
-        output_path = Path(__file__).parent / "synthetic_creator.json"
+        output_path = Path(__file__).parent.parent / "demo" / "synthetic_creator.json"
     else:
         output_path = Path(output_path)
     

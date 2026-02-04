@@ -20,15 +20,20 @@ from backend.app.ai.context import build_creator_context
 from backend.app.ai.explain import CreatorExplanationService
 
 # Import synthetic data loader and generator
-from backend.app.tests.load_synthetic import load_synthetic, DATA_PATH
-from backend.app.tests.generate_fake_instagram import save_synthetic_creator
+from backend.app.demo.synthetic_loader import load_synthetic, DATA_PATH
+from backend.app.demo.generate_fake_instagram import save_synthetic_creator
 
 
 def ensure_synthetic_data_exists():
     """Generate synthetic data if it doesn't exist."""
     if not DATA_PATH.exists():
         print("[Setup] Generating synthetic creator data...")
-        save_synthetic_creator(niche="fitness", followers=75000, num_posts=10)
+        save_synthetic_creator(
+            output_path=DATA_PATH,
+            niche="fitness",
+            followers=75000,
+            num_posts=10
+        )
         print()
 
 
@@ -70,7 +75,8 @@ def main():
     for post in posts:
         insight = analyze_post(post, profile)
         post_insights.append(insight)
-        print(f"  Post {post.post_id}: {insight.get('engagement_rate_by_views', 0):.2f}% engagement")
+        engagement_rate = insight.get("engagement_rate_by_views", 0) or 0
+        print(f"  Post {post.post_id}: {engagement_rate * 100:.2f}% engagement")
 
     # Step 4: Generate explanation
     print("\n[4/4] Generating AI explanation...")

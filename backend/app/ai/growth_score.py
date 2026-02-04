@@ -14,15 +14,16 @@ def _score_engagement_by_views(avg_engagement_rate_by_views: Optional[float]) ->
     if avg_engagement_rate_by_views is None:
         return 10  # Default if no view data
 
-    if avg_engagement_rate_by_views >= 10:
+    # Ratio thresholds (0-1) equivalent to 10%, 7%, 5%, 3%, 1%
+    if avg_engagement_rate_by_views >= 0.10:
         return 30
-    if avg_engagement_rate_by_views >= 7:
+    if avg_engagement_rate_by_views >= 0.07:
         return 26
-    if avg_engagement_rate_by_views >= 5:
+    if avg_engagement_rate_by_views >= 0.05:
         return 22
-    if avg_engagement_rate_by_views >= 3:
+    if avg_engagement_rate_by_views >= 0.03:
         return 18
-    if avg_engagement_rate_by_views >= 1:
+    if avg_engagement_rate_by_views >= 0.01:
         return 12
     return 6
 
@@ -92,7 +93,7 @@ def _calculate_avg_engagement_rate_by_views(posts: List[CreatorPostAIInput]) -> 
     for post in posts:
         if post.views and post.views > 0:
             total_interactions = post.likes + post.comments
-            rate = (total_interactions / post.views) * 100
+            rate = total_interactions / post.views
             rates.append(rate)
 
     if not rates:
@@ -154,7 +155,7 @@ def compute_growth_score(
             "growth_trend": growth_trend
         },
         "metrics": {
-            "avg_engagement_rate_by_views": round(avg_engagement_rate_by_views, 2)
+            "avg_engagement_rate_by_views": round(avg_engagement_rate_by_views, 4)
             if avg_engagement_rate_by_views is not None else None,
             "avg_views": round(avg_views, 0) if avg_views is not None else None,
             "views_to_followers_ratio": round(avg_views / followers, 2) if avg_views and followers > 0 else None,

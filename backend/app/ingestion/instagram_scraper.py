@@ -52,7 +52,7 @@ DEMO_PROFILES = {
             "username": "ig_dhirendra",
             "full_name": "Dhirendra",
             "bio": "Tech Enthusiast | Developer | Building cool stuff 🚀",
-            "followers": 15200,
+            "followers": 1200,
             "following": 420,
             "total_posts": 85,
             "is_private": False,

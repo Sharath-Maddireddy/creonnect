@@ -35,6 +35,12 @@ python -m backend.app.demo
 uvicorn backend.main:app --reload
 ```
 
+## Demo Data
+
+- Synthetic creator data lives under `backend/app/demo/`
+- Generator script: `backend/app/demo/generate_fake_instagram.py`
+- Output file: `backend/app/demo/synthetic_creator.json`
+
 ## API Endpoints
 
 - `GET /health` - Health check endpoint
@@ -43,10 +49,13 @@ uvicorn backend.main:app --reload
 
 ```
 backend/
-├── app/
-│   ├── ai/           # AI modules (niche, growth, explain)
-│   ├── ingestion/    # Data ingestion and mapping
-│   ├── knowledge/    # RAG knowledge base
-│   └── utils/        # Logging and utilities
-└── main.py           # FastAPI application
+|-- app/
+|   |-- ai/           # AI modules (niche, growth, explain)
+|   |-- api/          # FastAPI routers
+|   |-- demo/         # Demo data + synthetic loader
+|   |-- ingestion/    # Data ingestion and mapping
+|   |-- knowledge/    # RAG knowledge base
+|   |-- services/     # Orchestration layer
+|   `-- utils/        # Logging and utilities
+`-- main.py           # FastAPI application
 ```
