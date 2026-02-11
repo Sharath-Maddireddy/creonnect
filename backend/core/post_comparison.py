@@ -64,3 +64,5 @@ def compare_posts(current_post: dict, previous_post: dict) -> dict:
         "relative_performance_label": relative_performance_label,
         "explanation": explanation
     }
+
+

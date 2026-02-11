@@ -18,3 +18,5 @@ with sync_playwright() as p:
     print("Session saved.")
 
     browser.close()
+
+

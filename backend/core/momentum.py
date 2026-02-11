@@ -71,3 +71,5 @@ def calculate_momentum(snapshots: List[Dict]) -> Dict:
         "momentum_value": round(momentum_value, 2),
         "momentum_label": momentum_label
     }
+
+

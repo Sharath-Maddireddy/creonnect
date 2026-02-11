@@ -63,3 +63,5 @@ class CreatorPostAIInput(BaseModel):
     audio_name: Optional[str] = None
 
     posted_at: Optional[datetime] = None
+
+

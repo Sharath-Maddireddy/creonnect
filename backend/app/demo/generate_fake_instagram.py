@@ -175,3 +175,5 @@ def save_synthetic_creator(
 if __name__ == "__main__":
     # Generate default fitness creator
     save_synthetic_creator(niche="fitness", followers=75000, num_posts=10)
+
+

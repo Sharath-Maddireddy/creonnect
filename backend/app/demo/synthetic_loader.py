@@ -88,3 +88,5 @@ def load_synthetic(path: Path = None):
         )
 
     return profile, posts
+
+
