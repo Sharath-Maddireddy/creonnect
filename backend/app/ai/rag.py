@@ -8,6 +8,7 @@ Stores vectors in memory for simplicity.
 import os
 import json
 from typing import List
+from threading import Lock
 from pathlib import Path
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -180,13 +181,16 @@ class RAGEngine:
 # ------------------------------------------------
 
 _rag_engine = None
+_rag_engine_lock = Lock()
 
 
 def get_rag_engine() -> RAGEngine:
     """Get or create the singleton RAG engine."""
     global _rag_engine
     if _rag_engine is None:
-        _rag_engine = RAGEngine()
+        with _rag_engine_lock:
+            if _rag_engine is None:
+                _rag_engine = RAGEngine()
     return _rag_engine
 
 
