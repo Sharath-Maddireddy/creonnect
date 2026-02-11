@@ -144,3 +144,5 @@ class InstagramPublicScraper:
             print(f"[DEMO] Username '{username}' not found, using default demo data")
 
         return data
+
+

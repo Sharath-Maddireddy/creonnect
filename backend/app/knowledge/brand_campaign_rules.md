@@ -42,3 +42,5 @@ General guidelines (vary by niche/market):
 - Micro: $250-$1,000 per post
 - Mid-tier: $1,000-$5,000 per post
 - Macro: $5,000-$25,000 per post
+
+

@@ -335,3 +335,5 @@ def generate_action_plan(
         "cta_tips": cta_tips[:2]  # Cap at 2 items
     }
 
+
+
