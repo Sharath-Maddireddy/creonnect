@@ -11,6 +11,7 @@ from typing import List
 from pathlib import Path
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from backend.app.utils.logger import logger
 
 
 # ------------------------------------------------
@@ -20,6 +21,11 @@ from sentence_transformers import SentenceTransformer
 KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
 CHUNK_SIZE = 400  # Target characters per chunk
 CHUNK_OVERLAP = 50  # Overlap between chunks
+ACTION_MODEL = os.getenv("ACTION_MODEL", "gpt-4o-mini")
+ACTION_MODEL_VERSION = os.getenv("ACTION_MODEL_VERSION", "base")
+logger.info(
+    f"[ActionPlan] Using model: {ACTION_MODEL} (version: {ACTION_MODEL_VERSION})"
+)
 
 # Cache file paths
 CACHE_DIR = Path(os.getenv("RAG_CACHE_DIR", ".rag_cache"))
@@ -215,7 +221,8 @@ def generate_action_plan(
     momentum: dict,
     best_time: dict,
     recent_posts: list,
-    knowledge_chunks: list = None
+    knowledge_chunks: list = None,
+    model_name: str = ACTION_MODEL
 ) -> dict:
     """
     Generate an actionable growth plan based on creator context and knowledge.
@@ -230,6 +237,7 @@ def generate_action_plan(
         best_time: Dict with best_posting_hours, hourly_engagement
         recent_posts: List of last 3 posts with engagement data
         knowledge_chunks: Retrieved RAG chunks for context
+        model_name: Model to use for action plan generation (reserved for future LLM use)
         
     Returns:
         Structured action plan dict
@@ -328,6 +336,8 @@ def generate_action_plan(
         cta_tips.insert(0, "Start every post with a hook in the first 3 seconds")
     
     return {
+        "_model": ACTION_MODEL,
+        "_model_version": ACTION_MODEL_VERSION,
         "diagnosis": diagnosis,
         "weekly_plan": weekly_plan[:3],  # Cap at 3 items
         "content_suggestions": content_suggestions[:2],  # Cap at 2 items

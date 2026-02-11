@@ -14,6 +14,7 @@ from backend.app.ai.rag import retrieve, generate_action_plan
 from backend.core.snapshots import build_creator_snapshot
 from backend.core.momentum import calculate_momentum
 from backend.core.best_time import get_best_posting_hours
+from backend.core.fraud_detection import detect_fraud_signals
 
 
 def build_creator_dashboard(creator_id: str) -> dict:
@@ -73,6 +74,31 @@ def build_creator_dashboard(creator_id: str) -> dict:
         for p in posts
     ]
     best_time = get_best_posting_hours(posts_for_time_analysis)
+
+    posts_for_fraud = []
+    for p, insight in zip(posts, post_insights):
+        posts_for_fraud.append({
+            "post_id": p.post_id,
+            "likes": p.likes,
+            "comments": p.comments,
+            "views": p.views or 0,
+            "posted_at": p.posted_at.isoformat() if p.posted_at else None,
+            "engagement_rate_by_views": insight.get("engagement_rate_by_views")
+        })
+
+    creator_for_fraud = {
+        "username": profile.username,
+        "followers": profile.followers_count,
+        "avg_views": profile.avg_views or 0,
+        "avg_likes": profile.avg_likes,
+        "avg_comments": profile.avg_comments
+    }
+
+    authenticity_analysis = detect_fraud_signals(
+        creator=creator_for_fraud,
+        posts=posts_for_fraud,
+        snapshots=simulated_snapshots
+    )
 
     # Retrieve knowledge for action plan
     query = f"{niche.get('primary_niche', 'creator')} growth strategies engagement tips"
@@ -136,5 +162,6 @@ def build_creator_dashboard(creator_id: str) -> dict:
             "views_over_time": views_series
         },
 
-        "action_plan": action_plan
+        "action_plan": action_plan,
+        "authenticity_analysis": authenticity_analysis
     }
