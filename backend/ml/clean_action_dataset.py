@@ -106,7 +106,7 @@ class TrainingOutput(BaseModel):
 
     niche: Dict[str, Any]
     growth: Dict[str, Any]
-    post_insights: Dict[str, Any]
+    post_insights: List[Dict[str, Any]]
 
 
 class EnrichedTrainingOutput(TrainingOutput):
@@ -132,6 +132,7 @@ class EnrichedTrainingExample(BaseModel):
     created_at: datetime
     input: TrainingInput
     output: EnrichedTrainingOutput
+    quality: Literal["high", "medium", "low"]
 
 
 class ChatMessage(BaseModel):
@@ -424,6 +425,27 @@ def _print_dry_run(
     print("-" * 40)
 
 
+def _normalize_quality(value: Any) -> Any:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "good":
+            return "high"
+        if lowered == "ok":
+            return "medium"
+        if lowered == "bad":
+            return "low"
+    return value
+
+
+def _normalize_row_quality(row: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(row, dict):
+        return row
+    updated = dict(row)
+    if "quality" in updated:
+        updated["quality"] = _normalize_quality(updated.get("quality"))
+    return updated
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Clean action plan dataset.")
     parser.add_argument(
@@ -450,6 +472,7 @@ def main() -> None:
         for line_num, row in _read_jsonl(INPUT_PATH):
             processed += 1
             try:
+                row = _normalize_row_quality(row)
                 validate_jsonl_entry(row, TrainingExample, row_index=line_num)
                 original_output = row.get("output") if isinstance(row, dict) else {}
                 original_action_plan = (
@@ -463,6 +486,7 @@ def main() -> None:
                         original_niche = niche.get("primary_niche")
 
                 cleaned_row = _clean_row(row, keyword_map)
+                cleaned_row = _normalize_row_quality(cleaned_row)
                 validate_jsonl_entry(cleaned_row, EnrichedTrainingExample, row_index=line_num)
                 cleaned_output = cleaned_row.get("output") if isinstance(cleaned_row, dict) else {}
                 cleaned_action_plan = (
@@ -495,8 +519,10 @@ def main() -> None:
             for line_num, row in _read_jsonl(INPUT_PATH):
                 processed += 1
                 try:
+                    row = _normalize_row_quality(row)
                     validate_jsonl_entry(row, TrainingExample, row_index=line_num)
                     cleaned_row = _clean_row(row, keyword_map)
+                    cleaned_row = _normalize_row_quality(cleaned_row)
                     validate_jsonl_entry(cleaned_row, EnrichedTrainingExample, row_index=line_num)
                 except Exception as exc:
                     print(f"[warn] skipped line {line_num}: {exc}")
