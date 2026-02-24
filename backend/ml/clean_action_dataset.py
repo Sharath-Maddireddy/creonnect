@@ -156,14 +156,6 @@ def validate_jsonl_entry(entry: Dict[str, Any], model: Type[BaseModel], row_inde
         raise ValueError(f"{prefix}{exc.errors()}") from exc
 
 
-def _write_chat_jsonl(examples: Iterable[Dict[str, Any]], output_path: Path) -> None:
-    with output_path.open("w", encoding="utf-8") as out_file:
-        for row_index, entry in enumerate(examples, 1):
-            validated = validate_jsonl_entry(entry, ChatExample, row_index=row_index)
-            out_file.write(json.dumps(validated.model_dump(mode="json"), ensure_ascii=False))
-            out_file.write("\n")
-
-
 def _read_jsonl(path: Path) -> Iterable[Tuple[int, Dict[str, Any]]]:
     with path.open("r", encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
@@ -387,8 +379,10 @@ def _clean_row(
     if not isinstance(action_plan, dict):
         raise ValueError("row missing output.action_plan")
 
-    # Remove redundant quality label.
-    row.pop("quality", None)
+    # NOTE:
+    # The 'quality' field is retained because EnrichedTrainingExample
+    # requires quality: Literal["high", "medium", "low"].
+    # Removing it would break validation.
 
     # Refresh diagnosis with input-tied metrics.
     growth = output_data.get("growth") if isinstance(output_data.get("growth"), dict) else {}
