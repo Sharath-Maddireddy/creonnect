@@ -35,9 +35,11 @@ def compare_posts(current_post: dict, previous_post: dict) -> dict:
     engagement_previous = (previous_likes + previous_comments) / max(previous_views, 1)
     
     # Engagement change percentage
+    special_case_explanation = False
     if engagement_previous == 0 and engagement_current == 0:
         engagement_change_pct = 0.0
         explanation = "Engagement is unchanged at zero for both posts."
+        special_case_explanation = True
     elif engagement_previous == 0 and engagement_current > 0:
         engagement_change_pct = None
         explanation = "First engagement recorded."
@@ -55,16 +57,17 @@ def compare_posts(current_post: dict, previous_post: dict) -> dict:
         relative_performance_label = "same"
     
     # Generate explanation
-    if engagement_change_pct is None:
-        explanation = explanation
-    else:
-        abs_change = abs(round(engagement_change_pct, 1))
-        if relative_performance_label == "better":
-            explanation = f"This post performed better than your previous one with {abs_change}% higher engagement."
-        elif relative_performance_label == "worse":
-            explanation = f"This post performed worse than your previous one with {abs_change}% lower engagement."
+    if not special_case_explanation:
+        if engagement_change_pct is None:
+            explanation = explanation
         else:
-            explanation = "This post performed similarly to your previous one."
+            abs_change = abs(round(engagement_change_pct, 1))
+            if relative_performance_label == "better":
+                explanation = f"This post performed better than your previous one with {abs_change}% higher engagement."
+            elif relative_performance_label == "worse":
+                explanation = f"This post performed worse than your previous one with {abs_change}% lower engagement."
+            else:
+                explanation = "This post performed similarly to your previous one."
     
     return {
         "delta_views": delta_views,
