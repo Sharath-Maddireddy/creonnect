@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Literal, Type
-from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt, StrictStr, ValidationError
 
@@ -291,17 +292,17 @@ def _build_diagnosis(
 
 def _strong_niche_from_caption(
     caption: str,
-    keyword_map: Dict[str, List[str]],
+    keyword_map: Dict[str, List[re.Pattern[str]]],
 ) -> Optional[str]:
-    text = (caption or "").lower()
+    text = re.sub(r"\s+", " ", (caption or "").lower()).strip()
     if not text:
         return None
 
     scores: Dict[str, int] = {}
-    for niche, keywords in keyword_map.items():
+    for niche, keyword_patterns in keyword_map.items():
         count = 0
-        for keyword in keywords:
-            if keyword in text:
+        for keyword_pattern in keyword_patterns:
+            if keyword_pattern.search(text):
                 count += 1
         if count > 0:
             scores[niche] = count
@@ -319,7 +320,7 @@ def _strong_niche_from_caption(
 def _maybe_adjust_niche(
     niche: Dict[str, Any],
     posts: List[Dict[str, Any]],
-    keyword_map: Dict[str, List[str]],
+    keyword_map: Dict[str, List[re.Pattern[str]]],
 ) -> Tuple[Dict[str, Any], bool]:
     current = niche.get("primary_niche")
     if not isinstance(current, str) or not current.strip():
@@ -360,10 +361,13 @@ def _maybe_adjust_niche(
 
 def _clean_row(
     row: Dict[str, Any],
-    keyword_map: Dict[str, List[str]],
+    keyword_map: Dict[str, List[re.Pattern[str]]],
 ) -> Dict[str, Any]:
     if not isinstance(row, dict):
         raise ValueError("row is not a dict")
+
+    # Create a shallow copy to avoid mutating the input.
+    row = dict(row)
 
     input_data = row.get("input")
     output_data = row.get("output")
@@ -440,12 +444,37 @@ def _normalize_row_quality(row: Dict[str, Any]) -> Dict[str, Any]:
     return updated
 
 
+def _compile_keyword_patterns(
+    keyword_map: Dict[str, List[str]],
+) -> Dict[str, List[re.Pattern[str]]]:
+    compiled: Dict[str, List[re.Pattern[str]]] = {}
+    for niche, keywords in keyword_map.items():
+        compiled_patterns: List[re.Pattern[str]] = []
+        for keyword in keywords:
+            normalized_keyword = re.sub(r"\s+", " ", keyword.strip().lower())
+            if not normalized_keyword:
+                continue
+            escaped_parts = [re.escape(part) for part in normalized_keyword.split(" ") if part]
+            if not escaped_parts:
+                continue
+            pattern = re.compile(r"\b" + r"\s+".join(escaped_parts) + r"\b")
+            compiled_patterns.append(pattern)
+        if compiled_patterns:
+            compiled[niche] = compiled_patterns
+    return compiled
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Clean action plan dataset.")
     parser.add_argument(
         "--dry_run",
         action="store_true",
         help="Process only first 5 rows and print changes without writing output.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing output file if it already exists.",
     )
     args = parser.parse_args()
 
@@ -458,6 +487,7 @@ def main() -> None:
         for niche in existing_niches
         if niche in KEYWORD_MAP
     }
+    keyword_patterns = _compile_keyword_patterns(keyword_map)
 
     processed = 0
     cleaned = 0
@@ -467,7 +497,7 @@ def main() -> None:
             processed += 1
             try:
                 row = _normalize_row_quality(row)
-                validate_jsonl_entry(row, TrainingExample, row_index=line_num)
+                validate_jsonl_entry(row, EnrichedTrainingExample, row_index=line_num)
                 original_output = row.get("output") if isinstance(row, dict) else {}
                 original_action_plan = (
                     original_output.get("action_plan") if isinstance(original_output, dict) else {}
@@ -479,7 +509,7 @@ def main() -> None:
                     if isinstance(niche, dict):
                         original_niche = niche.get("primary_niche")
 
-                cleaned_row = _clean_row(row, keyword_map)
+                cleaned_row = _clean_row(row, keyword_patterns)
                 cleaned_row = _normalize_row_quality(cleaned_row)
                 validate_jsonl_entry(cleaned_row, EnrichedTrainingExample, row_index=line_num)
                 cleaned_output = cleaned_row.get("output") if isinstance(cleaned_row, dict) else {}
@@ -509,13 +539,18 @@ def main() -> None:
             if processed >= 5:
                 break
     else:
+        if OUTPUT_PATH.exists() and not args.force:
+            raise RuntimeError(
+                f"Output file already exists: {OUTPUT_PATH}. "
+                "Pass --force to overwrite."
+            )
         with OUTPUT_PATH.open("w", encoding="utf-8") as out_file:
             for line_num, row in _read_jsonl(INPUT_PATH):
                 processed += 1
                 try:
                     row = _normalize_row_quality(row)
-                    validate_jsonl_entry(row, TrainingExample, row_index=line_num)
-                    cleaned_row = _clean_row(row, keyword_map)
+                    validate_jsonl_entry(row, EnrichedTrainingExample, row_index=line_num)
+                    cleaned_row = _clean_row(row, keyword_patterns)
                     cleaned_row = _normalize_row_quality(cleaned_row)
                     validate_jsonl_entry(cleaned_row, EnrichedTrainingExample, row_index=line_num)
                 except Exception as exc:

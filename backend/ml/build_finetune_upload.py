@@ -18,29 +18,51 @@ EXPECTED_DATASETS = [
     "chat_train.jsonl",
     "chat_val.jsonl",
 ]
+IGNORED_DATASET_NAME_PATTERNS = (".bak", "_before_", ".orig", ".tmp")
 
 
 def _read_jsonl(path: Path) -> Iterable[Tuple[int, Dict[str, Any]]]:
     with path.open("r", encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
+            raw = line.strip()
+            if not raw:
                 continue
-            yield line_num, json.loads(line)
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                excerpt = raw[:200]
+                raise ValueError(
+                    f"Invalid JSON in {path} at line {line_num}: "
+                    f"excerpt={excerpt!r}; error={exc.msg}"
+                ) from exc
+
+            if not isinstance(obj, dict):
+                raise ValueError(
+                    f"Expected JSON object in {path} at line {line_num}, "
+                    f"got {type(obj).__name__}"
+                )
+
+            yield line_num, obj
 
 
-def _clean_messages(messages):
-    cleaned = []
+def _clean_messages(messages: Iterable[Any]) -> list[dict[str, str]]:
+    cleaned: list[dict[str, str]] = []
     for msg in messages:
-        if msg.role == "assistant" and not msg.content.strip():
+        normalized_content = msg.content if isinstance(msg.content, str) else ""
+        if msg.role == "assistant" and not normalized_content.strip():
             continue
-        cleaned.append({"role": msg.role, "content": msg.content})
+        cleaned.append({"role": msg.role, "content": normalized_content})
     return cleaned
 
 
 def _resolve_dataset_paths(root: Path) -> Dict[str, Path]:
     found: Dict[str, Path] = {}
-    for path in root.rglob("*.jsonl"):
+    for path in sorted(root.rglob("*.jsonl")):
+        lower_name = path.name.lower()
+        if any(pattern in lower_name for pattern in IGNORED_DATASET_NAME_PATTERNS):
+            continue
+        if "_archive" in path.parts:
+            continue
         name = path.name
         if name in EXPECTED_DATASETS and name not in found:
             found[name] = path
@@ -61,6 +83,7 @@ def main() -> None:
     input_path = dataset_paths["chat_train.jsonl"]
 
     written = 0
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT_PATH.open("w", encoding="utf-8") as out_file:
         for line_num, row in _read_jsonl(input_path):
             validated = validate_jsonl_entry(row, ChatExample, row_index=line_num)
