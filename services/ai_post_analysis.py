@@ -8,9 +8,12 @@ or alter deterministic scoring metrics.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional, cast
 
 from backend.app.ai.llm_client import LLMClient, LLMClientError
+
+logger = logging.getLogger(__name__)
 
 
 def _error_response() -> Dict[str, Any]:
@@ -209,7 +212,8 @@ def generate_post_ai_analysis(
     llm = LLMClient(model_name="gpt-4o-mini", temperature=0.2)
     try:
         raw = llm.generate(prompt)
-    except (LLMClientError, Exception):
+    except LLMClientError as e:
+        logger.warning("LLM call failed: %s", e)
         return _error_response()
 
     parsed = _extract_json_object(raw or "")
