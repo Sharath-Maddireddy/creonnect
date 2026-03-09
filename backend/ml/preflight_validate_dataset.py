@@ -46,8 +46,8 @@ def _read_jsonl(path: Path) -> Iterable[Tuple[int, Dict[str, Any]]]:
                 yield line_num, json.loads(line)
             except json.JSONDecodeError as e:
                 print(
-                    f"[warn] Invalid JSON in {path} at line {line_num}: {e}. "
-                    f"Line: {line[:200]!r}"
+                    f"[warn] Invalid JSON in {path} at line {line_num}: "
+                    f"{e.msg} (char {e.pos})"
                 )
 
 
@@ -88,7 +88,7 @@ def _summarize_training_privacy(path: Path) -> Dict[str, Any]:
 
         profile = row.get("input", {}).get("profile", {}) if isinstance(row, dict) else {}
         username = profile.get("username") if isinstance(profile, dict) else None
-        if not _is_anonymized_username(username):
+        if username is not None and not _is_anonymized_username(username):
             non_anonymized_usernames += 1
 
         row_has_email = False

@@ -79,14 +79,14 @@ def compute_growth_signals(
     post_list = list(posts)
     engagement_rates = [
         compute_engagement_rate_by_views(
-            likes=post.get("likes"),
-            comments=post.get("comments"),
-            views=post.get("views"),
+            likes=p.get("likes"),
+            comments=p.get("comments"),
+            views=p.get("views"),
         )
-        for post in post_list
+        for p in post_list
     ]
 
-    avg_views = compute_average(post.get("views") for post in post_list)
+    avg_views = compute_average(p.get("views") for p in post_list)
     avg_engagement_rate_by_views = compute_average(engagement_rates)
     followers = _to_float(profile.get("followers"))
 

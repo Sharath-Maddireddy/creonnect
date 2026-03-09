@@ -48,10 +48,13 @@ def _read_jsonl(path: Path) -> Iterable[Tuple[int, Dict[str, Any]]]:
 def _clean_messages(messages: Iterable[Any]) -> list[dict[str, str]]:
     cleaned: list[dict[str, str]] = []
     for msg in messages:
-        normalized_content = msg.content if isinstance(msg.content, str) else ""
-        if msg.role == "assistant" and not normalized_content.strip():
+        role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        normalized_role = role if isinstance(role, str) else ""
+        normalized_content = content if isinstance(content, str) else ""
+        if normalized_role == "assistant" and not normalized_content.strip():
             continue
-        cleaned.append({"role": msg.role, "content": normalized_content})
+        cleaned.append({"role": normalized_role, "content": normalized_content})
     return cleaned
 
 
