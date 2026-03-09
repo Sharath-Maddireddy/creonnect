@@ -164,3 +164,5 @@ def map_instagram_to_ai_inputs(
     posts = map_instagram_posts(api_media)
     logger.info(f"[Ingestion] Completed API mapping: {len(posts)} posts, {profile.followers_count} followers")
     return profile, posts
+
+

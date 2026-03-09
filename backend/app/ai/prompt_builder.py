@@ -154,3 +154,5 @@ def _format_rag_knowledge(knowledge: List[str]) -> str:
         formatted.append(f"{i}. {chunk.strip()}")
 
     return "\n\n".join(formatted)
+
+

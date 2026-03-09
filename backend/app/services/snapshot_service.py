@@ -33,3 +33,5 @@ def build_creator_snapshot_service(creator_id: str) -> dict:
     }
 
     return build_creator_snapshot(creator_data)
+
+

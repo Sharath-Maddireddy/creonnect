@@ -35,9 +35,18 @@ def compare_posts(current_post: dict, previous_post: dict) -> dict:
     engagement_previous = (previous_likes + previous_comments) / max(previous_views, 1)
     
     # Engagement change percentage
-    engagement_change_pct = (
-        (engagement_current - engagement_previous) / max(engagement_previous, 1e-6)
-    ) * 100
+    special_case_explanation = False
+    if engagement_previous == 0 and engagement_current == 0:
+        engagement_change_pct = 0.0
+        explanation = "Engagement is unchanged at zero for both posts."
+        special_case_explanation = True
+    elif engagement_previous == 0 and engagement_current > 0:
+        engagement_change_pct = None
+        explanation = "First engagement recorded."
+    else:
+        engagement_change_pct = (
+            (engagement_current - engagement_previous) / engagement_previous
+        ) * 100
     
     # Determine relative performance label
     if engagement_current > engagement_previous:
@@ -48,19 +57,25 @@ def compare_posts(current_post: dict, previous_post: dict) -> dict:
         relative_performance_label = "same"
     
     # Generate explanation
-    abs_change = abs(round(engagement_change_pct, 1))
-    if relative_performance_label == "better":
-        explanation = f"This post performed better than your previous one with {abs_change}% higher engagement."
-    elif relative_performance_label == "worse":
-        explanation = f"This post performed worse than your previous one with {abs_change}% lower engagement."
-    else:
-        explanation = "This post performed similarly to your previous one."
+    if not special_case_explanation:
+        if engagement_change_pct is None:
+            explanation = explanation
+        else:
+            abs_change = abs(round(engagement_change_pct, 1))
+            if relative_performance_label == "better":
+                explanation = f"This post performed better than your previous one with {abs_change}% higher engagement."
+            elif relative_performance_label == "worse":
+                explanation = f"This post performed worse than your previous one with {abs_change}% lower engagement."
+            else:
+                explanation = "This post performed similarly to your previous one."
     
     return {
         "delta_views": delta_views,
         "delta_likes": delta_likes,
         "delta_comments": delta_comments,
-        "engagement_change_pct": round(engagement_change_pct, 2),
+        "engagement_change_pct": round(engagement_change_pct, 2) if engagement_change_pct is not None else None,
         "relative_performance_label": relative_performance_label,
         "explanation": explanation
     }
+
+

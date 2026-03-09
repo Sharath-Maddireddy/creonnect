@@ -31,3 +31,5 @@ def test_script_service_returns_script():
 def test_script_service_invalid_creator():
     with pytest.raises(ValueError):
         generate_creator_script_service("does_not_exist")
+
+

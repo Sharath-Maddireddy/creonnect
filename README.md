@@ -59,3 +59,5 @@ backend/
 |   `-- utils/        # Logging and utilities
 `-- main.py           # FastAPI application
 ```
+
+

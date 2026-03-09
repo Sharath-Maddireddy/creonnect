@@ -17,4 +17,7 @@ with sync_playwright() as p:
     context.storage_state(path=STORAGE_PATH)
     print("Session saved.")
 
+    context.close()
     browser.close()
+
+
