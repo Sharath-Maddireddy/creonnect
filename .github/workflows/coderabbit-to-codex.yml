@@ -188,7 +188,7 @@ jobs:
           echo "::group::Codex prompt"
           cat codex_prompt.txt
           echo "::endgroup::"
-          npx -y @openai/codex --approval-mode full-auto --quiet "$(< codex_prompt.txt)"
+          npx -y @openai/codex exec --approval-mode full-auto --quiet "$(< codex_prompt.txt)"
 
       # ── 7. Commit & push fixes ─────────────────────────────────────
       - name: Commit and push fixes
