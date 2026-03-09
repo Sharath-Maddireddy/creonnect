@@ -1,0 +1,241 @@
+﻿name: Resolve CodeRabbit Comments with Codex
+
+on:
+  # Auto-trigger when CodeRabbit submits a review
+  pull_request_review:
+    types: [submitted]
+
+  # Manual trigger via PR comment: /codex-fix
+  issue_comment:
+    types: [created]
+
+  # Manual trigger via Actions UI
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to process"
+        required: true
+        type: number
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  codex-resolve:
+    # Gate: only run for CodeRabbit reviews, /codex-fix comments, or manual dispatch
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_review' &&
+       github.event.review.user.login == 'coderabbitai[bot]') ||
+      (github.event_name == 'issue_comment' &&
+       contains(github.event.comment.body, '/codex-fix') &&
+       github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    steps:
+      # ΓöÇΓöÇ 1. Resolve the PR number & branch ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      - name: Resolve PR metadata
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let prNumber;
+            if (context.eventName === 'workflow_dispatch') {
+              prNumber = Number(context.payload.inputs.pr_number);
+            } else if (context.eventName === 'issue_comment') {
+              prNumber = context.issue.number;
+            } else {
+              prNumber = context.payload.pull_request.number;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            core.setOutput('number', prNumber);
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_sha', pr.head.sha);
+
+      # ΓöÇΓöÇ 2. Guard against codex-bot loops ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      - name: Check last commit author
+        id: loop-guard
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: commit } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ steps.pr.outputs.head_sha }}',
+            });
+            const author = commit.commit.author.name;
+            const skip = author === 'codex-bot';
+            core.setOutput('skip', skip.toString());
+            if (skip) core.info('Last commit was from codex-bot ΓÇö skipping to prevent loop.');
+
+      # ΓöÇΓöÇ 3. Checkout the PR branch ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      - name: Checkout PR branch
+        if: steps.loop-guard.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ΓöÇΓöÇ 4. Collect CodeRabbit review comments ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      - name: Fetch CodeRabbit comments
+        if: steps.loop-guard.outputs.skip != 'true'
+        id: comments
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = ${{ steps.pr.outputs.number }};
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Fetch all review comments on the PR
+            const reviewComments = await github.paginate(
+              github.rest.pulls.listReviewComments,
+              { owner, repo, pull_number: prNumber, per_page: 100 }
+            );
+
+            // Filter to CodeRabbit comments only
+            const coderabbitComments = reviewComments.filter(
+              c => c.user.login === 'coderabbitai[bot]'
+            );
+
+            if (coderabbitComments.length === 0) {
+              // Fallback mode for CodeRabbit outages/rate-limits:
+              // ask Codex to review only the changed files in the PR.
+              const files = await github.paginate(
+                github.rest.pulls.listFiles,
+                { owner, repo, pull_number: prNumber, per_page: 100 }
+              );
+
+              let prompt = `CodeRabbit comments are unavailable (likely rate-limited).\n`;
+              prompt += `Review this PR and apply only safe, high-confidence fixes.\n`;
+              prompt += `Limit edits strictly to files changed in this PR.\n\n`;
+              prompt += `### Changed files\n`;
+              for (const f of files) {
+                prompt += `- ${f.filename} (${f.status})\n`;
+              }
+              prompt += `\nFocus on correctness, edge cases, and obvious regressions. Keep changes minimal.\n`;
+
+              const fs = require('fs');
+              fs.writeFileSync('codex_prompt.txt', prompt);
+
+              core.setOutput('found', 'true');
+              core.setOutput('mode', 'fallback');
+              core.setOutput('count', '0');
+              core.info(`No CodeRabbit comments found. Using fallback review on ${files.length} changed file(s).`);
+              return;
+            }
+
+            // Build structured prompt
+            const grouped = {};
+            for (const c of coderabbitComments) {
+              const file = c.path;
+              if (!grouped[file]) grouped[file] = [];
+              grouped[file].push({
+                line: c.original_line || c.line,
+                body: c.body,
+                diff_hunk: c.diff_hunk,
+              });
+            }
+
+            let prompt = `You are resolving code review feedback. Fix each issue described below.\n`;
+            prompt += `Only modify the files mentioned. Keep changes minimal and focused.\n\n`;
+
+            for (const [file, comments] of Object.entries(grouped)) {
+              prompt += `### File: ${file}\n`;
+              for (const c of comments) {
+                prompt += `- **Line ${c.line || '?'}**: ${c.body}\n`;
+                if (c.diff_hunk) {
+                  prompt += `  Context:\n\`\`\`\n${c.diff_hunk}\n\`\`\`\n`;
+                }
+              }
+              prompt += `\n`;
+            }
+
+            // Write prompt to file (avoids shell escaping issues)
+            const fs = require('fs');
+            fs.writeFileSync('codex_prompt.txt', prompt);
+
+            core.setOutput('found', 'true');
+            core.setOutput('mode', 'coderabbit');
+            core.setOutput('count', coderabbitComments.length.toString());
+            core.info(`Collected ${coderabbitComments.length} CodeRabbit comment(s) across ${Object.keys(grouped).length} file(s).`);
+
+      # ΓöÇΓöÇ 5. Setup Node & install Codex CLI ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      - name: Setup Node.js
+        if: steps.loop-guard.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Codex CLI
+        if: steps.loop-guard.outputs.skip != 'true'
+        run: npm install -g @openai/codex
+
+      # ΓöÇΓöÇ 6. Run Codex to resolve comments ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      - name: Run Codex
+        if: steps.loop-guard.outputs.skip != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          echo "::group::Codex prompt"
+          cat codex_prompt.txt
+          echo "::endgroup::"
+          codex --approval-mode full-auto --quiet "$(cat codex_prompt.txt)"
+
+      # ΓöÇΓöÇ 7. Commit & push fixes ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      - name: Commit and push fixes
+        if: steps.loop-guard.outputs.skip != 'true'
+        run: |
+          rm -f codex_prompt.txt
+          git config user.name "codex-bot"
+          git config user.email "codex-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "fix: apply Codex PR review automation
+
+          Mode: ${{ steps.comments.outputs.mode }}
+          Resolved ${{ steps.comments.outputs.count }} CodeRabbit comment(s).
+          Triggered by: ${{ github.event_name }}"
+            git push
+          fi
+
+      # ΓöÇΓöÇ 8. Post summary comment on PR ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      - name: Post PR comment
+        if: steps.loop-guard.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            let pushed = false;
+            try {
+              const status = execSync('git diff --cached --quiet 2>&1 || echo "changes"', { encoding: 'utf8' });
+              pushed = status.includes('changes');
+            } catch {
+              pushed = true;
+            }
+
+            const mode = '${{ steps.comments.outputs.mode }}';
+            const modeText = mode === 'fallback'
+              ? 'CodeRabbit fallback mode (rate-limit/outage)'
+              : 'CodeRabbit comment mode';
+
+            const body = pushed
+              ? `≡ƒñû **Codex** (${modeText}) pushed fixes. CodeRabbit comments resolved: ${{ steps.comments.outputs.count }}.`
+              : `≡ƒñû **Codex** (${modeText}) reviewed the PR and found no safe changes to apply.`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.pr.outputs.number }},
+              body,
+            });
