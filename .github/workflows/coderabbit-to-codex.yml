@@ -107,8 +107,29 @@ jobs:
             );
 
             if (coderabbitComments.length === 0) {
-              core.setOutput('found', 'false');
-              core.info('No CodeRabbit review comments found.');
+              // Fallback mode for CodeRabbit outages/rate-limits:
+              // ask Codex to review only the changed files in the PR.
+              const files = await github.paginate(
+                github.rest.pulls.listFiles,
+                { owner, repo, pull_number: prNumber, per_page: 100 }
+              );
+
+              let prompt = `CodeRabbit comments are unavailable (likely rate-limited).\n`;
+              prompt += `Review this PR and apply only safe, high-confidence fixes.\n`;
+              prompt += `Limit edits strictly to files changed in this PR.\n\n`;
+              prompt += `### Changed files\n`;
+              for (const f of files) {
+                prompt += `- ${f.filename} (${f.status})\n`;
+              }
+              prompt += `\nFocus on correctness, edge cases, and obvious regressions. Keep changes minimal.\n`;
+
+              const fs = require('fs');
+              fs.writeFileSync('codex_prompt.txt', prompt);
+
+              core.setOutput('found', 'true');
+              core.setOutput('mode', 'fallback');
+              core.setOutput('count', '0');
+              core.info(`No CodeRabbit comments found. Using fallback review on ${files.length} changed file(s).`);
               return;
             }
 
@@ -143,23 +164,24 @@ jobs:
             fs.writeFileSync('codex_prompt.txt', prompt);
 
             core.setOutput('found', 'true');
+            core.setOutput('mode', 'coderabbit');
             core.setOutput('count', coderabbitComments.length.toString());
             core.info(`Collected ${coderabbitComments.length} CodeRabbit comment(s) across ${Object.keys(grouped).length} file(s).`);
 
       # ── 5. Setup Node & install Codex CLI ──────────────────────────
       - name: Setup Node.js
-        if: steps.loop-guard.outputs.skip != 'true' && steps.comments.outputs.found == 'true'
+        if: steps.loop-guard.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
       - name: Install Codex CLI
-        if: steps.loop-guard.outputs.skip != 'true' && steps.comments.outputs.found == 'true'
+        if: steps.loop-guard.outputs.skip != 'true'
         run: npm install -g @openai/codex
 
       # ── 6. Run Codex to resolve comments ───────────────────────────
       - name: Run Codex
-        if: steps.loop-guard.outputs.skip != 'true' && steps.comments.outputs.found == 'true'
+        if: steps.loop-guard.outputs.skip != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
@@ -170,7 +192,7 @@ jobs:
 
       # ── 7. Commit & push fixes ─────────────────────────────────────
       - name: Commit and push fixes
-        if: steps.loop-guard.outputs.skip != 'true' && steps.comments.outputs.found == 'true'
+        if: steps.loop-guard.outputs.skip != 'true'
         run: |
           rm -f codex_prompt.txt
           git config user.name "codex-bot"
@@ -179,8 +201,9 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "fix: resolve CodeRabbit review comments via Codex
+            git commit -m "fix: apply Codex PR review automation
 
+          Mode: ${{ steps.comments.outputs.mode }}
           Resolved ${{ steps.comments.outputs.count }} CodeRabbit comment(s).
           Triggered by: ${{ github.event_name }}"
             git push
@@ -188,7 +211,7 @@ jobs:
 
       # ── 8. Post summary comment on PR ──────────────────────────────
       - name: Post PR comment
-        if: steps.loop-guard.outputs.skip != 'true' && steps.comments.outputs.found == 'true'
+        if: steps.loop-guard.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -201,9 +224,14 @@ jobs:
               pushed = true;
             }
 
+            const mode = '${{ steps.comments.outputs.mode }}';
+            const modeText = mode === 'fallback'
+              ? 'CodeRabbit fallback mode (rate-limit/outage)'
+              : 'CodeRabbit comment mode';
+
             const body = pushed
-              ? `🤖 **Codex** resolved ${{ steps.comments.outputs.count }} CodeRabbit comment(s) and pushed fixes.`
-              : `🤖 **Codex** reviewed ${{ steps.comments.outputs.count }} CodeRabbit comment(s) but found no changes needed.`;
+              ? `🤖 **Codex** (${modeText}) pushed fixes. CodeRabbit comments resolved: ${{ steps.comments.outputs.count }}.`
+              : `🤖 **Codex** (${modeText}) reviewed the PR and found no safe changes to apply.`;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
