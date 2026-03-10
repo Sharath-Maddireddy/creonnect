@@ -37,6 +37,8 @@ DUMMY_SCRAPED_DATA = {
             "comments_count": 150,
             "video_view_count": 45000,
             "media_type": "VIDEO",
+            "media_url": "https://cdn.example/post_001.mp4",
+            "thumbnail_url": "https://cdn.example/post_001.jpg",
             "timestamp": "2024-01-31T12:00:00Z"
         },
         {
@@ -46,6 +48,8 @@ DUMMY_SCRAPED_DATA = {
             "comments_count": 80,
             "video_view_count": 30000,
             "media_type": "VIDEO",
+            "media_url": "https://cdn.example/post_002.mp4",
+            "thumbnail_url": "https://cdn.example/post_002.jpg",
             "timestamp": "2024-01-30T12:00:00Z"
         },
         {
@@ -55,6 +59,8 @@ DUMMY_SCRAPED_DATA = {
             "comments_count": 300,
             "video_view_count": 80000,
             "media_type": "VIDEO",
+            "media_url": "https://cdn.example/post_003.mp4",
+            "thumbnail_url": "https://cdn.example/post_003.jpg",
             "timestamp": "2024-01-29T12:00:00Z"
         }
     ]
@@ -80,7 +86,8 @@ def test_ingestion_mapping():
     assert profile.posting_frequency_per_week > 0
 
     assert len(posts) == 3, "Should have 3 posts"
-    assert all(p.post_type == "reel" for p in posts), "All posts should be reels"
+    assert all(p.post_type == "REEL" for p in posts), "All posts should be reels"
+    assert all(p.media_url.startswith("https://cdn.example/") for p in posts), "Media URLs should be mapped"
     assert all(isinstance(p.caption_text, str) for p in posts), "Captions should be strings"
 
     print("✓ test_ingestion_mapping passed")

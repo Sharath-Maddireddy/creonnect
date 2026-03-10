@@ -35,7 +35,9 @@ def generate_post_insights(
     normalized_post_metadata: Dict[str, Any] = post_metadata or {}
     normalized_metrics: Dict[str, Any] = metrics or {}
     normalized_benchmarks: Dict[str, Any] = benchmarks or {}
-    normalized_reach_breakdown: Optional[Dict[str, Any]] = reach_breakdown or None
+    normalized_reach_breakdown: Optional[Dict[str, Any]] = (
+        reach_breakdown if reach_breakdown is not None else None
+    )
     normalized_tier_name: str = tier_name or ""
     account_id: str = str(normalized_post_metadata.get("account_id") or "")
     media_id: str = str(normalized_post_metadata.get("media_id") or "")
@@ -77,6 +79,32 @@ def generate_post_insights(
                     "recommendations": [],
                 },
             }
+
+        try:
+            ai_result = generate_post_ai_analysis(
+                post_metadata=normalized_post_metadata,
+                metrics=normalized_metrics,
+                signals=signals,
+                benchmarks=normalized_benchmarks,
+                tier_name=normalized_tier_name,
+            )
+
+            if ai_result.get("status") == "READY":
+                cache_repo.set_cached_analysis(account_id, media_id, ai_result)
+
+            return {
+                "post_metadata": normalized_post_metadata,
+                "metrics": normalized_metrics,
+                "signals": signals,
+                "ai_analysis": {
+                    "status": ai_result.get("status", "ERROR"),
+                    "summary": ai_result.get("summary", ""),
+                    "drivers": ai_result.get("drivers", []),
+                    "recommendations": ai_result.get("recommendations", []),
+                },
+            }
+        finally:
+            cache_repo.release_regen_lock(account_id, media_id)
     # Without stable account/media IDs, cache and lock are intentionally skipped.
 
     ai_result = generate_post_ai_analysis(
@@ -86,9 +114,6 @@ def generate_post_insights(
         benchmarks=normalized_benchmarks,
         tier_name=normalized_tier_name,
     )
-
-    if has_cache_key and ai_result.get("status") == "READY":
-        cache_repo.set_cached_analysis(account_id, media_id, ai_result)
 
     return {
         "post_metadata": normalized_post_metadata,

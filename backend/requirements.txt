@@ -4,3 +4,7 @@ pydantic
 numpy
 sentence-transformers
 openai
+redis
+rq
+fakeredis
+python-dotenv

@@ -1,0 +1,99 @@
+{
+    "source": "synthetic_fixture",
+    "username": "ig_dhirendra",
+    "fetched_at": "2026-02-25T17:45:00+00:00",
+    "followers": 12500,
+    "limit": 5,
+    "items": [
+        {
+            "platform": "instagram",
+            "post_id": "POST_001_fitness",
+            "shortcode": "SC001fit",
+            "post_type": "IMAGE",
+            "media_url": "https://images.unsplash.com/photo-1517836357463-d25dfeac3438?w=800",
+            "thumbnail_url": null,
+            "caption_text": "Morning workout done! 💪 Starting the day right with a high-intensity session. Consistency is key! #fitness #morningworkout #gym #healthylifestyle #motivation",
+            "like_count": 845,
+            "comment_count": 42,
+            "view_count": null,
+            "follower_count": 12500,
+            "raw": {
+                "id": "POST_001_fitness",
+                "shortcode": "SC001fit",
+                "timestamp": "2026-02-20T08:30:00+00:00"
+            }
+        },
+        {
+            "platform": "instagram",
+            "post_id": "POST_002_food",
+            "shortcode": "SC002food",
+            "post_type": "IMAGE",
+            "media_url": "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800",
+            "thumbnail_url": null,
+            "caption_text": "Healthy meal prep for the week 🥗 Balanced macros, clean ingredients. What's your go-to prep meal? Drop it below 👇 #mealprep #healthyfood #nutrition #cleaneating #foodie",
+            "like_count": 1230,
+            "comment_count": 89,
+            "view_count": null,
+            "follower_count": 12500,
+            "raw": {
+                "id": "POST_002_food",
+                "shortcode": "SC002food",
+                "timestamp": "2026-02-18T12:15:00+00:00"
+            }
+        },
+        {
+            "platform": "instagram",
+            "post_id": "POST_003_travel",
+            "shortcode": "SC003trv",
+            "post_type": "IMAGE",
+            "media_url": "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800",
+            "thumbnail_url": null,
+            "caption_text": "Weekend getaway to the mountains 🏔️ Nature heals everything. Sometimes you just need to disconnect to reconnect. #travel #mountains #nature #weekendvibes #wanderlust",
+            "like_count": 2100,
+            "comment_count": 156,
+            "view_count": null,
+            "follower_count": 12500,
+            "raw": {
+                "id": "POST_003_travel",
+                "shortcode": "SC003trv",
+                "timestamp": "2026-02-15T16:00:00+00:00"
+            }
+        },
+        {
+            "platform": "instagram",
+            "post_id": "POST_004_reel",
+            "shortcode": "SC004reel",
+            "post_type": "REEL",
+            "media_url": "https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=800",
+            "thumbnail_url": "https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=400",
+            "caption_text": "5 mistakes you're making at the gym 🚫 Watch till the end for the most common one! #gymtips #fitnessmistakes #workout #reels #trending",
+            "like_count": 3400,
+            "comment_count": 210,
+            "view_count": 45000,
+            "follower_count": 12500,
+            "raw": {
+                "id": "POST_004_reel",
+                "shortcode": "SC004reel",
+                "timestamp": "2026-02-12T19:30:00+00:00"
+            }
+        },
+        {
+            "platform": "instagram",
+            "post_id": "POST_005_lifestyle",
+            "shortcode": "SC005life",
+            "post_type": "IMAGE",
+            "media_url": "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=800",
+            "thumbnail_url": null,
+            "caption_text": "Team brainstorm session 🧠 Building something exciting with these amazing people. Stay tuned for big announcements! #entrepreneur #startup #teamwork #hustle #business",
+            "like_count": 670,
+            "comment_count": 35,
+            "view_count": null,
+            "follower_count": 12500,
+            "raw": {
+                "id": "POST_005_lifestyle",
+                "shortcode": "SC005life",
+                "timestamp": "2026-02-10T14:45:00+00:00"
+            }
+        }
+    ]
+}

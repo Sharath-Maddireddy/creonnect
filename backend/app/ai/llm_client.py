@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 import os
 import time
 
@@ -8,6 +8,36 @@ from backend.app.utils.logger import logger
 # ------------------------------------------------
 # LLM Client
 # ------------------------------------------------
+
+
+def _is_response_format_unsupported_error(err: Exception) -> bool:
+    """Return True when error indicates structured output/response_format is unsupported."""
+    indicators = [
+        "response_format",
+        "unsupported response format",
+        "unsupported parameter",
+        "unknown parameter",
+        "invalid parameter",
+        "not supported",
+        "json schema",
+    ]
+
+    fragments: list[str] = [str(err)]
+    for attr in ("code", "status_code", "type", "message"):
+        value = getattr(err, attr, None)
+        if value is not None:
+            fragments.append(str(value))
+
+    message_obj = getattr(err, "message", None)
+    if isinstance(message_obj, dict):
+        for key in ("code", "message", "type", "param"):
+            value = message_obj.get(key)
+            if value is not None:
+                fragments.append(str(value))
+
+    combined = " | ".join(fragments).lower()
+    return any(token in combined for token in indicators)
+
 
 class LLMClientError(Exception):
     """Raised when LLM request fails after retries."""
@@ -46,7 +76,7 @@ class LLMClient:
             logger.error(f"[LLM] Failed to initialize OpenAI client: {e}")
             self._client = None
 
-    def generate(self, prompt: Dict) -> Optional[str]:
+    def generate(self, prompt: Dict[str, Any]) -> Optional[str]:
         """
         Generate text from the LLM.
         Expects prompt = {"system": "...", "user": "..."}
@@ -59,21 +89,50 @@ class LLMClient:
                 "Ensure OPENAI_API_KEY is set or replace this client."
             )
 
+        if not isinstance(prompt, dict):
+            raise LLMClientError("Prompt must be a dictionary with 'system' and 'user' keys.")
+        for key in ("system", "user"):
+            if key not in prompt:
+                raise LLMClientError(f"Missing required prompt key: '{key}'")
+
         last_error = None
+        skip_response_format = False
         for attempt in range(self.max_retries + 1):
             try:
                 logger.info(f"[LLM] Request start (attempt {attempt + 1}/{self.max_retries + 1})")
                 start_time = time.time()
 
-                response = self._client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
+                request_payload: dict[str, Any] = {
+                    "model": self.model_name,
+                    "messages": [
                         {"role": "system", "content": prompt["system"]},
                         {"role": "user", "content": prompt["user"]}
                     ],
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens
-                )
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                }
+                response_format = prompt.get("response_format")
+                if isinstance(response_format, dict) and not skip_response_format:
+                    request_payload["response_format"] = response_format
+
+                try:
+                    response = self._client.chat.completions.create(**request_payload)
+                except Exception as request_error:
+                    # Retry without response_format only for explicit unsupported-format errors.
+                    if (
+                        "response_format" in request_payload
+                        and _is_response_format_unsupported_error(request_error)
+                    ):
+                        logger.warning(
+                            "[LLM] response_format unsupported; retrying request without it: %s",
+                            request_error,
+                        )
+                        skip_response_format = True
+                        retry_payload = dict(request_payload)
+                        retry_payload.pop("response_format", None)
+                        response = self._client.chat.completions.create(**retry_payload)
+                    else:
+                        raise
 
                 duration = time.time() - start_time
                 logger.info(f"[LLM] Request completed in {duration:.2f}s")

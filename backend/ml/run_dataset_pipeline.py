@@ -33,7 +33,10 @@ def _read_jsonl(path: Path) -> Iterable[Tuple[int, Dict[str, Any]]]:
             line = line.strip()
             if not line:
                 continue
-            yield line_num, json.loads(line)
+            try:
+                yield line_num, json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON on line {line_num}: {exc}") from exc
 
 
 def _write_jsonl(rows: Iterable[Dict[str, Any]], path: Path) -> int:
@@ -46,16 +49,24 @@ def _write_jsonl(rows: Iterable[Dict[str, Any]], path: Path) -> int:
     return count
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (ValueError, TypeError):
+        return default
+
+
 def _build_action_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
     input_data = entry["input"]
     profile = input_data["profile"]
     posts = input_data["posts"]
-    growth = entry["output"].get("growth", {}) if isinstance(entry.get("output"), dict) else {}
-    niche = entry["output"].get("niche", {}) if isinstance(entry.get("output"), dict) else {}
+    output = entry.get("output") if isinstance(entry.get("output"), dict) else {}
+    growth = output.get("growth", {})
+    niche = output.get("niche", {})
 
-    avg_views = float(profile.get("avg_views", 0) or 0)
-    avg_likes = float(profile.get("avg_likes", 0) or 0)
-    avg_comments = float(profile.get("avg_comments", 0) or 0)
+    avg_views = _safe_float(profile.get("avg_views", 0))
+    avg_likes = _safe_float(profile.get("avg_likes", 0))
+    avg_comments = _safe_float(profile.get("avg_comments", 0))
     avg_engagement = (avg_likes + avg_comments) / avg_views if avg_views > 0 else 0.0
 
     creator_metrics = {
@@ -121,6 +132,8 @@ def main() -> None:
     rng = random.Random(SPLIT_SEED)
     rng.shuffle(chat_rows)
     split_idx = int(len(chat_rows) * TRAIN_FRACTION)
+    if len(chat_rows) > 0 and split_idx == 0:
+        split_idx = 1  # Ensure at least one training example for tiny datasets
     chat_train = chat_rows[:split_idx]
     chat_val = chat_rows[split_idx:]
 

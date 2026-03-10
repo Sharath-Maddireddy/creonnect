@@ -114,11 +114,12 @@ def compute_benchmark_metrics(
         metric_values = _collect_core_metric_values(valid_history, metric_name)
         historical_core_averages[metric_name] = _mean(metric_values)
 
-    engagement_values: list[float] = [
-        float(post.derived_metrics.engagement_rate)
-        for post in valid_history
-        if post.derived_metrics is not None and post.derived_metrics.engagement_rate is not None
-    ]
+    engagement_values: list[float] = []
+    for post in valid_history:
+        if post.derived_metrics is not None:
+            rate = _to_float(post.derived_metrics.engagement_rate)
+            if rate is not None:
+                engagement_values.append(rate)
 
     avg_reach = historical_core_averages["reach"]
     avg_engagement_rate = _mean(engagement_values)

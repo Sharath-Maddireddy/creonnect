@@ -1,0 +1,37 @@
+name: antigravity-gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  antigravity-gate:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONWARNINGS: ignore::DeprecationWarning
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          if [ -f backend/requirements.txt ]; then
+            pip install -r backend/requirements.txt
+          fi
+
+      - name: Run API anti-gravity runner
+        run: python -m pytest backend/app/tests/test_api_antigravity_runner.py -v
+
+      - name: Run system anti-gravity suite
+        run: python -m pytest backend/app/tests/test_system_antigravity_suite.py -v

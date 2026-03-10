@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+
+
+CRINGE_DETECTION_THRESHOLD = 45
+CRINGE_NOT_CRINGE_MAX = 30
+CRINGE_UNCERTAIN_MAX = 59
 
 
 # -----------------------------
@@ -199,6 +204,37 @@ class VisionSignal(BaseModel):
         default=None,
         description="Optional aesthetic quality signal as numeric or categorical value.",
     )
+    cringe_score: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Visual cringe score 0-100.",
+    )
+    cringe_signals: list[str] = Field(
+        default_factory=list,
+        description="Visual cringe signals detected.",
+    )
+    cringe_fixes: list[str] = Field(
+        default_factory=list,
+        description="Suggested fixes to reduce cringe.",
+    )
+    production_level: str | None = Field(
+        default=None,
+        description="low|medium|high production level.",
+    )
+    is_cringe: bool | None = Field(
+        default=None,
+        description=(
+            "True when cringe risk is detected (score >= 45). "
+            "This can be true while cringe_label is 'uncertain' for scores 45-59."
+        ),
+    )
+    cringe_label: str | None = Field(
+        default=None,
+        description="not_cringe|uncertain|cringe label.",
+    )
+    adult_content_detected: bool | None = Field(default=None)
+    adult_content_confidence: int | None = Field(default=None, ge=0, le=100)
 
     @field_validator("hook_strength_score", mode="before")
     @classmethod
@@ -211,6 +247,95 @@ class VisionSignal(BaseModel):
             return None
         return max(0.0, min(1.0, numeric))
 
+    @field_validator("cringe_score", "adult_content_confidence", mode="before")
+    @classmethod
+    def _clamp_percent_score(cls, value: int | float | str | None) -> int | None:
+        if value is None:
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return int(max(0.0, min(100.0, round(numeric))))
+
+    @field_validator("cringe_signals", "cringe_fixes", mode="before")
+    @classmethod
+    def _sanitize_cringe_list(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
+            if not text:
+                continue
+            sanitized.append(text[:160])
+            if len(sanitized) == 3:
+                break
+        return sanitized
+
+    @field_validator("production_level", mode="before")
+    @classmethod
+    def _normalize_production_level(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip().lower()
+        if text not in {"low", "medium", "high"}:
+            return None
+        return text
+
+    @field_validator("is_cringe", "adult_content_detected", mode="before")
+    @classmethod
+    def _normalize_bool(cls, value: bool | int | float | str | None) -> bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if text in {"1", "true", "yes", "y"}:
+                return True
+            if text in {"0", "false", "no", "n"}:
+                return False
+        return None
+
+    @field_validator("cringe_label", mode="before")
+    @classmethod
+    def _sanitize_cringe_label(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip().lower()
+        return text if text in {"not_cringe", "uncertain", "cringe"} else None
+
+    @staticmethod
+    def _derive_label_from_score(score: int | None) -> str | None:
+        if score is None:
+            return None
+        if score <= CRINGE_NOT_CRINGE_MAX:
+            return "not_cringe"
+        if score <= CRINGE_UNCERTAIN_MAX:
+            return "uncertain"
+        return "cringe"
+
+    @model_validator(mode="after")
+    def _derive_cringe_fields(self) -> "VisionSignal":
+        derived_label = self._derive_label_from_score(self.cringe_score)
+        if derived_label is not None:
+            self.cringe_label = derived_label
+            # Intentional semantic split:
+            # - is_cringe: safety-risk detection threshold (>=45)
+            # - cringe_label: severity bucket ("cringe" only at >=60)
+            self.is_cringe = (
+                self.cringe_score >= CRINGE_DETECTION_THRESHOLD
+                if self.cringe_score is not None
+                else None
+            )
+        return self
+
 
 class VisionAnalysis(BaseModel):
     """Container for vision provider output."""
@@ -218,7 +343,10 @@ class VisionAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str = Field(default="gemini", description="Vision provider identifier.")
-    status: str = Field(default="error", description="Vision analysis status.")
+    status: Literal["ok", "error", "disabled", "no_media", "unknown"] = Field(
+        default="unknown",
+        description="Vision analysis status.",
+    )
     signals: list[VisionSignal] = Field(default_factory=list, description="Normalized vision signal payloads.")
 
 
@@ -713,9 +841,18 @@ class SinglePostInsights(BaseModel):
     )
     follower_count: int | None = Field(default=None, description="Account followers at publish or snapshot time.")
     published_at: datetime | None = Field(default=None, description="Timestamp when the post was published.")
-    core_metrics: CoreMetrics = Field(description="Raw post-level metrics.")
-    derived_metrics: DerivedMetrics = Field(description="Calculated post-level derived metrics.")
-    benchmark_metrics: BenchmarkMetrics = Field(description="Benchmark and percent-vs-average metrics.")
+    core_metrics: CoreMetrics = Field(
+        default_factory=CoreMetrics,
+        description="Raw post-level metrics.",
+    )
+    derived_metrics: DerivedMetrics = Field(
+        default_factory=DerivedMetrics,
+        description="Calculated post-level derived metrics.",
+    )
+    benchmark_metrics: BenchmarkMetrics = Field(
+        default_factory=BenchmarkMetrics,
+        description="Benchmark and percent-vs-average metrics.",
+    )
     vision_analysis: VisionAnalysis | None = Field(
         default=None,
         description="Latest normalized vision analysis payload for this post.",

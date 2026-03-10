@@ -1,0 +1,514 @@
+{
+  "ahs_score": 63.08,
+  "ahs_band": "STRONG",
+  "pillars": {
+    "content_quality": {
+      "score": 45.68,
+      "band": "AVERAGE",
+      "notes": []
+    },
+    "engagement_quality": {
+      "score": 70.0,
+      "band": "STRONG",
+      "notes": [
+        "Account average engagement rate unavailable; used absolute ER band mapping."
+      ]
+    },
+    "niche_fit": {
+      "score": 50.0,
+      "band": "AVERAGE",
+      "notes": [
+        "Niche average engagement benchmark unavailable; niche fit based on S4 only."
+      ]
+    },
+    "consistency": {
+      "score": 62.5,
+      "band": "STRONG",
+      "notes": []
+    },
+    "brand_safety": {
+      "score": 100.0,
+      "band": "EXCEPTIONAL",
+      "notes": []
+    }
+  },
+  "drivers": [
+    {
+      "id": "content_quality_low",
+      "label": "Content clarity/quality needs improvement",
+      "type": "LIMITING",
+      "explanation": "Mean content signals are low (S1=20.25, S2=19.133333333333333, S3=29.133333333333333)."
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "improve_visual_hook_and_clarity",
+      "text": "Improve opening visual hook and framing to raise S1/S3 on most posts.",
+      "impact_level": "HIGH"
+    },
+    {
+      "id": "strengthen_caption_structures",
+      "text": "Use stronger first-line hooks and clearer caption structures to raise S2.",
+      "impact_level": "HIGH"
+    }
+  ],
+  "metadata": {
+    "post_count_used": 30,
+    "min_history_threshold_met": true,
+    "time_window_days": 1257
+  },
+  "posts_summary": [
+    {
+      "post_id": "3791673376810157970",
+      "post_type": "REEL",
+      "caption_preview": "Lets back to prime #gokarna #ombeachgokarna\ud83c\udfdd\ufe0f #gym #travelphotography",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 22.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 53.58,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3822955790815334419",
+      "post_type": "IMAGE",
+      "caption_preview": "Not everyone gets access.\n\nTrust isn\u2019t given.\nIt\u2019s verified.\n\nWelcome to the Creator Passport Embassy.\nWhere creators ge",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 44.0,
+        "S3_clarity": 29.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 62.38,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3790863671623877897",
+      "post_type": "IMAGE",
+      "caption_preview": "Maybe it's time to let go of everything\u2728 #gokarna",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 22.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 53.0,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3790267687718048049",
+      "post_type": "IMAGE",
+      "caption_preview": "We will lose life at the end\u2728 #gokarna #sea",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 22.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 53.0,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3772116701539405636",
+      "post_type": "REEL",
+      "caption_preview": "Peace have a cost you have to pay #waynad #bike #bikelife #kerala #solo",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 30.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 56.94,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3762874848180924158",
+      "post_type": "IMAGE",
+      "caption_preview": "Peace\ud83c\udfae #gaming  #gamingislife",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 22.0,
+        "S3_clarity": 29.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 52.7,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3682098575771056400",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3680777957188488952",
+      "post_type": "IMAGE",
+      "caption_preview": "From sipping tea to stepping into the tea garden \u2615\ufe0f",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 21.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 52.56,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3635030322926333091",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3613204091298005762",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3562856288155910430",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3562691324275361022",
+      "post_type": "IMAGE",
+      "caption_preview": "Fill your soul with peace\ud83c\uddfb\ud83c\uddf3 #banahills  #danang",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 25.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 54.32,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3562492720256439880",
+      "post_type": "REEL",
+      "caption_preview": "Living in dreams \ud83c\udf1f\ud83c\uddfb\ud83c\uddf3",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 17.0,
+        "S3_clarity": 29.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 51.16,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3561901521229342827",
+      "post_type": "IMAGE",
+      "caption_preview": "\"Lost in the serenity of colors and blooms \ud83c\udf38\u2728 A little escape to a floral paradise \ud83c\udf3f\ud83c\udf3c #hoian #vietnam",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 26.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 54.76,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3561434927088861727",
+      "post_type": "REEL",
+      "caption_preview": "Adding Hanoi \ud83c\uddfb\ud83c\uddf3 #vietnam",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 22.0,
+        "S3_clarity": 29.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 53.26,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3559673400921148400",
+      "post_type": "IMAGE",
+      "caption_preview": "Dumping Hanoi\ud83c\uddfb\ud83c\uddf3",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 17.0,
+        "S3_clarity": 29.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 50.5,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3559044486343049639",
+      "post_type": "IMAGE",
+      "caption_preview": "Manifesting every solo moment \ud83c\udf1f",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 17.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 50.8,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3531647539609352182",
+      "post_type": "IMAGE",
+      "caption_preview": "Come so far",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 17.0,
+        "S3_clarity": 29.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 50.5,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3400452577979490405",
+      "post_type": "REEL",
+      "caption_preview": "Live Peacefully Die peacefully \ud83e\udd0d",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 17.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 51.48,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3400156222190995881",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3356888342184042885",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3356233942075646315",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3356232247023088763",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3148958027009725374",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "3005400624843360169",
+      "post_type": "IMAGE",
+      "caption_preview": "You dream I live \ud83c\udf1f",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 20.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 52.12,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "2995749442042583180",
+      "post_type": "REEL",
+      "caption_preview": "Hanley Dairies \ud83c\udf1f\n\n#ladakh #leh #bikeride #hanley #trip\n#bike  #travel",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 27.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 55.68,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "2915488426269030326",
+      "post_type": "REEL",
+      "caption_preview": "Mountains \u2665\ufe0f\n\n#ladakh #bikeride #nubravalley #moutainbike",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 22.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 53.58,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "2914900642227470640",
+      "post_type": "IMAGE",
+      "caption_preview": "Somehow, a comfy hoodie tends to feel like home",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 17.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 50.8,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "2914546494283595429",
+      "post_type": "IMAGE",
+      "caption_preview": "We live once we'll die once\n\n#leh #bikeride #ladakhtrip #pangonglake",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 22.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 53.0,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "2912296415860769432",
+      "post_type": "IMAGE",
+      "caption_preview": "",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 12.5,
+        "S3_clarity": 28.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 48.22,
+        "predicted_er": null
+      }
+    }
+  ],
+  "account_id": "ig_dhirendra",
+  "posts_analyzed": 30
+}

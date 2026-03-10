@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Fetch CodeRabbit review comments from a GitHub PR and pipe them to Codex CLI.
+"""Fetch CodeRabbit review comments from a GitHub PR and pass them to Codex CLI.
 
 Usage:
     # Print formatted prompt (for inspection or manual paste)
     python scripts/coderabbit_to_codex.py 42
 
-    # Pipe directly to Codex with full-auto mode
+    # Run Codex non-interactively with full-auto mode
     python scripts/coderabbit_to_codex.py 42 --run
 
     # Use a specific repo (defaults to origin remote)
@@ -39,11 +39,16 @@ def get_repo_from_git() -> str:
 
     # SSH: git@github.com:owner/repo.git
     if url.startswith("git@"):
-        path = url.split(":", 1)[1]
+        parts = url.split(":", 1)
+        path = parts[1] if len(parts) > 1 else ""
     # HTTPS: https://github.com/owner/repo.git
     elif "github.com" in url:
-        path = url.split("github.com/", 1)[1]
+        parts = url.split("github.com/", 1)
+        path = parts[1] if len(parts) > 1 else ""
     else:
+        return ""
+
+    if not path:
         return ""
 
     return path.removesuffix(".git")
@@ -57,7 +62,7 @@ def github_api(endpoint: str, token: str) -> list | dict:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     })
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
 
 
@@ -165,22 +170,28 @@ def main():
         print("Error: OPENAI_API_KEY environment variable is required for --run.", file=sys.stderr)
         sys.exit(1)
 
-    # Write prompt to temp file to avoid shell escaping issues
+    # Write prompt to temp file so we can pass it via stdin (avoids shell escaping/arg length issues).
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         f.write(prompt)
         prompt_file = f.name
 
     try:
-        cmd = ["codex", "--quiet"]
+        # NOTE: Current Codex CLI does not expose a --prompt-file flag.
+        # `codex exec -` reads the prompt from stdin.
+        cmd = ["codex", "exec"]
         if args.auto:
-            cmd.extend(["--approval-mode", "full-auto"])
-        cmd.append(prompt)
+            cmd.append("--full-auto")
+        cmd.append("-")
 
         print(f"Running Codex...", file=sys.stderr)
-        result = subprocess.run(cmd, check=False)
+        with open(prompt_file, "r", encoding="utf-8") as prompt_stream:
+            result = subprocess.run(cmd, stdin=prompt_stream, check=False)
         sys.exit(result.returncode)
     finally:
-        os.unlink(prompt_file)
+        try:
+            os.unlink(prompt_file)
+        except FileNotFoundError:
+            pass
 
 
 if __name__ == "__main__":

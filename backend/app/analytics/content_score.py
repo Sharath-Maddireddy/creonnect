@@ -57,7 +57,7 @@ def classify_score_band(score: int) -> str:
 
 
 def compute_content_score(
-    derived: DerivedMetrics, benchmark: BenchmarkMetrics | None
+    derived: DerivedMetrics | None, benchmark: BenchmarkMetrics | None
 ) -> dict[str, int | str]:
     """Compute deterministic content score and score band from derived and benchmark metrics."""
     if derived is None:

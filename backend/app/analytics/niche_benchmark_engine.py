@@ -27,7 +27,7 @@ def _resolve_follower_band(follower_count: int | None) -> str | None:
         return "0-10k"
     if follower_count < 100_000:
         return "10k-100k"
-    if follower_count <= 1_000_000:
+    if follower_count < 1_000_000:
         return "100k-1M"
     return "1M+"
 
@@ -77,8 +77,23 @@ def _build_commentary(
     if engagement_below and save_above:
         return "Mixed signal: engagement is below niche average, but save rate is above niche average."
 
+    if engagement_above and save_below:
+        return "Mixed signal: engagement is above niche average, but save rate is below niche average."
+
     if engagement_below and save_below:
         return "This post is underperforming versus niche averages for both engagement and saves."
+
+    if engagement_above and not save_comparable:
+        return "Engagement is above niche average."
+
+    if engagement_below and not save_comparable:
+        return "Engagement is below niche average."
+
+    if save_above and not engagement_comparable:
+        return "Save rate is above niche average."
+
+    if save_below and not engagement_comparable:
+        return "Save rate is below niche average."
 
     return "This post is performing in line with niche benchmark expectations."
 
@@ -102,8 +117,10 @@ def compute_niche_benchmark_context(
     follower_band = _resolve_follower_band(follower_count_value)
 
     commentary = _build_commentary(
-        (post_engagement_rate, post_save_rate),
-        (niche_avg_engagement_rate, niche_avg_save_rate),
+        post_engagement_rate,
+        niche_avg_engagement_rate,
+        post_save_rate,
+        niche_avg_save_rate,
     )
 
     return {

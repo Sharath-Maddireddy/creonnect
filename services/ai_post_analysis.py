@@ -42,7 +42,10 @@ def _extract_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
         if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
             text = "\n".join(lines[1:-1]).strip()
             if text.lower().startswith("json"):
-                text = text[4:].strip()
+                # Strip "json" prefix only if followed by whitespace/newline.
+                remainder = text[4:]
+                if not remainder or remainder[0].isspace():
+                    text = remainder.strip()
 
     try:
         parsed = json.loads(text)

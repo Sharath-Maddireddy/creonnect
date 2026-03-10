@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import socket
 import threading
 import time
 from dataclasses import dataclass
+from ipaddress import ip_address
 from typing import Any, Literal, TypedDict
 
-from backend.app.ai.llm_client import LLMClient, LLMClientError
+from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
+from backend.app.ai.llm_client import LLMClient
 from backend.app.analytics.caption_s2_engine import compute_s2_caption_effectiveness
 from backend.app.analytics.content_score import compute_content_score
 from backend.app.analytics.post_weighted_score_engine import compute_weighted_post_score
@@ -36,6 +40,25 @@ from backend.app.utils.logger import logger
 CACHE_TTL_SECONDS = 86400
 MIN_REGEN_SECONDS = 7200
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
+
+
+def _parse_timeout(env_key: str, default: float) -> float:
+    raw = os.getenv(env_key, "")
+    if not isinstance(raw, str) or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[AI] Invalid %s value=%r; falling back to default timeout=%s",
+            env_key,
+            raw,
+            default,
+        )
+        return default
+
+
+LLM_TIMEOUT_SECONDS = _parse_timeout("LLM_TIMEOUT_SECONDS", 60.0)
 _GENAI_LOCK = threading.Lock()
 _ANALYSIS_CACHE_LOCK = threading.Lock()
 
@@ -120,11 +143,12 @@ class AIAnalysisResult(TypedDict):
     audience_relevance_score: dict[str, Any]
     brand_safety_score: dict[str, Any]
     weighted_post_score: dict[str, Any]
+    vision_analysis: dict[str, Any]
     tier_avg_engagement_rate: float | None
     predicted_engagement_rate: float | None
     predicted_engagement_rate_notes: list[str]
     warnings: list["AIWarning"]
-    vision_status: Literal["ok", "error", "disabled"]
+    vision_status: Literal["ok", "error", "disabled", "no_media"]
     fallback_used: bool
 
 
@@ -166,12 +190,33 @@ class _CacheEntry:
 _ANALYSIS_CACHE: dict[str, _CacheEntry] = {}
 
 
-def _cache_key(post: SinglePostInsights) -> str:
+def _hash_cache_hint(value: Any) -> str:
+    if not isinstance(value, str):
+        return "none"
+    text = value.strip()
+    if not text:
+        return "empty"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _cache_key(post: SinglePostInsights) -> str | None:
     """Build a stable cache key for a single post."""
-    account_id = post.account_id or "unknown_account"
-    media_id = post.media_id or "unknown_media"
+    account_id = post.account_id or None
+    media_id = post.media_id or None
     published_at = post.published_at.isoformat() if post.published_at is not None else "unknown_time"
-    return f"{account_id}:{media_id}:{published_at}"
+
+    if account_id and media_id:
+        return f"{account_id}:{media_id}:{published_at}"
+
+    caption_hint = _hash_cache_hint(post.caption_text)
+    media_hint = _hash_cache_hint(post.media_url)
+
+    if not account_id and not media_id and caption_hint in {"none", "empty"} and media_hint in {"none", "empty"}:
+        return None
+
+    account_part = account_id or "unknown_account"
+    media_part = media_id or "unknown_media"
+    return f"{account_part}:{media_part}:{published_at}:{caption_hint}:{media_hint}"
 
 
 def _is_fresh(entry: _CacheEntry, now_ts: float) -> bool:
@@ -274,6 +319,52 @@ def _resolve_tier_avg_engagement_rate(post: SinglePostInsights) -> tuple[float |
     return None, notes
 
 
+def _is_public_ip_address(value: str) -> bool:
+    try:
+        parsed = ip_address(value)
+    except ValueError:
+        return False
+
+    return not (
+        parsed.is_private
+        or parsed.is_loopback
+        or parsed.is_link_local
+        or parsed.is_multicast
+        or parsed.is_reserved
+        or parsed.is_unspecified
+    )
+
+
+def _is_safe_public_hostname(hostname: str) -> bool:
+    normalized = hostname.strip().lower().rstrip(".")
+    if not normalized:
+        return False
+
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return False
+
+    if normalized.endswith((".local", ".localdomain", ".internal", ".lan", ".home", ".corp")):
+        return False
+
+    if _is_public_ip_address(normalized):
+        return True
+
+    # Block likely-internal single-label hostnames.
+    if "." not in normalized:
+        return False
+
+    try:
+        addr_infos = socket.getaddrinfo(normalized, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+
+    resolved_ips = {info[4][0] for info in addr_infos if len(info) >= 5 and info[4]}
+    if not resolved_ips:
+        return False
+
+    return all(_is_public_ip_address(ip) for ip in resolved_ips)
+
+
 def build_ai_input_context(
     post: SinglePostInsights,
     ai_content_score: int,
@@ -309,6 +400,72 @@ def build_ai_input_context(
     }
 
 
+def _clamp_int_0_100(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(max(0.0, min(100.0, round(numeric))))
+
+
+def _normalize_short_text_list(value: Any, limit: int = 3) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    sanitized: list[str] = []
+    for item in values:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text:
+            continue
+        sanitized.append(text[:160])
+        if len(sanitized) >= limit:
+            break
+    return sanitized
+
+
+def _normalize_optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "n"}:
+            return False
+    return None
+
+
+def _normalize_production_level(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized not in {"low", "medium", "high"}:
+        return None
+    return normalized
+
+
+def _apply_cringe_prompt_floor(cringe_score: int, cringe_signals: list[str]) -> int:
+    score = int(max(0, min(100, cringe_score)))
+    text = " ".join(cringe_signals).lower()
+    confusing_concept = any(keyword in text for keyword in ("confus", "nonsens"))
+    awkward_posing = any(keyword in text for keyword in ("awkward", "forced", "pose"))
+
+    if confusing_concept and awkward_posing:
+        score = max(score, 75)
+    elif confusing_concept:
+        score = max(score, 65)
+    elif awkward_posing:
+        score = max(score, 55)
+
+    return int(max(0, min(100, score)))
+
+
 async def run_vision_analysis(
     post: SinglePostInsights,
 ) -> dict[str, Any]:
@@ -316,12 +473,29 @@ async def run_vision_analysis(
     from urllib.parse import urlparse
 
     instruction = (
-        "Analyze this Instagram post image. Return ONLY valid JSON with fields: "
+        "Analyze this Instagram post image and return ONLY valid JSON. "
+        "Use exactly these keys: "
         "objects (array of strings), "
         "scene_description (string), "
         "detected_text (string or null), "
         "visual_style (string), "
-        "hook_strength_score (float between 0 and 1). "
+        "hook_strength_score (float between 0 and 1), "
+        "cringe_score (integer 0-100), "
+        "cringe_signals (array of strings, max 3), "
+        "cringe_fixes (array of strings, max 3), "
+        "production_level (one of low|medium|high), "
+        "adult_content_detected (boolean), "
+        "adult_content_confidence (integer 0-100). "
+        "Cringe rubric: "
+        "0-20 polished/natural; "
+        "21-40 minor awkwardness; "
+        "41-60 noticeable awkwardness or weak concept; "
+        "61-80 strong cringe (forced, confusing, low coherence); "
+        "81-100 extreme cringe. "
+        "Floor rules: "
+        "if concept is confusing or nonsensical score must be >=65; "
+        "if repeated awkward posing score must be >=55; "
+        "if both are present score must be >=75. "
         "Do not include markdown or extra keys."
     )
 
@@ -331,7 +505,14 @@ async def run_vision_analysis(
 
     media_url = media_url.strip()
     parsed_url = urlparse(media_url)
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+    hostname = parsed_url.hostname
+    if (
+        parsed_url.scheme not in {"http", "https"}
+        or not parsed_url.netloc
+        or not isinstance(hostname, str)
+        or not _is_safe_public_hostname(hostname)
+    ):
+        logger.warning(f"[Vision] Rejected media_url for SSRF protection: {media_url}")
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -390,6 +571,28 @@ async def run_vision_analysis(
         lighting_quality = payload.get("lighting_quality")
         subject_clarity = payload.get("subject_clarity")
         aesthetic_quality = payload.get("aesthetic_quality")
+        cringe_score = _clamp_int_0_100(payload.get("cringe_score"))
+        cringe_signals = _normalize_short_text_list(payload.get("cringe_signals"), limit=3)
+        cringe_fixes = _normalize_short_text_list(payload.get("cringe_fixes"), limit=3)
+        if not cringe_fixes:
+            cringe_fixes = _normalize_short_text_list(payload.get("fixes_to_reduce_cringe"), limit=3)
+        production_level = _normalize_production_level(payload.get("production_level"))
+        adult_content_detected = _normalize_optional_bool(payload.get("adult_content_detected"))
+        adult_content_confidence = _clamp_int_0_100(payload.get("adult_content_confidence"))
+
+        if cringe_score is not None:
+            floored_score = enforce_cringe_floor(cringe_score, cringe_signals)
+            floored_score = _apply_cringe_prompt_floor(floored_score, cringe_signals)
+            if floored_score != cringe_score:
+                logger.info(
+                    "[Cringe] Applied cringe floor for media_url=%s score=%s->%s",
+                    media_url,
+                    cringe_score,
+                    floored_score,
+                )
+            cringe_score = floored_score
+        cringe_label = derive_cringe_label(cringe_score)
+        is_cringe = bool(cringe_score is not None and cringe_score >= 45)
 
         signal = {
             "objects": objects,
@@ -404,6 +607,14 @@ async def run_vision_analysis(
             "lighting_quality": lighting_quality if isinstance(lighting_quality, (str, int, float)) else None,
             "subject_clarity": subject_clarity if isinstance(subject_clarity, (str, int, float)) else None,
             "aesthetic_quality": aesthetic_quality if isinstance(aesthetic_quality, (str, int, float)) else None,
+            "cringe_score": cringe_score,
+            "cringe_signals": cringe_signals,
+            "cringe_fixes": cringe_fixes,
+            "production_level": production_level,
+            "is_cringe": is_cringe if cringe_score is not None else None,
+            "cringe_label": cringe_label,
+            "adult_content_detected": adult_content_detected,
+            "adult_content_confidence": adult_content_confidence,
         }
 
         return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
@@ -545,8 +756,14 @@ async def _call_llm_async(prompt: dict[str, Any], llm_client: LLMClient | None) 
     """Call the LLM client asynchronously via a worker thread."""
     client = llm_client or LLMClient()
     try:
-        return await asyncio.to_thread(client.generate, prompt)
-    except (LLMClientError, Exception) as exc:
+        return await asyncio.wait_for(
+            asyncio.to_thread(client.generate, prompt),
+            timeout=LLM_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[AIAnalysis] LLM call timed out, using fallback")
+        return None
+    except Exception as exc:
         logger.warning(f"[AIAnalysis] LLM call failed, using fallback: {exc}")
         return None
 
@@ -910,11 +1127,13 @@ async def analyze_single_post_ai(
     key = _cache_key(post)
     with _ANALYSIS_CACHE_LOCK:
         _prune_analysis_cache(now_ts)
-        cached = _ANALYSIS_CACHE.get(key)
+        cached = _ANALYSIS_CACHE.get(key) if key is not None else None
         if cached is not None and _is_fresh(cached, now_ts):
             return cached.result
         if cached is not None and (now_ts - cached.last_regen_attempt_at) < MIN_REGEN_SECONDS:
             return cached.result
+        if cached is not None:
+            cached.last_regen_attempt_at = now_ts
     visual_quality_score = (
         post.visual_quality_score
         if isinstance(post.visual_quality_score, VisualQualityScore)
@@ -967,7 +1186,7 @@ async def analyze_single_post_ai(
                 post_id=post_id,
             )
         )
-    vision_status: Literal["ok", "error", "disabled"] = "disabled" if not vision_enabled else "ok"
+    vision_status: Literal["ok", "error", "disabled", "no_media"] = "disabled" if not vision_enabled else "ok"
     fallback_used = False
 
     if post.published_at is not None:
@@ -992,6 +1211,11 @@ async def analyze_single_post_ai(
                 "audience_relevance_score": audience_relevance_score.model_dump(),
                 "brand_safety_score": brand_safety_score.model_dump(),
                 "weighted_post_score": weighted_post_score.model_dump(),
+                "vision_analysis": VisionAnalysis(
+                    provider="gemini",
+                    status=str(vision_status),
+                    signals=[],
+                ).model_dump(mode="python"),
                 "tier_avg_engagement_rate": tier_avg_engagement_rate,
                 "predicted_engagement_rate": predicted_engagement_rate,
                 "predicted_engagement_rate_notes": predicted_engagement_rate_notes,
@@ -999,13 +1223,14 @@ async def analyze_single_post_ai(
                 "vision_status": vision_status,
                 "fallback_used": fallback_used,
             }
-            with _ANALYSIS_CACHE_LOCK:
-                _ANALYSIS_CACHE[key] = _CacheEntry(
-                    result=result,
-                    cached_at=now_ts,
-                    last_regen_attempt_at=now_ts,
-                )
-                _prune_analysis_cache(now_ts)
+            if key is not None:
+                with _ANALYSIS_CACHE_LOCK:
+                    _ANALYSIS_CACHE[key] = _CacheEntry(
+                        result=result,
+                        cached_at=now_ts,
+                        last_regen_attempt_at=now_ts,
+                    )
+                    _prune_analysis_cache(now_ts)
             return result
 
     if not vision_enabled:
@@ -1023,6 +1248,8 @@ async def analyze_single_post_ai(
             )
         elif vision.get("status") == "ok":
             vision_status = "ok"
+        elif vision.get("status") == "no_media":
+            vision_status = "no_media"
 
     visual_quality_score = compute_visual_quality_score(vision)
     caption_effectiveness_score = compute_s2_caption_effectiveness(post.caption_text)
@@ -1076,12 +1303,6 @@ async def analyze_single_post_ai(
         weighted_post_score,
     )
     prompt = _build_prompt(context, vision)
-
-    if cached is not None:
-        with _ANALYSIS_CACHE_LOCK:
-            latest_cached = _ANALYSIS_CACHE.get(key)
-            if latest_cached is not None:
-                latest_cached.last_regen_attempt_at = now_ts
 
     llm_text = await _call_llm_async(prompt, llm_client)
     summary, drivers, recommendations, engagement_potential_raw = await _parse_llm_response_with_repair(
@@ -1145,6 +1366,7 @@ async def analyze_single_post_ai(
         "audience_relevance_score": audience_relevance_score.model_dump(),
         "brand_safety_score": brand_safety_score.model_dump(),
         "weighted_post_score": weighted_post_score.model_dump(),
+        "vision_analysis": vision,
         "tier_avg_engagement_rate": tier_avg_engagement_rate,
         "predicted_engagement_rate": predicted_engagement_rate,
         "predicted_engagement_rate_notes": predicted_engagement_rate_notes,
@@ -1153,11 +1375,12 @@ async def analyze_single_post_ai(
         "fallback_used": fallback_used,
     }
 
-    with _ANALYSIS_CACHE_LOCK:
-        _ANALYSIS_CACHE[key] = _CacheEntry(
-            result=result,
-            cached_at=now_ts,
-            last_regen_attempt_at=now_ts,
-        )
-        _prune_analysis_cache(now_ts)
+    if key is not None:
+        with _ANALYSIS_CACHE_LOCK:
+            _ANALYSIS_CACHE[key] = _CacheEntry(
+                result=result,
+                cached_at=now_ts,
+                last_regen_attempt_at=now_ts,
+            )
+            _prune_analysis_cache(now_ts)
     return result

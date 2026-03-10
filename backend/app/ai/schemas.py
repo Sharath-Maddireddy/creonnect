@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import List, Optional, Dict
+from pydantic import BaseModel, field_validator
+from typing import List, Optional, Dict, Literal
 from datetime import datetime
 
 
@@ -51,7 +51,9 @@ class CreatorPostAIInput(BaseModel):
     creator_id: str = ""
     platform: str = "instagram"
 
-    post_type: str = "post"  # image | reel | video
+    post_type: Literal["IMAGE", "REEL"] = "IMAGE"
+    media_url: str = ""
+    thumbnail_url: str = ""
 
     caption_text: str = ""
     hashtags: List[str] = []
@@ -63,5 +65,20 @@ class CreatorPostAIInput(BaseModel):
     audio_name: Optional[str] = None
 
     posted_at: Optional[datetime] = None
+
+    @field_validator("post_type", mode="before")
+    @classmethod
+    def normalize_post_type(cls, value: str | None) -> Literal["IMAGE", "REEL"]:
+        normalized = value.strip().upper() if isinstance(value, str) else ""
+        if normalized in {"REEL", "VIDEO", "CLIPS"}:
+            return "REEL"
+        return "IMAGE"
+
+    @field_validator("media_url", "thumbnail_url", mode="before")
+    @classmethod
+    def normalize_media_urls(cls, value: str | None) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
 
 

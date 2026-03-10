@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.analytics.benchmark_engine import compute_benchmark_metrics
 from backend.app.analytics.content_score import compute_content_score
 from backend.app.analytics.derived_metrics import compute_derived_metrics
-from backend.app.domain.post_models import SinglePostInsights
+from backend.app.domain.post_models import (
+    BenchmarkMetrics,
+    CoreMetrics,
+    DerivedMetrics,
+    SinglePostInsights,
+)
 from backend.app.services.ai_analysis_service import analyze_single_post_ai
 
 
@@ -19,9 +25,45 @@ class SinglePostInsightsResponse(TypedDict):
     ai_analysis: dict[str, Any] | None
 
 
+def _coerce_single_post_insights(post: SinglePostInsights | CreatorPostAIInput) -> SinglePostInsights:
+    if isinstance(post, SinglePostInsights):
+        return post
+
+    media_type = "REEL" if post.post_type == "REEL" else "IMAGE"
+    reach = getattr(post, "reach", None)
+    impressions = getattr(post, "impressions", None)
+    views = getattr(post, "views", None)
+    # Preserve metric semantics: only backfill impressions from views when explicit fields are missing.
+    if impressions is None and views is not None:
+        impressions = views
+    core_metrics = CoreMetrics(
+        reach=reach,
+        impressions=impressions,
+        likes=post.likes,
+        comments=post.comments,
+        shares=None,
+        saves=None,
+        profile_visits=None,
+        website_taps=None,
+        source_engagement_rate=None,
+    )
+    return SinglePostInsights(
+        account_id=post.creator_id if post.creator_id is not None else None,
+        media_id=post.post_id,
+        media_url=post.media_url if post.media_url is not None else None,
+        media_type=media_type,
+        caption_text=post.caption_text,
+        follower_count=None,
+        published_at=post.posted_at,
+        core_metrics=core_metrics,
+        derived_metrics=DerivedMetrics(),
+        benchmark_metrics=BenchmarkMetrics(),
+    )
+
+
 async def build_single_post_insights(
-    target_post: SinglePostInsights,
-    historical_posts: list[SinglePostInsights],
+    target_post: SinglePostInsights | CreatorPostAIInput,
+    historical_posts: list[SinglePostInsights | CreatorPostAIInput],
     run_ai: bool = False,
 ) -> SinglePostInsightsResponse:
     """Build a fully populated single-post insights payload.
@@ -30,16 +72,19 @@ async def build_single_post_insights(
     and content score for the target post. Optionally, it also runs async AI
     analysis and attaches the result.
     """
-    if target_post.core_metrics is None:
+    target_post_model = _coerce_single_post_insights(target_post)
+    historical_models = [_coerce_single_post_insights(post) for post in historical_posts]
+
+    if target_post_model.core_metrics is None:
         raise ValueError("target_post.core_metrics must not be None")
-    if target_post.media_id is None:
+    if target_post_model.media_id is None:
         raise ValueError("target_post.media_id must not be None")
 
     filtered_history = [
-        post for post in historical_posts if post.media_id != target_post.media_id
+        post for post in historical_models if post.media_id != target_post_model.media_id
     ]
 
-    post_copy = target_post.model_copy(update={})
+    post_copy = target_post_model.model_copy(update={})
 
     derived_metrics = compute_derived_metrics(post_copy.core_metrics)
     post_copy = post_copy.model_copy(update={"derived_metrics": derived_metrics})

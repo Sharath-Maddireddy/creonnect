@@ -2,7 +2,7 @@ from typing import List, Dict, Union
 
 from backend.app.ai.context import build_creator_context
 from backend.app.ai.prompt_builder import build_creator_explanation_prompt
-from backend.app.ai.llm_client import LLMClient, LLMClientError
+from backend.app.ai.llm_client import LLMClient
 from backend.app.ai.schemas import CreatorProfileAIInput, CreatorPostAIInput
 from backend.app.utils.logger import logger
 
@@ -32,7 +32,7 @@ class CreatorExplanationService:
 
         try:
             return self.llm.generate(prompt)
-        except (LLMClientError, Exception) as e:
+        except Exception as e:
             logger.error(f"[Explain] LLM failed, returning deterministic fallback: {e}")
             # Return structured fallback - never crash
             return {

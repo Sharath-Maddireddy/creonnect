@@ -8,7 +8,7 @@ Converts Instagram API responses (Graph API format) into AI schemas:
 
 import re
 from datetime import datetime, timezone
-from typing import List, Dict, Tuple
+from typing import Any, List, Dict, Tuple
 
 from backend.app.ai.schemas import CreatorProfileAIInput, CreatorPostAIInput
 from backend.app.utils.logger import logger
@@ -30,6 +30,19 @@ def _safe_int(v, default=0) -> int:
         return int(v)
     except Exception:
         return default
+
+
+def _canonical_post_type_from_media_type(media_type: str | None) -> str:
+    """Map Graph API media_type variants to canonical post_type values."""
+    normalized = media_type.strip().upper() if isinstance(media_type, str) else ""
+    if normalized in {"VIDEO", "REEL", "REELS", "CLIPS"}:
+        return "REEL"
+    return "IMAGE"
+
+
+def _legacy_post_type_from_canonical(post_type: str) -> str:
+    """Backward-compatible post_type values used by older consumers."""
+    return "reel" if post_type == "REEL" else "post"
 
 
 def map_instagram_profile(api_profile: Dict, api_media: List[Dict]) -> CreatorProfileAIInput:
@@ -118,7 +131,16 @@ def map_instagram_posts(api_media: List[Dict]) -> List[CreatorPostAIInput]:
 
         # Detect post type from media_type
         media_type = m.get("media_type", "")
-        post_type = "reel" if media_type in ("VIDEO", "REEL") else "post"
+        post_type = _canonical_post_type_from_media_type(media_type)
+
+        media_url = ""
+        thumbnail_url = ""
+        if post_type == "REEL":
+            media_url = str(m.get("video_url") or m.get("media_url") or m.get("display_url") or "")
+            thumbnail_url = str(m.get("thumbnail_url") or m.get("display_url") or "")
+        else:
+            media_url = str(m.get("media_url") or m.get("display_url") or "")
+            thumbnail_url = str(m.get("thumbnail_url") or "")
 
         # Parse timestamp
         ts = m.get("timestamp")
@@ -140,6 +162,8 @@ def map_instagram_posts(api_media: List[Dict]) -> List[CreatorPostAIInput]:
                 creator_id=m.get("username", ""),
                 platform="instagram",
                 post_type=post_type,
+                media_url=media_url,
+                thumbnail_url=thumbnail_url,
                 caption_text=caption,
                 hashtags=_extract_hashtags(caption),
                 likes=_safe_int(m.get("like_count", 0)),
@@ -153,6 +177,20 @@ def map_instagram_posts(api_media: List[Dict]) -> List[CreatorPostAIInput]:
     return posts
 
 
+def map_instagram_posts_legacy(api_media: List[Dict]) -> List[Dict[str, Any]]:
+    """
+    Legacy mapper that returns lowercase post_type values ("reel"|"post").
+    This allows downstream consumers to migrate without blocking canonical models.
+    """
+    canonical_posts = map_instagram_posts(api_media)
+    legacy_posts: list[dict[str, Any]] = []
+    for post in canonical_posts:
+        payload = post.model_dump(mode="python")
+        payload["post_type"] = _legacy_post_type_from_canonical(post.post_type)
+        legacy_posts.append(payload)
+    return legacy_posts
+
+
 def map_instagram_to_ai_inputs(
     api_profile: Dict,
     api_media: List[Dict]
@@ -163,6 +201,21 @@ def map_instagram_to_ai_inputs(
     profile = map_instagram_profile(api_profile, api_media)
     posts = map_instagram_posts(api_media)
     logger.info(f"[Ingestion] Completed API mapping: {len(posts)} posts, {profile.followers_count} followers")
+    return profile, posts
+
+
+def map_instagram_to_ai_inputs_legacy(
+    api_profile: Dict,
+    api_media: List[Dict],
+) -> Tuple[CreatorProfileAIInput, List[Dict[str, Any]]]:
+    """Compatibility wrapper returning legacy lowercase post_type payloads."""
+    profile = map_instagram_profile(api_profile, api_media)
+    posts = map_instagram_posts_legacy(api_media)
+    logger.info(
+        "[Ingestion] Completed legacy API mapping: %s posts, %s followers",
+        len(posts),
+        profile.followers_count,
+    )
     return profile, posts
 
 

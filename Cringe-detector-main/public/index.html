@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reel Intelligence</title>
+    <style>
+      :root {
+        --bg: #f3f6fb;
+        --panel: #ffffff;
+        --text: #101828;
+        --muted: #667085;
+        --line: #e4e7ec;
+        --brand: #0f6fff;
+        --brand-deep: #114ebf;
+        --danger: #c41f3a;
+        --danger-bg: #ffe8ee;
+        --ok: #0b8a49;
+        --ok-bg: #eafbf2;
+        --warn: #9a6700;
+        --warn-bg: #fff8e6;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 12% 8%, #d9e8ff 0%, transparent 30%),
+          radial-gradient(circle at 87% 90%, #dff7ef 0%, transparent 28%),
+          var(--bg);
+        padding: 24px;
+      }
+
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+
+      .hero {
+        background: linear-gradient(120deg, #0e1f3d, #123469 60%, #1256a5);
+        color: #fff;
+        border-radius: 18px;
+        padding: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        box-shadow: 0 20px 40px rgba(17, 40, 90, 0.18);
+      }
+
+      .title {
+        margin: 0;
+        font-size: 28px;
+        letter-spacing: 0.01em;
+      }
+
+      .sub {
+        margin: 8px 0 18px;
+        opacity: 0.88;
+      }
+
+      form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      input[type="file"] {
+        flex: 1 1 360px;
+        border: 1px solid #4d6da3;
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.94);
+        color: #1e293b;
+      }
+
+      button {
+        border: 0;
+        border-radius: 10px;
+        background: #2ef2ff;
+        color: #082244;
+        padding: 10px 15px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .status {
+        margin-top: 12px;
+        font-size: 14px;
+      }
+
+      .dashboard {
+        margin-top: 16px;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+      }
+
+      .span-4 {
+        grid-column: span 4;
+      }
+
+      .span-6 {
+        grid-column: span 6;
+      }
+
+      .span-12 {
+        grid-column: span 12;
+      }
+
+      h3 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #475467;
+      }
+
+      .kv {
+        display: grid;
+        grid-template-columns: 130px 1fr;
+        gap: 6px 10px;
+        font-size: 14px;
+      }
+
+      .k {
+        color: var(--muted);
+      }
+
+      .v {
+        font-weight: 600;
+      }
+
+      .tag-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .tag {
+        font-size: 12px;
+        font-weight: 700;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+      }
+
+      .tag-cringe {
+        color: var(--danger);
+        background: var(--danger-bg);
+        border-color: #ffc9d4;
+      }
+
+      .tag-not {
+        color: var(--ok);
+        background: var(--ok-bg);
+        border-color: #b7efcf;
+      }
+
+      .tag-other {
+        color: var(--warn);
+        background: var(--warn-bg);
+        border-color: #ffe3ab;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      li {
+        margin: 4px 0;
+      }
+
+      .mono {
+        margin-top: 14px;
+        background: #101828;
+        color: #cfd7e6;
+        border-radius: 10px;
+        padding: 12px;
+        white-space: pre-wrap;
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      @media (max-width: 860px) {
+        .span-4,
+        .span-6 {
+          grid-column: span 12;
+        }
+        .kv {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <section class="hero">
+        <h1 class="title">Reel Intelligence Console</h1>
+        <p class="sub">Upload a video and get niche, safety, creator fit, cringe tag, and actionable fixes.</p>
+
+        <form id="analyze-form">
+          <input id="video" name="video" type="file" accept="video/mp4,video/*" required />
+          <button id="submit-btn" type="submit">Analyze Reel</button>
+        </form>
+        <div class="status" id="status"></div>
+      </section>
+
+      <section id="report" class="dashboard" hidden>
+        <article class="card span-4">
+          <h3>Cringe Tag</h3>
+          <div id="cringe-tags" class="tag-row"></div>
+        </article>
+
+        <article class="card span-4">
+          <h3>Summary</h3>
+          <div id="summary" class="kv"></div>
+        </article>
+
+        <article class="card span-4">
+          <h3>Safety</h3>
+          <div id="safety" class="kv"></div>
+        </article>
+
+        <article class="card span-6">
+          <h3>Creator Details</h3>
+          <div id="creator-details"></div>
+        </article>
+
+        <article class="card span-6">
+          <h3>Cringe Finder</h3>
+          <div id="cringe"></div>
+        </article>
+
+        <article class="card span-6">
+          <h3>Voice Analysis</h3>
+          <div id="voice-cringe"></div>
+        </article>
+
+        <article class="card span-6">
+          <h3>Next Actions</h3>
+          <div id="next-actions"></div>
+        </article>
+
+        <article class="card span-6">
+          <h3>Token Usage</h3>
+          <div id="token-usage" class="kv"></div>
+        </article>
+        <article class="card span-12">
+          <h3>Similar Reels (Cosine Search)</h3>
+          <div id="similar-reels"></div>
+        </article>
+      </section>
+
+      <pre id="raw-result" class="mono" hidden></pre>
+    </div>
+
+    <script>
+      const form = document.getElementById("analyze-form");
+      const input = document.getElementById("video");
+      const rawResultEl = document.getElementById("raw-result");
+      const statusEl = document.getElementById("status");
+      const submitBtn = document.getElementById("submit-btn");
+      const reportEl = document.getElementById("report");
+      const summaryEl = document.getElementById("summary");
+      const safetyEl = document.getElementById("safety");
+      const creatorDetailsEl = document.getElementById("creator-details");
+      const cringeEl = document.getElementById("cringe");
+      const voiceCringeEl = document.getElementById("voice-cringe");
+      const nextActionsEl = document.getElementById("next-actions");
+      const tokenUsageEl = document.getElementById("token-usage");
+      const cringeTagsEl = document.getElementById("cringe-tags");
+      const similarReelsEl = document.getElementById("similar-reels");
+
+      function line(label, value) {
+        return `<div class="k">${label}</div><div class="v">${value ?? "N/A"}</div>`;
+      }
+
+      function list(items) {
+        if (!Array.isArray(items) || items.length === 0) return "<div class=\"v\">N/A</div>";
+        return `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>`;
+      }
+
+      function parseJsonSafe(text) {
+        if (typeof text !== "string") return null;
+        const cleaned = text
+          .replace(/^```json\s*/i, "")
+          .replace(/^```\s*/i, "")
+          .replace(/\s*```$/i, "")
+          .trim();
+
+        try {
+          return JSON.parse(cleaned);
+        } catch {
+          const start = cleaned.indexOf("{");
+          const end = cleaned.lastIndexOf("}");
+          if (start !== -1 && end !== -1 && end > start) {
+            try {
+              return JSON.parse(cleaned.slice(start, end + 1));
+            } catch {
+              return null;
+            }
+          }
+          return null;
+        }
+      }
+
+      function cringeTag(score, signals) {
+        const s = Number(score);
+        const text = Array.isArray(signals) ? signals.join(" ").toLowerCase() : "";
+        if (Number.isFinite(s) && (s >= 60 || /awkward|forced|overexaggerated|nonsens|cringe/.test(text))) {
+          return { label: "Cringe", cls: "tag-cringe" };
+        }
+        if (Number.isFinite(s) && s <= 30) {
+          return { label: "Not Cringe", cls: "tag-not" };
+        }
+        return { label: "Other", cls: "tag-other" };
+      }
+
+      function voiceTag(label, score) {
+        const normalized = typeof label === "string" ? label.toLowerCase() : "";
+        if (normalized === "cringe") return { label: "Voice: Cringe", cls: "tag-cringe" };
+        if (normalized === "not_cringe") return { label: "Voice: Not Cringe", cls: "tag-not" };
+
+        const s = Number(score);
+        if (Number.isFinite(s) && s >= 60) return { label: "Voice: Cringe", cls: "tag-cringe" };
+        if (Number.isFinite(s) && s <= 30) return { label: "Voice: Not Cringe", cls: "tag-not" };
+        return { label: "Voice: Uncertain", cls: "tag-other" };
+      }
+
+      function renderSimilarReels(similar) {
+        if (!similar?.ok) {
+          similarReelsEl.innerHTML = `<div class="v">N/A (${similar?.reason || "No match function or no data"})</div>`;
+          return;
+        }
+        const items = Array.isArray(similar.items) ? similar.items : [];
+        if (!items.length) {
+          similarReelsEl.innerHTML = "<div class=\"v\">No similar reels found yet.</div>";
+          return;
+        }
+        similarReelsEl.innerHTML = `
+          <ul>
+            ${items
+              .map(
+                (r) =>
+                  `<li><strong>#${r.id}</strong> ${r.title || "Untitled"} | similarity: ${Number(r.similarity ?? 0).toFixed(4)}</li>`
+              )
+              .join("")}
+          </ul>
+        `;
+      }
+
+      function renderReport(parsed, usage, similar, voiceMeta) {
+        const summary = parsed?.summary || {};
+        const safety = parsed?.safety || {};
+        const adult = safety?.adult_content || {};
+        const creator = parsed?.creator_details || {};
+        const cringe = parsed?.cringe_finder || {};
+        const next = parsed?.next_actions || [];
+        const voice = parsed?.voice_cringe || {};
+        const meaning = parsed?.voice_meaning || {};
+        const voiceNote = parsed?.voice_analysis_note || voiceMeta?.reason || "";
+        const voiceTranscript = parsed?.voice_transcript_excerpt || "";
+        const vTag = voiceTag(voice.label, voice.score);
+        const meaningWrong =
+          meaning?.is_wrong === true ? "true" : meaning?.is_wrong === false ? "false" : "uncertain";
+
+        const tag = cringeTag(cringe.cringe_score, cringe.cringe_signals);
+        cringeTagsEl.innerHTML = `
+          <span class="tag ${tag.cls}">${tag.label}</span>
+          <span class="tag tag-other">Score: ${cringe.cringe_score ?? "N/A"}</span>
+        `;
+
+        summaryEl.innerHTML =
+          line("Primary Niche", summary.primary_niche) +
+          line("Archetype", summary.creator_archetype) +
+          line("Tone", summary.tone) +
+          line("Confidence", summary.confidence);
+
+        safetyEl.innerHTML =
+          line("Adult", adult.is_adult) +
+          line("Adult Confidence", adult.confidence) +
+          line("Adult Reason", adult.reason) +
+          line("Brand Safety", safety.brand_safety_score);
+
+        creatorDetailsEl.innerHTML = `
+          <div class="k">Visual Style</div>${list(creator.visual_style)}
+          <div class="k" style="margin-top:8px;">Editing Style</div>${list(creator.editing_style)}
+          <div class="k" style="margin-top:8px;">Production Level</div><div class="v">${creator.production_level ?? "N/A"}</div>
+        `;
+
+        cringeEl.innerHTML = `
+          <div class="kv">${line("Cringe Score", cringe.cringe_score)}</div>
+          <div class="k" style="margin-top:8px;">Cringe Signals</div>${list(cringe.cringe_signals)}
+          <div class="k" style="margin-top:8px;">Fixes</div>${list(cringe.fixes_to_reduce_cringe)}
+        `;
+
+        voiceCringeEl.innerHTML = `
+          <div class="tag-row">
+            <span class="tag ${vTag.cls}">${vTag.label}</span>
+            <span class="tag tag-other">Score: ${voice.score ?? "N/A"}</span>
+          </div>
+          <div class="kv" style="margin-top:8px;">
+            ${line("Confidence", voice.confidence)}
+            ${line("Label", voice.label)}
+          </div>
+          <div class="k" style="margin-top:8px;">Signals</div>${list(voice.signals)}
+          <div class="k" style="margin-top:8px;">Fixes</div>${list(voice.fixes)}
+          <div class="kv" style="margin-top:8px;">
+            ${line("Meaning Verdict", meaning.verdict)}
+            ${line("Meaning Wrong", meaningWrong)}
+            ${line("Meaning Confidence", meaning.confidence)}
+          </div>
+          <div class="k" style="margin-top:8px;">Meaning Reason</div><div class="v">${meaning.reason || "N/A"}</div>
+          <div class="k" style="margin-top:8px;">Suggested Correction</div><div class="v">${meaning.suggested_correction || "N/A"}</div>
+          <div class="k" style="margin-top:8px;">Transcript Excerpt</div><div class="v">${voiceTranscript || "N/A"}</div>
+          <div class="k" style="margin-top:8px;">Voice Note</div><div class="v">${voiceNote || "N/A"}</div>
+        `;
+
+        nextActionsEl.innerHTML = list(next);
+
+        tokenUsageEl.innerHTML =
+          line("Input Tokens", usage?.input_tokens ?? "N/A") +
+          line("Output Tokens", usage?.output_tokens ?? "N/A") +
+          line("Total Tokens", usage?.total_tokens ?? "N/A");
+
+        renderSimilarReels(similar);
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (!input.files?.[0]) return;
+
+        statusEl.textContent = "Uploading and analyzing...";
+        reportEl.hidden = true;
+        rawResultEl.hidden = true;
+        submitBtn.disabled = true;
+
+        try {
+          const fd = new FormData();
+          fd.append("video", input.files[0]);
+
+          const response = await fetch("/analyze", { method: "POST", body: fd });
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "Analysis failed");
+          }
+
+          statusEl.textContent = "Done";
+          const parsed = parseJsonSafe(data.result);
+          if (parsed) {
+            renderReport(parsed, data.usage, data.similar_reels, data.voice);
+            reportEl.hidden = false;
+          } else {
+            rawResultEl.hidden = false;
+            rawResultEl.textContent = typeof data.result === "string" ? data.result : JSON.stringify(data, null, 2);
+          }
+        } catch (err) {
+          statusEl.textContent = err.message || "Something went wrong";
+          reportEl.hidden = true;
+          rawResultEl.hidden = true;
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

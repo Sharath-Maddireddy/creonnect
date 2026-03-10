@@ -174,11 +174,7 @@ def safe_div(numerator: Any, denominator: Any) -> float:
 
     Returns 0.0 when denominator is 0 after coercion.
     """
-    num = _to_float(numerator)
-    den = _to_float(denominator)
-    if den == 0.0:
-        return 0.0
-    return num / den
+    return _safe_ratio(_to_float(numerator), _to_float(denominator))
 
 
 def compute_ai_content_score_v1(
