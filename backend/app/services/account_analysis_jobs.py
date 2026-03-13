@@ -801,8 +801,6 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             for post in processed_posts:
                 post_id = post.media_id if isinstance(post.media_id, str) else ""
                 notes_by_post_id[post_id] = {"vision_status": "disabled", "fallback_used": True}
-                if post_id:
-                    _increment_post_warning_count(per_post_warnings_count, post_id, 1)
 
         _progress(stage="aggregate", done=len(processed_posts), total=max(1, len(posts)))
         result = analyze_account_health(

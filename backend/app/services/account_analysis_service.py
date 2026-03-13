@@ -109,7 +109,11 @@ def analyze_account_health(
     now_ts: datetime | None = None,
     use_cache: bool = True,
 ) -> AccountHealthScore:
-    """Analyze account health from precomputed SinglePostInsights posts."""
+    """Analyze account health from precomputed SinglePostInsights posts.
+
+    Note: now_ts is reserved for future time-window overrides and does not
+    affect scoring or caching at present.
+    """
 
     key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band)
     current_ts = time.time()

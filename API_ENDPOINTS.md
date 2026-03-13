@@ -118,6 +118,7 @@
       "cta_present": "boolean",
       "insights": ["string"],
       "comparison_to_previous": {
+        "_type": "object|null",
         "delta_views": "integer",
         "delta_likes": "integer",
         "delta_comments": "integer",
@@ -125,7 +126,7 @@
         "relative_performance_label": "better|worse|same",
         "explanation": "string"
       },
-      "error": "string"
+      "error": "string|null"
     }
   ],
   "charts": {
@@ -376,6 +377,9 @@ Unknown JSON keys are rejected with HTTP `422` validation error.
   "status": "queued|started|succeeded"
 }
 ```
+Notes:
+- Full lifecycle statuses for account-analysis jobs are `queued|started|succeeded|failed`.
+- This enqueue (`POST`) response returns only `queued|started|succeeded` (new job or reusable active/succeeded job). `failed` is surfaced when polling `GET /api/account-analysis/{job_id}`.
 
 ### Example Response
 ```json
@@ -488,7 +492,7 @@ Notes:
 - Stale job thresholds are enforced on poll (`GET /api/account-analysis/{job_id}`):
   - Queued stale threshold: `>900s` (`15` minutes) since `created_at`.
   - Started stale threshold: `>1800s` (`30` minutes) since `started_at` (or `created_at` when `started_at` is missing).
-- If stale is detected during poll, the API persists a status transition to `failed`, sets `finished_at` to current UTC time, sets `error.type` to `TimeoutError`, keeps `error.message` with the exceeded threshold detail, and sets `result` to `null`.
+- If stale is detected during poll, the API returns a projected `failed` view (`error.type=TimeoutError`, `result=null`) without persisting that transition.
 - `posts_summary` exists only when enqueue flag `include_posts_summary=true` was used.
 
 ### Example Response

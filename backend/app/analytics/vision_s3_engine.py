@@ -174,18 +174,18 @@ def _tokenize_for_overlap(text: str) -> set[str]:
 
 
 def _mentions_focus_or_object(caption: str, dominant_focus: str | None, objects: list[str]) -> bool:
-    caption_normalized = normalize_text(caption)
-    if not caption_normalized:
+    caption_tokens = _tokenize_for_overlap(caption)
+    if not caption_tokens:
         return False
 
     if isinstance(dominant_focus, str):
-        focus_token = normalize_text(dominant_focus)
-        if focus_token and focus_token in caption_normalized:
+        focus_tokens = _tokenize_for_overlap(dominant_focus)
+        if focus_tokens & caption_tokens:
             return True
 
     for obj in objects:
-        obj_token = normalize_text(obj)
-        if obj_token and obj_token in caption_normalized:
+        obj_tokens = _tokenize_for_overlap(obj)
+        if obj_tokens & caption_tokens:
             return True
     return False
 

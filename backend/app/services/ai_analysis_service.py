@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import Any, Literal, TypedDict
+from urllib.parse import urlparse, urlunparse
 
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
 from backend.app.ai.llm_client import LLMClient
@@ -197,6 +198,14 @@ def _hash_cache_hint(value: Any) -> str:
     if not text:
         return "empty"
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _sanitize_url_for_logging(url: str) -> str:
+    """Return URL with query string and fragment removed for safe logging."""
+    if not isinstance(url, str):
+        return ""
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
 
 
 def _cache_key(post: SinglePostInsights) -> str | None:
@@ -516,7 +525,10 @@ async def run_vision_analysis(
         or not isinstance(hostname, str)
         or not await _is_safe_public_hostname(hostname)
     ):
-        logger.warning(f"[Vision] Rejected media_url for SSRF protection: {media_url}")
+        logger.warning(
+            "[Vision] Rejected media_url for SSRF protection: %s",
+            _sanitize_url_for_logging(media_url),
+        )
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")
 
     api_key = os.getenv("GEMINI_API_KEY")
