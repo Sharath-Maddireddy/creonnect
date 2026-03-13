@@ -56,6 +56,13 @@ def _resolve_focus(signal: dict[str, Any]) -> str | None:
     return None
 
 
+def _normalize_subscore(value: Any, default: float = 0.0) -> float:
+    numeric = _as_float(value)
+    if numeric is None:
+        return default
+    return _clamp(numeric, 0.0, 10.0)
+
+
 def _map_quality_signal_to_subscore(value: Any, baseline: float) -> float:
     numeric = _as_float(value)
     if numeric is not None:
@@ -108,6 +115,22 @@ def _is_text_heavy(value: Any) -> bool:
 def compute_visual_quality_score(vision_payload: dict[str, Any] | None) -> VisualQualityScore:
     """Compute deterministic S1 visual quality from normalized vision payload."""
     signal = _first_signal(vision_payload)
+    raw_visual_quality = signal.get("visual_quality_score")
+    if isinstance(raw_visual_quality, dict):
+        composition = _normalize_subscore(raw_visual_quality.get("composition"))
+        lighting = _normalize_subscore(raw_visual_quality.get("lighting"))
+        subject_clarity = _normalize_subscore(raw_visual_quality.get("subject_clarity"))
+        aesthetic_quality = _normalize_subscore(raw_visual_quality.get("aesthetic_quality"))
+        total = (composition * 0.30 + lighting * 0.20 + subject_clarity * 0.30 + aesthetic_quality * 0.20) * 5.0
+        total = _clamp(total, 0.0, 50.0)
+        return VisualQualityScore(
+            composition=composition,
+            lighting=lighting,
+            subject_clarity=subject_clarity,
+            aesthetic_quality=aesthetic_quality,
+            total=total,
+            notes=["S1 derived from vision visual_quality_score."],
+        )
     objects = _normalize_objects(signal)
     dominant_focus = _resolve_focus(signal)
     hook_strength_score = _normalize_hook_strength(signal.get("hook_strength_score"))

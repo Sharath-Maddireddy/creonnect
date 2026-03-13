@@ -15,6 +15,7 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
+from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_RELEVANCE_PROMPT
 from backend.app.ai.llm_client import LLMClient
 from backend.app.analytics.caption_s2_engine import compute_s2_caption_effectiveness
 from backend.app.analytics.content_score import compute_content_score
@@ -463,6 +464,16 @@ def _normalize_production_level(value: Any) -> str | None:
     return normalized
 
 
+def _coerce_int_0_100(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(max(0.0, min(100.0, round(numeric))))
+
+
 def _apply_cringe_prompt_floor(cringe_score: int, cringe_signals: list[str]) -> int:
     score = int(max(0, min(100, cringe_score)))
     text = " ".join(cringe_signals).lower()
@@ -486,30 +497,45 @@ async def run_vision_analysis(
     from urllib.parse import urlparse
 
     instruction = (
-        "Analyze this Instagram post image and return ONLY valid JSON. "
-        "Use exactly these keys: "
-        "objects (array of strings), "
-        "scene_description (string), "
-        "detected_text (string or null), "
-        "visual_style (string), "
-        "hook_strength_score (float between 0 and 1), "
-        "cringe_score (integer 0-100), "
-        "cringe_signals (array of strings, max 3), "
-        "cringe_fixes (array of strings, max 3), "
-        "production_level (one of low|medium|high), "
-        "adult_content_detected (boolean), "
-        "adult_content_confidence (integer 0-100). "
-        "Cringe rubric: "
-        "0-20 polished/natural; "
-        "21-40 minor awkwardness; "
-        "41-60 noticeable awkwardness or weak concept; "
-        "61-80 strong cringe (forced, confusing, low coherence); "
-        "81-100 extreme cringe. "
-        "Floor rules: "
-        "if concept is confusing or nonsensical score must be >=65; "
-        "if repeated awkward posing score must be >=55; "
-        "if both are present score must be >=75. "
-        "Do not include markdown or extra keys."
+        "You are an expert Social Media Art Director and Computer Vision analysis engine. "
+        "Analyze the provided Instagram media (image/frame) strictly through the lens of technical visual quality "
+        "and compositional structure. Return ONLY valid JSON. Do not include markdown or extra keys.\n\n"
+        "You must evaluate the image objectively on the following deterministic rules to calculate S1 sub-scores:\n"
+        "1) COMPOSITION (0-10): Rule of Thirds/symmetry (+3), dominant_focus present (+4), >4 primary objects (-3), "
+        "awkward crops (-3), remaining points (0-3) for depth-of-field/subject isolation.\n"
+        "2) LIGHTING_QUALITY (0-10): subject illumination/contrast (+4), blown highlights or crushed blacks (-3), "
+        "intentional depth (rim/softbox/golden hour +3) vs flat lighting (+1), poor white balance (-2), "
+        "remaining points for cinematic/aesthetic lighting.\n"
+        "3) SUBJECT_CLARITY (0-10): subject in focus (+5), clear separation (+3), visible expressive face if human (+2).\n"
+        "4) AESTHETIC_QUALITY (0-10): pro color grade (+3), harmonious palette (+2), "
+        "heavy text overlays (-3) or very heavy (-5), remaining points for premium visual feel.\n\n"
+        "Output JSON must match this schema:\n"
+        "{"
+        "\"objects\": [\"...\"] ,"
+        "\"dominant_focus\": \"string|null\","
+        "\"scene_description\": \"string\","
+        "\"visual_style\": \"string\","
+        "\"scene_type\": \"string|null\","
+        "\"visual_quality_score\": {"
+        "\"composition\": 0.0-10.0,"
+        "\"lighting\": 0.0-10.0,"
+        "\"subject_clarity\": 0.0-10.0,"
+        "\"aesthetic_quality\": 0.0-10.0"
+        "},"
+        "\"technical_flaws\": [\"string\", \"string\"],"
+        "\"detected_text\": \"string|null\","
+        "\"hook_strength_score\": 0.0-1.0,"
+        "\"cringe_score\": 0-100,"
+        "\"cringe_signals\": [\"string\"],"
+        "\"cringe_fixes\": [\"string\"],"
+        "\"production_level\": \"low|medium|high\","
+        "\"adult_content_detected\": true|false,"
+        "\"adult_content_confidence\": 0-100"
+        "}\n\n"
+        "Cringe rubric: 0-20 polished/natural; 21-40 minor awkwardness; 41-60 noticeable awkwardness or weak concept; "
+        "61-80 strong cringe (forced, confusing, low coherence); 81-100 extreme cringe. "
+        "Floor rules: if concept is confusing or nonsensical score must be >=65; "
+        "if repeated awkward posing score must be >=55; if both are present score must be >=75."
     )
 
     media_url = post.media_url
@@ -547,28 +573,50 @@ async def run_vision_analysis(
 
         required_keys = {
             "objects",
+            "dominant_focus",
             "scene_description",
-            "detected_text",
             "visual_style",
+            "scene_type",
+            "visual_quality_score",
+            "technical_flaws",
+            "detected_text",
             "hook_strength_score",
+            "cringe_score",
+            "cringe_signals",
+            "cringe_fixes",
+            "production_level",
+            "adult_content_detected",
+            "adult_content_confidence",
         }
         if not required_keys.issubset(payload.keys()):
             raise ValueError("Gemini JSON schema mismatch.")
 
         objects = payload.get("objects")
+        dominant_focus = payload.get("dominant_focus")
         scene_description = payload.get("scene_description")
         detected_text = payload.get("detected_text")
         visual_style = payload.get("visual_style")
+        scene_type = payload.get("scene_type")
+        visual_quality_score = payload.get("visual_quality_score")
+        technical_flaws = payload.get("technical_flaws")
         hook_strength_score = payload.get("hook_strength_score")
 
         if not isinstance(objects, list) or not all(isinstance(item, str) for item in objects):
             raise ValueError("Invalid objects field.")
+        if dominant_focus is not None and not isinstance(dominant_focus, str):
+            raise ValueError("Invalid dominant_focus field.")
         if not isinstance(scene_description, str):
             raise ValueError("Invalid scene_description field.")
         if detected_text is not None and not isinstance(detected_text, str):
             raise ValueError("Invalid detected_text field.")
         if not isinstance(visual_style, str):
             raise ValueError("Invalid visual_style field.")
+        if scene_type is not None and not isinstance(scene_type, str):
+            raise ValueError("Invalid scene_type field.")
+        if not isinstance(visual_quality_score, dict):
+            raise ValueError("Invalid visual_quality_score field.")
+        if not isinstance(technical_flaws, list) or not all(isinstance(item, str) for item in technical_flaws):
+            raise ValueError("Invalid technical_flaws field.")
         if not isinstance(hook_strength_score, (int, float)):
             raise ValueError("Invalid hook_strength_score field.")
 
@@ -577,16 +625,29 @@ async def run_vision_analysis(
             for item in objects
             if isinstance(item, str) and item.strip()
         ]
+        dominant_focus = dominant_focus.strip() if isinstance(dominant_focus, str) else None
         scene_description = scene_description.strip()
         detected_text = detected_text.strip() if detected_text else None
         visual_style = visual_style.strip()
+        scene_type = scene_type.strip() if isinstance(scene_type, str) else None
+        technical_flaws = [item.strip() for item in technical_flaws if isinstance(item, str) and item.strip()][:3]
+        composition_raw = _as_float(visual_quality_score.get("composition"))
+        lighting_raw = _as_float(visual_quality_score.get("lighting"))
+        subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))
+        aesthetic_quality_raw = _as_float(visual_quality_score.get("aesthetic_quality"))
+        if None in {composition_raw, lighting_raw, subject_clarity_raw, aesthetic_quality_raw}:
+            raise ValueError("Invalid visual_quality_score fields.")
+        normalized_visual_quality = {
+            "composition": max(0.0, min(10.0, float(composition_raw))),
+            "lighting": max(0.0, min(10.0, float(lighting_raw))),
+            "subject_clarity": max(0.0, min(10.0, float(subject_clarity_raw))),
+            "aesthetic_quality": max(0.0, min(10.0, float(aesthetic_quality_raw))),
+        }
         clamped_hook_strength_score = max(0.0, min(1.0, float(hook_strength_score)))
-        dominant_focus = payload.get("dominant_focus")
         dominant_object = payload.get("dominant_object")
-        scene_type = payload.get("scene_type")
-        lighting_quality = payload.get("lighting_quality")
-        subject_clarity = payload.get("subject_clarity")
-        aesthetic_quality = payload.get("aesthetic_quality")
+        lighting_quality = normalized_visual_quality.get("lighting")
+        subject_clarity = normalized_visual_quality.get("subject_clarity")
+        aesthetic_quality = normalized_visual_quality.get("aesthetic_quality")
         cringe_score = _clamp_int_0_100(payload.get("cringe_score"))
         cringe_signals = _normalize_short_text_list(payload.get("cringe_signals"), limit=3)
         cringe_fixes = _normalize_short_text_list(payload.get("cringe_fixes"), limit=3)
@@ -623,6 +684,8 @@ async def run_vision_analysis(
             "lighting_quality": lighting_quality if isinstance(lighting_quality, (str, int, float)) else None,
             "subject_clarity": subject_clarity if isinstance(subject_clarity, (str, int, float)) else None,
             "aesthetic_quality": aesthetic_quality if isinstance(aesthetic_quality, (str, int, float)) else None,
+            "visual_quality_score": normalized_visual_quality,
+            "technical_flaws": technical_flaws,
             "cringe_score": cringe_score,
             "cringe_signals": cringe_signals,
             "cringe_fixes": cringe_fixes,
@@ -679,7 +742,7 @@ async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_
         # Shortened to 10s for smoke test to avoid long hangs.
         return await asyncio.wait_for(
             asyncio.to_thread(_call_gemini_vision_api, api_key=api_key, instruction=instruction, media_url=media_url),
-            timeout=10.0
+            timeout=30.0
         )
     except asyncio.TimeoutError:
         logger.error(
@@ -805,6 +868,131 @@ async def _repair_llm_json_output(raw_text: str | None, llm_client: LLMClient | 
         return None
     repair_prompt = _build_repair_prompt(raw_text)
     return await _call_llm_async(repair_prompt, llm_client)
+
+
+async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | None = None) -> dict[str, Any] | None:
+    """Run LLM-based S2 caption evaluation and return normalized payload."""
+    if not isinstance(caption_text, str) or not caption_text.strip():
+        return None
+
+    prompt = {
+        "system": "Return only valid JSON matching the schema requested.",
+        "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", caption_text),
+    }
+    raw_text = await _call_llm_async(prompt, llm_client)
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        return None
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        repaired = await _repair_llm_json_output(raw_text, llm_client)
+        if not isinstance(repaired, str):
+            return None
+        try:
+            payload = json.loads(repaired)
+        except json.JSONDecodeError:
+            return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    hook = _coerce_int_0_100(payload.get("hook_score_0_100"))
+    length = _coerce_int_0_100(payload.get("length_score_0_100"))
+    hashtag = _coerce_int_0_100(payload.get("hashtag_score_0_100"))
+    cta = _coerce_int_0_100(payload.get("cta_score_0_100"))
+    if None in {hook, length, hashtag, cta}:
+        return None
+
+    s2_raw = _coerce_int_0_100(payload.get("s2_raw_0_100"))
+    if s2_raw is None:
+        s2_raw = int(round(hook * 0.30 + length * 0.20 + hashtag * 0.25 + cta * 0.25))
+
+    total_0_50 = round(max(0.0, min(50.0, s2_raw / 2.0)), 1)
+
+    notes: list[str] = []
+    technical_flaws = payload.get("technical_flaws")
+    if isinstance(technical_flaws, list):
+        for item in technical_flaws:
+            if isinstance(item, str) and item.strip():
+                notes.append(item.strip()[:160])
+                if len(notes) >= 3:
+                    break
+
+    improved_hook = payload.get("improved_hook_suggestion")
+    if isinstance(improved_hook, str) and improved_hook.strip():
+        notes.append(f"improved_hook_suggestion: {improved_hook.strip()[:160]}")
+
+    return {
+        "hook_score_0_100": hook,
+        "length_score_0_100": length,
+        "hashtag_score_0_100": hashtag,
+        "cta_score_0_100": cta,
+        "s2_raw_0_100": s2_raw,
+        "total_0_50": total_0_50,
+        "notes": notes,
+    }
+
+
+async def run_audience_relevance_llm(
+    creator_category: str | None,
+    post_category: str | None,
+    llm_client: LLMClient | None = None,
+) -> dict[str, Any] | None:
+    """Run LLM-based S4 audience relevance evaluation."""
+    creator_text = creator_category or ""
+    post_text = post_category or ""
+
+    user_prompt = S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", creator_text).replace("{post_category}", post_text)
+    prompt = {
+        "system": "Return only valid JSON matching the schema requested.",
+        "user": user_prompt,
+    }
+    raw_text = await _call_llm_async(prompt, llm_client)
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        return None
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        repaired = await _repair_llm_json_output(raw_text, llm_client)
+        if not isinstance(repaired, str):
+            return None
+        try:
+            payload = json.loads(repaired)
+        except json.JSONDecodeError:
+            return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    affinity = payload.get("affinity_band")
+    if not isinstance(affinity, str):
+        affinity = "UNKNOWN"
+    affinity = affinity.strip().upper()
+    allowed_bands = {"EXACT", "HIGH_OVERLAP", "ADJACENT", "UNRELATED", "UNKNOWN"}
+    if affinity not in allowed_bands:
+        affinity = "UNKNOWN"
+
+    s4_raw = _coerce_int_0_100(payload.get("s4_raw_0_100"))
+    if s4_raw is None:
+        s4_raw_map = {
+            "EXACT": 100,
+            "HIGH_OVERLAP": 85,
+            "ADJACENT": 65,
+            "UNRELATED": 15,
+            "UNKNOWN": 50,
+        }
+        s4_raw = s4_raw_map.get(affinity, 50)
+
+    explanation = payload.get("audience_overlap_explanation")
+    explanation_text = explanation.strip() if isinstance(explanation, str) else ""
+
+    return {
+        "s4_raw_0_100": s4_raw,
+        "affinity_band": affinity,
+        "audience_overlap_explanation": explanation_text,
+    }
 
 
 def _parse_driver_item(value: Any) -> AIDriver | None:
@@ -1284,7 +1472,11 @@ async def analyze_single_post_ai(
             vision_status = "no_media"
 
     visual_quality_score = compute_visual_quality_score(vision)
-    caption_effectiveness_score = compute_s2_caption_effectiveness(post.caption_text)
+    caption_effectiveness_score = (
+        post.caption_effectiveness_score
+        if isinstance(post.caption_effectiveness_score, CaptionEffectivenessScore)
+        else compute_s2_caption_effectiveness(post.caption_text)
+    )
     content_clarity_score = compute_s3_content_clarity(vision, post.caption_text)
     audience_relevance_score = compute_s4_audience_relevance(
         post.post_category,

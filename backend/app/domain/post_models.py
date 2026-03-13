@@ -172,6 +172,14 @@ class VisionSignal(BaseModel):
         default=None,
         description="Visual style descriptor inferred by vision model.",
     )
+    visual_quality_score: dict[str, float] | None = Field(
+        default=None,
+        description="Optional raw S1 visual quality sub-scores from vision model.",
+    )
+    technical_flaws: list[str] = Field(
+        default_factory=list,
+        description="Optional list of technical flaws detected by vision model.",
+    )
     hook_strength_score: float | None = Field(
         default=None,
         description="Vision-estimated hook strength in range 0..1.",
@@ -273,6 +281,24 @@ class VisionSignal(BaseModel):
                 continue
             sanitized.append(text[:160])
             if len(sanitized) == 3:
+                break
+        return sanitized
+
+    @field_validator("technical_flaws", mode="before")
+    @classmethod
+    def _sanitize_technical_flaws(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
+            if not text:
+                continue
+            sanitized.append(text[:160])
+            if len(sanitized) >= 3:
                 break
         return sanitized
 
@@ -737,7 +763,9 @@ class AudienceRelevanceScore(BaseModel):
 
     post_category: str | None = Field(default=None)
     creator_dominant_category: str | None = Field(default=None)
-    affinity_band: Literal["EXACT", "ADJACENT", "UNRELATED", "UNKNOWN"] = Field(default="UNKNOWN")
+    affinity_band: Literal["EXACT", "HIGH_OVERLAP", "ADJACENT", "UNRELATED", "UNKNOWN"] = Field(
+        default="UNKNOWN"
+    )
     s4_raw_0_100: int = Field(default=50, ge=0, le=100)
     total_0_50: float = Field(default=25.0, ge=0.0, le=50.0)
     notes: list[str] = Field(default_factory=list)
