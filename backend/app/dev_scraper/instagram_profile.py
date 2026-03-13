@@ -69,11 +69,10 @@ class InstaScraper:
             text = value.strip()
             if not text:
                 return None
-            if text.isdigit():
-                try:
-                    return datetime.fromtimestamp(float(text), tz=timezone.utc).isoformat()
-                except Exception:
-                    return None
+            try:
+                return datetime.fromtimestamp(float(text), tz=timezone.utc).isoformat()
+            except Exception:
+                pass
             try:
                 parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
             except ValueError:
@@ -289,4 +288,3 @@ async def fetch_instagram_profile(username: str, session_id: str | None = None) 
     """Fetch profile payload containing posts and reels for fixture generation."""
     scraper = InstaScraper(_resolve_session_id(session_id))
     return await scraper.get_profile(username=username)
-

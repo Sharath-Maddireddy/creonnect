@@ -125,9 +125,15 @@ def _summarize_training(path: Path) -> Dict[str, Any]:
     quality_counts = Counter()
     missing_action_plan = 0
     empty_action_plan = 0
+    validation_errors = 0
     for line_num, row in _read_jsonl(path):
         total += 1
-        validated = validate_jsonl_entry(row, EnrichedTrainingExample, row_index=line_num)
+        try:
+            validated = validate_jsonl_entry(row, EnrichedTrainingExample, row_index=line_num)
+        except Exception as exc:
+            print(f"[warn] Validation error in {path} at line {line_num}: {exc}")
+            validation_errors += 1
+            continue
         quality_counts[validated.quality] += 1
         action_plan = validated.output.action_plan
         if action_plan is None:
@@ -139,17 +145,24 @@ def _summarize_training(path: Path) -> Dict[str, Any]:
         "quality_counts": dict(quality_counts),
         "missing_action_plan": missing_action_plan,
         "empty_action_plan": empty_action_plan,
+        "validation_errors": validation_errors,
     }
 
 
 def _summarize_chat(path: Path) -> Dict[str, Any]:
     total = 0
+    invalid_rows = 0
     total_messages = 0
     empty_messages_list = 0
     empty_assistant_content = 0
     for line_num, row in _read_jsonl(path):
         total += 1
-        validated = validate_jsonl_entry(row, ChatExample, row_index=line_num)
+        try:
+            validated = validate_jsonl_entry(row, ChatExample, row_index=line_num)
+        except Exception as exc:
+            invalid_rows += 1
+            print(f"[warn] Invalid chat entry in {path} at line {line_num}: {exc}")
+            continue
         messages = validated.messages
         if not messages:
             empty_messages_list += 1
@@ -157,9 +170,11 @@ def _summarize_chat(path: Path) -> Dict[str, Any]:
         for msg in messages:
             if msg.role == "assistant" and (not msg.content or not msg.content.strip()):
                 empty_assistant_content += 1
-    avg_messages = (total_messages / total) if total else 0.0
+    valid_total = total - invalid_rows
+    avg_messages = (total_messages / valid_total) if valid_total else 0.0
     return {
         "total": total,
+        "invalid_rows": invalid_rows,
         "avg_messages": avg_messages,
         "empty_messages_list": empty_messages_list,
         "empty_assistant_content": empty_assistant_content,
@@ -183,6 +198,7 @@ def main() -> None:
     print("=" * 30)
     print(f"Training data: {args.training}")
     print(f"  Total examples: {training_stats['total']}")
+    print(f"  Validation errors: {training_stats['validation_errors']}")
     print("  Quality distribution:")
     for label, count in sorted(training_stats["quality_counts"].items()):
         print(f"    {label}: {count} ({_pct(count, training_stats['total']):.2f}%)")
@@ -195,6 +211,7 @@ def main() -> None:
 
     print(f"Chat train: {args.chat_train}")
     print(f"  Total examples: {chat_train_stats['total']}")
+    print(f"  Invalid chat entries: {chat_train_stats['invalid_rows']}")
     print(f"  Average messages per example: {chat_train_stats['avg_messages']:.2f}")
     print(f"  Empty messages list: {chat_train_stats['empty_messages_list']}")
     print(f"  Empty assistant content: {chat_train_stats['empty_assistant_content']}")
@@ -202,6 +219,7 @@ def main() -> None:
 
     print(f"Chat val: {args.chat_val}")
     print(f"  Total examples: {chat_val_stats['total']}")
+    print(f"  Invalid chat entries: {chat_val_stats['invalid_rows']}")
     print(f"  Average messages per example: {chat_val_stats['avg_messages']:.2f}")
     print(f"  Empty messages list: {chat_val_stats['empty_messages_list']}")
     print(f"  Empty assistant content: {chat_val_stats['empty_assistant_content']}")
@@ -214,6 +232,8 @@ def main() -> None:
         failures.append("Missing action_plan detected.")
     if training_stats["empty_action_plan"] > 0:
         failures.append("Empty action_plan detected.")
+    if training_stats["validation_errors"] > 0:
+        failures.append("Validation errors detected in training data.")
     if privacy_stats["non_anonymized_usernames"] > 0:
         failures.append("Non-anonymized usernames detected in training data.")
     if privacy_stats["email_like_rows"] > 0:
@@ -229,6 +249,8 @@ def main() -> None:
         or chat_val_stats["empty_assistant_content"] > 0
     ):
         failures.append("Empty assistant message content detected.")
+    if chat_train_stats["invalid_rows"] > 0 or chat_val_stats["invalid_rows"] > 0:
+        failures.append("Invalid chat entries detected.")
 
     if failures:
         print("Pre-flight status: FAILED")

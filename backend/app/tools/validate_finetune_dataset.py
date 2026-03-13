@@ -52,7 +52,8 @@ def assert_synthetic_prefix_consistency() -> None:
         if prefix.endswith("_creator_")
     }
     missing = set(SYNTHETIC_HANDLE_PREFIXES) - mapped_prefixes
-    assert not missing, f"Regex prefixes missing from PREFIX_TO_NICHE: {sorted(missing)}"
+    if missing:
+        raise ValueError(f"Regex prefixes missing from PREFIX_TO_NICHE: {sorted(missing)}")
 
 
 def infer_niche(creator_id: str | None) -> str:
@@ -213,9 +214,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def _redact_pii_value(value: str) -> str:
-    if len(value) <= 4:
+    if len(value) <= 8:
         return "***"
-    return f"{value[:2]}***{value[-2:]}"
+    return f"{value[:2]}***"
 
 
 def main() -> int:

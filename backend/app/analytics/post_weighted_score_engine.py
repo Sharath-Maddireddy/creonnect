@@ -116,7 +116,7 @@ def compute_weighted_post_score(
         )
 
     normalized_score_0_50 = round(_clamp(raw_weighted_sum / used_weight_sum, 0.0, 50.0), 2)
-    score = _clamp(normalized_score_0_50 * 2.0, 0.0, 100.0)
+    score = round(_clamp(normalized_score_0_50 * 2.0, 0.0, 100.0), 2)
 
     return WeightedPostScore(
         post_type=resolved_post_type,

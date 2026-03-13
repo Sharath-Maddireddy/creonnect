@@ -26,6 +26,13 @@ class DeterministicDriver(BaseModel):
         text = value if isinstance(value, str) else ""
         return " ".join(text.strip().split())[:240]
 
+    @field_validator("id", mode="after")
+    @classmethod
+    def _validate_id_not_empty(cls, value: str) -> str:
+        if not value:
+            raise ValueError("id cannot be empty")
+        return value
+
 
 class DeterministicRecommendation(BaseModel):
     """Deterministic account-level recommendation entry."""

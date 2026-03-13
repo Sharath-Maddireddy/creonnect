@@ -57,11 +57,10 @@ def _parse_datetime(value: Any) -> datetime | None:
         text = value.strip()
         if not text:
             return None
-        if text.isdigit():
-            try:
-                return datetime.fromtimestamp(float(text), tz=timezone.utc)
-            except (TypeError, ValueError, OSError):
-                return None
+        try:
+            return datetime.fromtimestamp(float(text), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            pass
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:

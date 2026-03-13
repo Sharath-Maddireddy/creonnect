@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.app.utils.logger import logger
 from backend.app.services.account_analysis_jobs import (
     AccountAnalysisRateLimitError,
     enqueue_account_analysis_job,
@@ -44,7 +45,8 @@ def enqueue_account_analysis(request: AccountAnalysisRequest) -> dict[str, str]:
             detail["job_id"] = exc.job_id
         raise HTTPException(status_code=429, detail=detail)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to enqueue account analysis job: {exc}")
+        logger.exception("[AccountAnalysis] Failed to enqueue account analysis job")
+        raise HTTPException(status_code=500, detail="Failed to enqueue account analysis job") from exc
 
 
 @router.get("/account-analysis/{job_id}")

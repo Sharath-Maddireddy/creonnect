@@ -335,11 +335,15 @@ def _is_public_ip_address(value: str) -> bool:
     )
 
 
-def _is_safe_public_hostname(hostname: str) -> bool:
+async def _is_safe_public_hostname(hostname: str) -> bool:
+    """Async wrapper for hostname validation to avoid blocking the event loop."""
     normalized = hostname.strip().lower().rstrip(".")
     if not normalized:
         return False
+    return await asyncio.to_thread(_is_safe_public_hostname_blocking, normalized)
 
+
+def _is_safe_public_hostname_blocking(normalized: str) -> bool:
     if normalized == "localhost" or normalized.endswith(".localhost"):
         return False
 
@@ -510,7 +514,7 @@ async def run_vision_analysis(
         parsed_url.scheme not in {"http", "https"}
         or not parsed_url.netloc
         or not isinstance(hostname, str)
-        or not _is_safe_public_hostname(hostname)
+        or not await _is_safe_public_hostname(hostname)
     ):
         logger.warning(f"[Vision] Rejected media_url for SSRF protection: {media_url}")
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")

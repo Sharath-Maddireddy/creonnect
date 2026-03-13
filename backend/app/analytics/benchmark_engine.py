@@ -65,6 +65,11 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
 
+def _approx_equal(a: float, b: float, tol: float = 1e-12) -> bool:
+    """Compare floats with a small tolerance to avoid precision issues."""
+    return abs(a - b) < tol
+
+
 def _collect_core_metric_values(posts: list[SinglePostInsights], metric_name: str) -> list[float]:
     """Collect non-null numeric core metric values from posts."""
     values: list[float] = []
@@ -135,7 +140,7 @@ def compute_benchmark_metrics(
     percentile_engagement_rank: float | None = None
     if target_engagement_rate is not None and engagement_values:
         lower = sum(1 for v in engagement_values if v < target_engagement_rate)
-        equal = sum(1 for v in engagement_values if v == target_engagement_rate)
+        equal = sum(1 for v in engagement_values if _approx_equal(v, target_engagement_rate))
         total = len(engagement_values)
         percentile_engagement_rank = _clamp((lower + 0.5 * equal) / total, 0.0, 1.0)
 

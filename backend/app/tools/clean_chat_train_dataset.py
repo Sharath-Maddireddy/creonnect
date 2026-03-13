@@ -527,7 +527,12 @@ def validate_clean_dataset(path: Path, dedupe_strategy: str, data_dir: Path) -> 
     )
     listed_datasets = list_dataset_files(data_dir)
     listed_names = [dataset.name for dataset in listed_datasets]
-    backup_in_listing = [name for name in listed_names if ".bak" in name.lower() or "_before_" in name.lower()]
+    all_jsonl_files = sorted(data_dir.rglob("*.jsonl"))
+    backup_in_dir = [
+        path.name
+        for path in all_jsonl_files
+        if ".bak" in path.name.lower() or "_before_" in path.name.lower()
+    ]
 
     has_issues = False
     print(f"validate_path={path}")
@@ -551,8 +556,8 @@ def validate_clean_dataset(path: Path, dedupe_strategy: str, data_dir: Path) -> 
         has_issues = True
 
     print(f"listed_datasets={listed_names}")
-    print(f"backup_files_in_listing={backup_in_listing}")
-    if backup_in_listing:
+    print(f"backup_files_in_dir={backup_in_dir}")
+    if backup_in_dir:
         has_issues = True
 
     return 1 if has_issues else 0

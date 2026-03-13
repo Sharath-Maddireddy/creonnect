@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -151,7 +152,7 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _auto_fail_stale_active_job(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _project_stale_failed_status(payload: dict[str, Any]) -> dict[str, Any]:
     status = payload.get("status")
     if status not in _RUNNING_STATUSES:
         return payload
@@ -160,6 +161,7 @@ def _auto_fail_stale_active_job(job_id: str, payload: dict[str, Any]) -> dict[st
     created_at = _parse_iso_datetime(payload.get("created_at"))
     started_at = _parse_iso_datetime(payload.get("started_at"))
     stale_reason: str | None = None
+    stale_finished_at: datetime | None = None
 
     if status == "queued":
         if created_at is None:
@@ -170,6 +172,7 @@ def _auto_fail_stale_active_job(job_id: str, payload: dict[str, Any]) -> dict[st
                 f"Job remained queued for {int(age_seconds)}s, exceeding "
                 f"{ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS}s."
             )
+            stale_finished_at = created_at + timedelta(seconds=ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS)
 
     if status == "started":
         active_since = started_at or created_at
@@ -181,29 +184,35 @@ def _auto_fail_stale_active_job(job_id: str, payload: dict[str, Any]) -> dict[st
                 f"Job remained started for {int(age_seconds)}s, exceeding "
                 f"{ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS}s."
             )
+            stale_finished_at = active_since + timedelta(seconds=ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS)
 
     if stale_reason is None:
         return payload
 
-    logger.warning("[AccountAnalysisJob] Marking stale job as failed: job_id=%s reason=%s", job_id, stale_reason)
-    return _update_status(
-        job_id,
+    finished_at = payload.get("finished_at")
+    if not isinstance(finished_at, str) or not finished_at.strip():
+        finished_at = (
+            stale_finished_at.isoformat()
+            if isinstance(stale_finished_at, datetime)
+            else _now_iso()
+        )
+
+    projected = dict(payload)
+    projected.update(
         status="failed",
-        finished_at=_now_iso(),
+        finished_at=finished_at,
         error={"type": "TimeoutError", "message": stale_reason},
         result=None,
     )
+    return projected
 
 
 def _read_status_with_guard(job_id: str) -> dict[str, Any] | None:
     payload = _read_status(job_id)
     if not isinstance(payload, dict):
         return None
-    guarded = _auto_fail_stale_active_job(job_id, payload)
-    sanitized = _sanitize_status_payload(guarded)
-    if sanitized != guarded:
-        _write_status(job_id, sanitized)
-    return sanitized
+    sanitized = _sanitize_status_payload(payload)
+    return _project_stale_failed_status(sanitized)
 
 
 def _update_status(job_id: str, **updates: Any) -> dict[str, Any]:
@@ -236,6 +245,17 @@ def _normalize_post_limit(value: Any) -> int:
     except (TypeError, ValueError):
         post_limit = 30
     return max(1, min(30, post_limit))
+
+
+def _normalize_job_id(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    try:
+        return str(value).strip()
+    except Exception:
+        return ""
 
 
 def _normalize_bool(value: Any, default: bool = False) -> bool:
@@ -360,14 +380,13 @@ def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         post_limit=post_limit,
         payload_hash=payload_hash,
     )
-    running_job_id = reusable_job_id if reusable_status in _RUNNING_STATUSES else None
-    _enforce_rate_limit(account_id, running_job_id)
-
     if reusable_job_id and reusable_status:
         return {"job_id": reusable_job_id, "status": reusable_status}
+    _enforce_rate_limit(account_id, running_job_id=None)
 
     queue = get_queue()
-    job_id = str(payload.get("job_id") or uuid4())
+    raw_job_id = _normalize_job_id(payload.get("job_id"))
+    job_id = raw_job_id or str(uuid4())
     full_payload = dict(payload)
     full_payload["job_id"] = job_id
     full_payload["account_id"] = account_id
@@ -628,7 +647,7 @@ async def _run_single_post_pipeline_if_needed(
     posts: list[SinglePostInsights],
     run_single_post_pipeline: bool,
     vision_enabled: bool,
-    update_progress: callable,
+    update_progress: Callable[[str, int, int], None],
 ) -> dict[str, Any]:
     warnings: list[dict[str, Any]] = []
     per_post_warnings_count: dict[str, int] = {}
@@ -701,7 +720,9 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
     """RQ worker job entrypoint for account-level analysis."""
     payload = payload if isinstance(payload, dict) else {}
     current_job = get_current_job()
-    job_id = (current_job.id if current_job is not None else None) or str(payload.get("job_id") or uuid4())
+    current_job_id = _normalize_job_id(current_job.id if current_job is not None else None)
+    raw_job_id = _normalize_job_id(payload.get("job_id"))
+    job_id = current_job_id or raw_job_id or str(uuid4())
     account_id = _normalize_account_id(payload.get("account_id"))
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
     include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))

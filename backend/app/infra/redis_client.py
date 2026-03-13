@@ -10,6 +10,14 @@ from redis import Redis
 
 
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+_INCR_WITH_EXPIRE_SCRIPT = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return current
+"""
+_incr_script = None
 
 
 def get_redis() -> Redis:
@@ -54,11 +62,12 @@ def get_text(key: str) -> str | None:
 
 def incr_with_expire(key: str, ttl_seconds: int) -> int:
     """Increment counter and set expiry on first creation."""
+    global _incr_script
     redis_client = get_redis()
-    value = int(redis_client.incr(key))
-    if value == 1:
-        redis_client.expire(key, max(1, int(ttl_seconds)))
-    return value
+    if _incr_script is None:
+        _incr_script = redis_client.register_script(_INCR_WITH_EXPIRE_SCRIPT)
+    value = _incr_script(keys=[key], args=[max(1, int(ttl_seconds))])
+    return int(value)
 
 
 def get_json(key: str) -> dict[str, Any] | None:

@@ -103,7 +103,8 @@ def main() -> None:
     if not isinstance(items, list) or not items:
         raise ValueError("Fixture must contain a non-empty 'items' list.")
 
-    account_id = (args.account_id or fixture.get("username") or "fixture_account").strip()
+    raw_account_id = args.account_id or fixture.get("username") or "fixture_account"
+    account_id = str(raw_account_id).strip()
     seed_posts = [_build_seed_post(item, account_id=account_id) for item in items]
     analyzed_posts = asyncio.run(_analyze_posts(seed_posts, concurrency=args.concurrency))
 

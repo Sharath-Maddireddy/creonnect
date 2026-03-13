@@ -44,8 +44,8 @@ from backend.app.infra.redis_client import get_redis
 def main() -> None:
     # ── Flush stale Redis data ────────────────────────────────────
     r = get_redis()
-    r.flushall()
-    print("[smoke] Redis flushed", flush=True)
+    r.flushdb()
+    print("[smoke] Redis database flushed", flush=True)
 
     fixture_path = Path("fixtures/ig_dhirendra_raw.json")
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
@@ -117,7 +117,7 @@ def main() -> None:
 
         # Predicted engagement rate
         post_data["predicted_engagement_rate"] = post.predicted_engagement_rate
-        post_data["predicted_engagement_rate_notes"] = list(post.predicted_engagement_rate_notes)
+        post_data["predicted_engagement_rate_notes"] = list(post.predicted_engagement_rate_notes or [])
 
         per_post_output.append(post_data)
 

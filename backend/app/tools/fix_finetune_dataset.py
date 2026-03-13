@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 PREFIX_TO_NICHE: dict[str, str] = {
     "fit_creator_": "fitness",
@@ -176,6 +178,41 @@ def anonymize_content(text: str) -> tuple[str, list[dict[str, str]]]:
     return updated, replacements
 
 
+def _hash_value(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _redact_value(value: str, value_type: str) -> str:
+    if not value:
+        return "***"
+    if value_type == "email":
+        if "@" not in value:
+            return "***"
+        local, domain = value.split("@", 1)
+        prefix = local[:1] if local else ""
+        return f"{prefix}***@{domain}"
+    if value_type == "phone":
+        digits = re.sub(r"\D", "", value)
+        if len(digits) < 2:
+            return "***"
+        return f"***{digits[-2:]}"
+    if value_type == "url":
+        raw = value
+        if raw.startswith("www."):
+            raw = f"https://{raw}"
+        parsed = urlparse(raw)
+        if not parsed.netloc:
+            return "***"
+        scheme = parsed.scheme or "https"
+        return f"{scheme}://{parsed.netloc}/..."
+    if value_type == "handle":
+        handle = value.lstrip("@")
+        if not handle:
+            return "@***"
+        return f"@{handle[:1]}***"
+    return f"{value[:1]}***"
+
+
 def determine_drops(rows: list[dict[str, Any]]) -> tuple[set[int], list[dict[str, Any]], set[str]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     dropped_line_numbers: set[int] = set()
@@ -266,6 +303,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input_jsonl", nargs="?", default=str(default_input), help="Input JSONL dataset path.")
     parser.add_argument("--output", default=str(default_output), help="Output cleaned JSONL path.")
     parser.add_argument("--report", default=str(default_report), help="Output report JSON path.")
+    parser.add_argument(
+        "--pii-report",
+        choices=("masked", "full", "none"),
+        default="masked",
+        help="How to include PII replacements in the report: masked (default), full, or none.",
+    )
     return parser.parse_args()
 
 
@@ -285,7 +328,20 @@ def main() -> int:
                 continue
 
             total_lines += 1
-            obj = json.loads(stripped)
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                rows.append(
+                    {
+                        "line_number": line_number,
+                        "obj": {},
+                        "creator_id": None,
+                        "creator_note": f"malformed JSON: {exc}",
+                        "inferred_niche": "unknown",
+                        "observed_niches": set(),
+                    }
+                )
+                continue
             messages = obj.get("messages")
             if not isinstance(messages, list):
                 rows.append(
@@ -396,6 +452,23 @@ def main() -> int:
         }
     )
 
+    pii_report_mode = args.pii_report
+    pii_replacements_report: list[dict[str, Any]]
+
+    if pii_report_mode == "none":
+        pii_replacements_report = []
+    elif pii_report_mode == "full":
+        pii_replacements_report = pii_replacements[:200]
+    else:
+        pii_replacements_report = []
+        for entry in pii_replacements[:200]:
+            original = entry.get("from", "")
+            value_type = entry.get("type", "")
+            masked_entry = {k: v for k, v in entry.items() if k != "from"}
+            masked_entry["from_redacted"] = _redact_value(str(original), str(value_type))
+            masked_entry["from_hash"] = _hash_value(str(original))
+            pii_replacements_report.append(masked_entry)
+
     report: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "input_file": str(input_path),
@@ -408,10 +481,12 @@ def main() -> int:
         "creators_with_conflicts": sorted(creators_with_conflicts),
         "unknown_creators": unknown_creators,
         "drop_details": drop_details,
+        "pii_report_mode": pii_report_mode,
+        "pii_report_note": "pii_replacements may contain sensitive data when pii_report_mode is full.",
         "niche_replacements_count": len(niche_replacements),
         "niche_replacements": niche_replacements[:200],
         "pii_replacements_count": len(pii_replacements),
-        "pii_replacements": pii_replacements[:200],
+        "pii_replacements": pii_replacements_report,
     }
 
     report_path.parent.mkdir(parents=True, exist_ok=True)

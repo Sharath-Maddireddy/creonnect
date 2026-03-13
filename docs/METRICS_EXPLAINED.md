@@ -140,7 +140,7 @@ Measures **how safe and brand-friendly the content is** (no profanity, harmful r
 ```
 brand_safety = mean(S6 across all posts) × 2
 ```
-- If any post has S6 ≤ 40/100 ("severe"): additional `-10` penalty.
+- If any post has S6_raw ≤ 40/100 ("severe"): additional `-10` penalty.
 - A score of 100 (as in our result) means **zero penalties across all 30 posts**.
 
 ---
@@ -162,7 +162,8 @@ Scored by Gemini Vision analyzing the post image/thumbnail. Composed of 4 sub-di
 | `aesthetic_quality` | Overall visual appeal and style |
 
 ```
-S1 = composition + lighting + subject_clarity + aesthetic_quality  (max 40 sub-score → mapped to 50)
+S1_raw = composition + lighting + subject_clarity + aesthetic_quality  (max 40)
+S1 = S1_raw * 1.25  (scaled to 0-50)
 ```
 
 > **Note:** In our run, S1 = 20.25 uniformly due to some Gemini rate-limit hits. This is the "no vision signal" fallback baseline value — not a true individual post assessment.
@@ -354,3 +355,6 @@ Actionable steps ranked by `impact_level`:
 | Brand Safety | 100.0 | EXCEPTIONAL — zero risky content detected |
 | Best post (P) | 62.38 | "Not everyone gets access…" — strong caption (S2=44) |
 | Weakest posts (P) | 48.22 | Captionless images — S2 floors at 12.5 |
+
+
+
