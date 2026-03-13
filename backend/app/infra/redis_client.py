@@ -66,7 +66,7 @@ def incr_with_expire(key: str, ttl_seconds: int) -> int:
     redis_client = get_redis()
     if _incr_script is None:
         _incr_script = redis_client.register_script(_INCR_WITH_EXPIRE_SCRIPT)
-    value = _incr_script(keys=[key], args=[max(1, int(ttl_seconds))])
+    value = _incr_script(keys=[key], args=[max(1, int(ttl_seconds))], client=redis_client)
     return int(value)
 
 

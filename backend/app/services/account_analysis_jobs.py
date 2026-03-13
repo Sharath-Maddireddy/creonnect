@@ -674,6 +674,7 @@ async def _run_single_post_pipeline_if_needed(
     total = len(posts)
     for index, post in enumerate(posts, start=1):
         update_progress(stage="posts", done=index - 1, total=total)
+        appended = False
         try:
             historical = [candidate for candidate in posts if candidate.media_id != post.media_id]
             pipeline_result = await build_single_post_insights(
@@ -682,6 +683,7 @@ async def _run_single_post_pipeline_if_needed(
                 run_ai=True,
             )
             processed_posts.append(pipeline_result["post"])
+            appended = True
 
             ai_analysis = pipeline_result.get("ai_analysis")
             ai_warnings = _extract_ai_warnings(ai_analysis if isinstance(ai_analysis, dict) else None)
@@ -704,6 +706,19 @@ async def _run_single_post_pipeline_if_needed(
                 getattr(post, "media_id", None),
                 exc,
             )
+            if not appended:
+                processed_posts.append(post)
+            post_id = post.media_id if isinstance(post.media_id, str) else ""
+            notes_by_post_id[post_id] = {"vision_status": "error", "fallback_used": True}
+            _append_unique_warning(
+                warnings,
+                _build_warning(
+                    code="POST_PIPELINE_ERROR",
+                    message="Per-post analysis failed; using raw post output.",
+                    post_id=post_id,
+                ),
+            )
+            _increment_post_warning_count(per_post_warnings_count, post_id, 1)
         finally:
             update_progress(stage="posts", done=index, total=total)
     return _pipeline_result_payload(
@@ -788,14 +803,6 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
                 notes_by_post_id[post_id] = {"vision_status": "disabled", "fallback_used": True}
                 if post_id:
                     _increment_post_warning_count(per_post_warnings_count, post_id, 1)
-
-        _update_status(
-            job_id,
-            status="started",
-            progress={"stage": "aggregate", "done": len(processed_posts), "total": max(1, len(posts))},
-            warnings=warnings_global,
-            quality=quality,
-        )
 
         _progress(stage="aggregate", done=len(processed_posts), total=max(1, len(posts)))
         result = analyze_account_health(

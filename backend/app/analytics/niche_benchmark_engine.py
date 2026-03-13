@@ -113,7 +113,11 @@ def compute_niche_benchmark_context(
         post_save_rate = target_post.derived_metrics.save_rate
 
     follower_count = getattr(target_post, "follower_count", None)
-    follower_count_value = follower_count if isinstance(follower_count, int) else None
+    follower_count_value = (
+        follower_count
+        if isinstance(follower_count, int) and not isinstance(follower_count, bool)
+        else None
+    )
     follower_band = _resolve_follower_band(follower_count_value)
 
     commentary = _build_commentary(

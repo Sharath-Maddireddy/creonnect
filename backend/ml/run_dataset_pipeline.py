@@ -57,9 +57,9 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _build_action_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
-    input_data = entry["input"]
-    profile = input_data["profile"]
-    posts = input_data["posts"]
+    input_data = entry.get("input", {})
+    profile = input_data.get("profile", {})
+    posts = input_data.get("posts", [])
     output = entry.get("output") if isinstance(entry.get("output"), dict) else {}
     growth = output.get("growth", {})
     niche = output.get("niche", {})

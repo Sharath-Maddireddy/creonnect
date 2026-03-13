@@ -44,10 +44,17 @@ from backend.app.infra.redis_client import get_redis
 def main() -> None:
     # ── Flush stale Redis data ────────────────────────────────────
     r = get_redis()
+    redis_url = os.environ.get("REDIS_URL", "")
+    if "localhost" not in redis_url and "127.0.0.1" not in redis_url:
+        print(f"[smoke] FATAL: Refusing to flushdb on non-local Redis: {redis_url}", flush=True)
+        sys.exit(1)
     r.flushdb()
     print("[smoke] Redis database flushed", flush=True)
 
     fixture_path = Path("fixtures/ig_dhirendra_raw.json")
+    if not fixture_path.exists():
+        print(f"[smoke] FATAL: Fixture not found at {fixture_path.resolve()}", flush=True)
+        sys.exit(1)
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     items = fixture["items"]
     account_id = fixture.get("username", "fixture_account")

@@ -350,6 +350,68 @@ class VisionAnalysis(BaseModel):
     signals: list[VisionSignal] = Field(default_factory=list, description="Normalized vision signal payloads.")
 
 
+class ReelAnalysis(BaseModel):
+    """Reel-specific scores only populated when media_type == REEL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hook_score: float | None = Field(default=None, ge=0.0, le=50.0)
+    pacing_score: float | None = Field(default=None, ge=0.0, le=50.0)
+    audio_alignment_score: float | None = Field(default=None, ge=0.0, le=50.0)
+    retention_score: float | None = Field(default=None, ge=0.0, le=50.0)
+    total: float | None = Field(default=None, ge=0.0, le=100.0)
+    reel_vision_status: str | None = Field(default=None, description="ok | error | disabled")
+    notes: list[str] = Field(default_factory=list)
+
+    @field_validator("hook_score", "pacing_score", "audio_alignment_score", "retention_score", mode="before")
+    @classmethod
+    def _clamp_sub_score(cls, value: float | int | str | None) -> float | None:
+        if value is None:
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return round(max(0.0, min(50.0, numeric)), 2)
+
+    @field_validator("total", mode="before")
+    @classmethod
+    def _clamp_total(cls, value: float | int | str | None) -> float | None:
+        if value is None:
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return round(max(0.0, min(100.0, numeric)), 2)
+
+    @field_validator("reel_vision_status", mode="before")
+    @classmethod
+    def _normalize_reel_vision_status(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip().lower()
+        if text not in {"ok", "error", "disabled"}:
+            return None
+        return text
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _sanitize_notes(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
+            if not text:
+                continue
+            sanitized.append(text[:160])
+        return sanitized
+
+
 class VisualQualityScore(BaseModel):
     """Deterministic S1 visual quality score and sub-scores."""
 
@@ -636,7 +698,7 @@ class CaptionEffectivenessScore(BaseModel):
         try:
             numeric = float(value)
         except (TypeError, ValueError):
-            return 0
+            return int(field_default)
         return int(max(0.0, min(100.0, round(numeric))))
 
     @field_validator("total_0_50", mode="before")
@@ -648,7 +710,7 @@ class CaptionEffectivenessScore(BaseModel):
         try:
             numeric = float(value)
         except (TypeError, ValueError):
-            return 0.0
+            return float(field_default)
         return round(max(0.0, min(50.0, numeric)), 1)
 
     @field_validator("notes", mode="before")
@@ -856,6 +918,10 @@ class SinglePostInsights(BaseModel):
     vision_analysis: VisionAnalysis | None = Field(
         default=None,
         description="Latest normalized vision analysis payload for this post.",
+    )
+    reel_analysis: ReelAnalysis | None = Field(
+        default=None,
+        description="Reel-specific analysis payload when media_type is REEL.",
     )
     visual_quality_score: VisualQualityScore = Field(
         default_factory=VisualQualityScore,

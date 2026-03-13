@@ -7,6 +7,7 @@ import math
 import os
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -85,7 +86,7 @@ class InstaScraper:
     async def get_profile(self, username: str, max_posts: int = 200) -> dict[str, Any]:
         cookies = {"sessionid": self.session_id}
         headers = {**self.base_headers, "referer": f"https://www.instagram.com/{username}/"}
-        api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+        api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={quote(username, safe='')}"
 
         async with httpx.AsyncClient(http2=True, follow_redirects=True, timeout=60.0) as client:
             profile_response = await client.get(api_url, headers=headers, cookies=cookies)
@@ -235,11 +236,11 @@ class InstaScraper:
                 "caption": caption,
                 "video_views": self._sanitize_stat(node.get("video_view_count") or node.get("play_count", 0)),
                 "video_url": video_url,
-                "type": "reel" if is_reel or (is_video and not node.get("product_type")) else "post",
+                "type": "reel" if is_reel or is_video else "post",
                 "timestamp": timestamp,
             }
 
-            if item["type"] == "reel" or is_video:
+            if item["type"] == "reel":
                 reels_list.append(item)
             else:
                 posts_list.append(item)

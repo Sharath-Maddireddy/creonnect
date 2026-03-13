@@ -31,7 +31,10 @@ def _to_float(value: int | float | None) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        result = float(value)
+        if result != result:
+            return None
+        return result
     except (TypeError, ValueError):
         return None
 

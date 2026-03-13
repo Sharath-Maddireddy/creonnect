@@ -14,7 +14,11 @@ else:
         print(f"job_id: {job_id}")
         val = r.get(key)
         if val:
-            data = json.loads(val)
+            try:
+                data = json.loads(val)
+            except json.JSONDecodeError as exc:
+                print(f"Invalid JSON for key {key}: {exc}")
+                continue
             all_jobs[job_id] = data
             print(f"Status: {data.get('status')}")
             print(f"Top-level keys: {list(data.keys())}")

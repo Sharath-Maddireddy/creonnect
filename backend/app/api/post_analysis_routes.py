@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import threading
 from datetime import datetime
@@ -14,10 +15,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from backend.app.ai.cringe_analysis import build_cringe_section_for_brand_safety
 from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.domain.post_models import SinglePostInsights, VisionAnalysis
+from backend.app.infra.redis_client import get_json, set_json
 from backend.app.services.post_insights_service import build_single_post_insights
+from backend.app.utils.logger import logger
 
 
 router = APIRouter(prefix="/api", tags=["Post Analysis"])
+CRINGE_SUMMARY_CACHE_KEY_PREFIX = "post:cringe_summary:"
+CRINGE_SUMMARY_CACHE_TTL_SECONDS = 86400
+# Best-effort process-local fallback for single-process/dev when Redis is unavailable.
 _CRINGE_SUMMARY_CACHE: dict[str, dict[str, Any]] = {}
 _CRINGE_SUMMARY_CACHE_LOCK = threading.Lock()
 
@@ -68,9 +74,61 @@ class PostAnalysisRequest(BaseModel):
 
 
 def _stable_post_id(*, media_url: str, post_type: str, caption_text: str) -> str:
-    payload = f"{media_url}|{post_type}|{caption_text}".encode("utf-8")
+    payload = json.dumps(
+        [media_url, post_type, caption_text],
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
     digest = hashlib.sha1(payload).hexdigest()[:16]
     return f"auto_{digest}"
+
+
+def _cringe_summary_key(post_id: str) -> str:
+    return f"{CRINGE_SUMMARY_CACHE_KEY_PREFIX}{post_id}"
+
+
+def _write_cringe_summary(post_id: str, payload: dict[str, Any]) -> None:
+    normalized_post_id = post_id.strip()
+    if not normalized_post_id:
+        return
+    try:
+        set_json(
+            _cringe_summary_key(normalized_post_id),
+            payload,
+            ttl_seconds=CRINGE_SUMMARY_CACHE_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[PostAnalysis] Failed to write cringe summary to Redis for post_id=%s: %s",
+            normalized_post_id,
+            exc,
+        )
+    with _CRINGE_SUMMARY_CACHE_LOCK:
+        _CRINGE_SUMMARY_CACHE[normalized_post_id] = payload
+
+
+def _read_cringe_summary(post_id: str) -> dict[str, Any] | None:
+    normalized_post_id = post_id.strip()
+    if not normalized_post_id:
+        return None
+    try:
+        payload = get_json(_cringe_summary_key(normalized_post_id))
+    except Exception as exc:
+        logger.warning(
+            "[PostAnalysis] Failed to read cringe summary from Redis for post_id=%s: %s",
+            normalized_post_id,
+            exc,
+        )
+        payload = None
+
+    if isinstance(payload, dict):
+        with _CRINGE_SUMMARY_CACHE_LOCK:
+            _CRINGE_SUMMARY_CACHE[normalized_post_id] = payload
+        return payload
+
+    with _CRINGE_SUMMARY_CACHE_LOCK:
+        cached_payload = _CRINGE_SUMMARY_CACHE.get(normalized_post_id)
+    return cached_payload if isinstance(cached_payload, dict) else None
 
 
 def _safe_float(value: Any) -> float | None:
@@ -110,7 +168,11 @@ def _vision_payload(post: SinglePostInsights, ai_analysis: dict[str, Any]) -> di
             payload["status"] = str(vision_status)
             return payload
         except Exception:
-            pass
+            logger.debug(
+                "Failed to validate cached vision_analysis payload: %s",
+                cached_vision,
+                exc_info=True,
+            )
     return VisionAnalysis(provider="gemini", status=str(vision_status), signals=[]).model_dump(mode="python")
 
 
@@ -236,9 +298,12 @@ async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
             run_ai=True,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to analyze post: {exc}")
+        logger.exception("Failed to analyze post: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to analyze post. Please try again later.")
 
     raw_post = pipeline_result.get("post")
+    if raw_post is None:
+        raise HTTPException(status_code=500, detail="Analysis pipeline returned no post data.")
     post = raw_post if isinstance(raw_post, SinglePostInsights) else SinglePostInsights.model_validate(raw_post)
     ai_analysis_raw = pipeline_result.get("ai_analysis")
     ai_analysis = ai_analysis_raw if isinstance(ai_analysis_raw, dict) else {}
@@ -252,9 +317,7 @@ async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
     vision_payload = _vision_payload(post, ai_analysis)
     cringe_summary = _cringe_summary_from_vision(vision_payload)
     cringe_summary["vision_status"] = vision_payload.get("status", "error")
-
-    with _CRINGE_SUMMARY_CACHE_LOCK:
-        _CRINGE_SUMMARY_CACHE[str(post_payload["post_id"])] = cringe_summary
+    _write_cringe_summary(str(post_payload["post_id"]), cringe_summary)
 
     return {
         "status": "succeeded",
@@ -277,8 +340,7 @@ def post_cringe_summary(post_id: str) -> dict[str, Any]:
     if not normalized_post_id:
         raise HTTPException(status_code=400, detail="post_id must be non-empty.")
 
-    with _CRINGE_SUMMARY_CACHE_LOCK:
-        payload = _CRINGE_SUMMARY_CACHE.get(normalized_post_id)
+    payload = _read_cringe_summary(normalized_post_id)
 
     if payload is None:
         raise HTTPException(
