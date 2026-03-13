@@ -101,6 +101,7 @@ Measures how well the **content topics align with the creator's dominant niche a
 **How it's computed:**
 - Base score = `mean(S4 across all posts) × 2` (S4 is the per-post audience relevance score).
 - If `niche_avg_engagement_rate` is provided, it's blended: `base × 0.70 + niche_er_ratio × 0.30`.
+- `niche_er_ratio` = (actual ER / niche_avg_engagement_rate) × 100, capped at 100
 - In our run, no niche benchmark was provided → score is **S4-only**.
 
 ---
@@ -140,7 +141,7 @@ Measures **how safe and brand-friendly the content is** (no profanity, harmful r
 ```
 brand_safety = mean(S6 across all posts) × 2
 ```
-- If any post has S6_raw ≤ 40/100 ("severe"): additional `-10` penalty.
+- If any post has S6_raw ≤ 40 (indicating severe brand risk): subtract 10 from the final brand_safety score.
 - A score of 100 (as in our result) means **zero penalties across all 30 posts**.
 
 ---
@@ -355,6 +356,12 @@ Actionable steps ranked by `impact_level`:
 | Brand Safety | 100.0 | EXCEPTIONAL — zero risky content detected |
 | Best post (P) | 62.38 | "Not everyone gets access…" — strong caption (S2=44) |
 | Weakest posts (P) | 48.22 | Captionless images — S2 floors at 12.5 |
+
+
+
+
+
+
 
 
 

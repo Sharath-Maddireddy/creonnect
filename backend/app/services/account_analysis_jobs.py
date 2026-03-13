@@ -840,3 +840,4 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             quality=quality,
             result=None,
         )
+        raise

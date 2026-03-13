@@ -10,6 +10,7 @@ from redis import Redis
 
 
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+_redis_client: Redis | None = None
 _INCR_WITH_EXPIRE_SCRIPT = """
 local current = redis.call('INCR', KEYS[1])
 if current == 1 then
@@ -22,9 +23,13 @@ _incr_script = None
 
 def get_redis() -> Redis:
     """Return a Redis client configured from environment."""
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
     redis_url = os.getenv("REDIS_URL", DEFAULT_REDIS_URL)
     # Keep binary responses enabled for RQ, which stores pickled job payloads.
-    return Redis.from_url(redis_url, decode_responses=False)
+    _redis_client = Redis.from_url(redis_url, decode_responses=False)
+    return _redis_client
 
 
 def set_json(key: str, obj: dict[str, Any], ttl_seconds: int | None = None) -> None:

@@ -15,6 +15,7 @@ from typing import Any
 
 INPUT_PATH = Path("backend/data/chat_train.jsonl")
 OUTPUT_PATH = Path("backend/data/chat_train.sanitized.jsonl")
+DROPPED_PATH = Path("backend/data/chat_train.dropped.jsonl")
 
 IDENTIFIER_KEYS = {"username", "handle", "full_name", "id", "account_id", "user_id"}
 INSTAGRAM_URL_RE = re.compile(
@@ -160,9 +161,6 @@ def _detect_drop_reason(row: dict[str, Any]) -> str | None:
 
     free_texts: list[str] = []
     _collect_free_text(row, free_texts)
-    for txt in free_texts:
-        if "niche" in txt:
-            niche_texts.append(txt)
 
     if not suggestion_texts:
         _collect_text_from_key(row, {"content_suggestions", "suggestions", "recommendations"}, suggestion_texts)
@@ -191,7 +189,11 @@ def main() -> None:
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    with INPUT_PATH.open("r", encoding="utf-8") as src, OUTPUT_PATH.open("w", encoding="utf-8") as dst:
+    with (
+        INPUT_PATH.open("r", encoding="utf-8") as src,
+        OUTPUT_PATH.open("w", encoding="utf-8") as dst,
+        DROPPED_PATH.open("w", encoding="utf-8") as dropped_dst,
+    ):
         for line in src:
             raw = line.strip()
             if not raw:
@@ -217,6 +219,7 @@ def main() -> None:
             if drop_reason:
                 sanitized_row["_dropped_reason"] = drop_reason
                 dropped_rows += 1
+                dropped_dst.write(json.dumps(sanitized_row, ensure_ascii=False) + "\n")
                 continue
 
             dst.write(json.dumps(sanitized_row, ensure_ascii=False) + "\n")
@@ -224,6 +227,7 @@ def main() -> None:
     print(f"total={total}")
     print(f"anonymized_rows={anonymized_rows}")
     print(f"dropped_rows={dropped_rows}")
+    print(f"dropped_path={DROPPED_PATH}")
 
 
 if __name__ == "__main__":

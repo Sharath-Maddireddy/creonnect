@@ -38,14 +38,22 @@ from backend.app.services.account_analysis_jobs import (
     run_account_analysis_job,
     initialize_job_status,
 )
-from backend.app.infra.redis_client import get_redis
+from backend.app.infra.redis_client import DEFAULT_REDIS_URL, get_redis
 
 
 def main() -> None:
     # ── Flush stale Redis data ────────────────────────────────────
     r = get_redis()
-    redis_url = os.environ.get("REDIS_URL", "")
-    if "localhost" not in redis_url and "127.0.0.1" not in redis_url:
+    redis_url = os.environ.get("REDIS_URL", DEFAULT_REDIS_URL)
+    host = None
+    try:
+        host = r.connection_pool.connection_kwargs.get("host")
+    except Exception:
+        host = None
+    is_local = host in {"localhost", "127.0.0.1"} if isinstance(host, str) else (
+        "localhost" in redis_url or "127.0.0.1" in redis_url
+    )
+    if not is_local:
         print(f"[smoke] FATAL: Refusing to flushdb on non-local Redis: {redis_url}", flush=True)
         sys.exit(1)
     r.flushdb()
@@ -56,7 +64,10 @@ def main() -> None:
         print(f"[smoke] FATAL: Fixture not found at {fixture_path.resolve()}", flush=True)
         sys.exit(1)
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-    items = fixture["items"]
+    items = fixture.get("items")
+    if not items:
+        print("[smoke] FATAL: Fixture missing 'items' key or empty", flush=True)
+        sys.exit(1)
     account_id = fixture.get("username", "fixture_account")
 
     # Step 1: Build seed posts

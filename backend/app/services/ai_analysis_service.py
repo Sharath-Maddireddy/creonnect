@@ -602,7 +602,7 @@ async def run_vision_analysis(
             if floored_score != cringe_score:
                 logger.info(
                     "[Cringe] Applied cringe floor for media_url=%s score=%s->%s",
-                    media_url,
+                    _sanitize_url_for_logging(media_url),
                     cringe_score,
                     floored_score,
                 )
@@ -635,7 +635,11 @@ async def run_vision_analysis(
 
         return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
     except Exception as e:
-        logger.error(f"[Vision] Gemini vision analysis failed for media_url={media_url}: {e}")
+        logger.error(
+            "[Vision] Gemini vision analysis failed for media_url=%s: %s",
+            _sanitize_url_for_logging(media_url),
+            e,
+        )
         return VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
 
 
@@ -652,11 +656,20 @@ def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -
             response = model.generate_content([instruction, media_url])
         text = getattr(response, "text", None)
         if not isinstance(text, str):
-            logger.warning(f"[Vision] Gemini {model_name} returned no text for media_url={media_url}")
+            logger.warning(
+                "[Vision] Gemini %s returned no text for media_url=%s",
+                model_name,
+                _sanitize_url_for_logging(media_url),
+            )
             raise ValueError("Gemini response did not include text output.")
         return text
     except Exception as e:
-        logger.error(f"[Vision] Gemini {model_name} failed for media_url={media_url}: {e}")
+        logger.error(
+            "[Vision] Gemini %s failed for media_url=%s: %s",
+            model_name,
+            _sanitize_url_for_logging(media_url),
+            e,
+        )
         raise
 
 
@@ -669,7 +682,10 @@ async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_
             timeout=10.0
         )
     except asyncio.TimeoutError:
-        logger.error(f"[Vision] Gemini vision analysis timed out for media_url={media_url}")
+        logger.error(
+            "[Vision] Gemini vision analysis timed out for media_url=%s",
+            _sanitize_url_for_logging(media_url),
+        )
         raise
 
 

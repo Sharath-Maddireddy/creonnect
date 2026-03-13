@@ -66,7 +66,11 @@ try:
                     out.write(f"result type: {type(result)}\n")
                     if isinstance(result, dict):
                         out.write(f"result keys: {list(result.keys())}\n")
-                        out.write(json.dumps(result, indent=2, default=str)[:5000] + "\n")
+                        result_json = json.dumps(result, indent=2, default=str)
+                        if len(result_json) > 5000:
+                            out.write(result_json[:5000] + "\n... [TRUNCATED]\n")
+                        else:
+                            out.write(result_json + "\n")
             except Exception as e:
                 out.write(f"Error fetching RQ job: {e}\n")
 finally:
