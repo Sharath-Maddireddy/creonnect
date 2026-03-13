@@ -14,6 +14,16 @@ from backend.app.services.post_insights_service import build_single_post_insight
 
 
 def _build_post(media_id: str, reach: int = 2000, likes: int = 120, comments: int = 20) -> SinglePostInsights:
+    core = CoreMetrics(
+        reach=reach,
+        impressions=reach + 200,
+        likes=likes,
+        comments=comments,
+        saves=15,
+        shares=10,
+        profile_visits=8,
+        website_taps=2,
+    )
     return SinglePostInsights(
         account_id="acct_pred",
         media_id=media_id,
@@ -21,17 +31,8 @@ def _build_post(media_id: str, reach: int = 2000, likes: int = 120, comments: in
         media_type="IMAGE",
         caption_text="Practical content with clear value.",
         published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        core_metrics=CoreMetrics(
-            reach=reach,
-            impressions=reach + 200,
-            likes=likes,
-            comments=comments,
-            saves=15,
-            shares=10,
-            profile_visits=8,
-            website_taps=2,
-        ),
-        derived_metrics=DerivedMetrics(engagement_rate=(likes + comments + 15 + 10) / reach),
+        core_metrics=core,
+        derived_metrics=compute_derived_metrics(core),
         benchmark_metrics=BenchmarkMetrics(),
     )
 

@@ -105,31 +105,44 @@ def main() -> None:
 
         # S1 - Visual Quality
         if post.visual_quality_score is not None:
-            post_data["visual_quality_score"] = post.visual_quality_score.model_dump(mode="python")
+            vqs = post.visual_quality_score
+            post_data["visual_quality_score"] = vqs.model_dump(mode="python") if hasattr(vqs, "model_dump") else str(vqs)
         else:
             post_data["visual_quality_score"] = None
 
         # S2 - Caption Effectiveness
         if post.caption_effectiveness_score is not None:
-            post_data["caption_effectiveness_score"] = post.caption_effectiveness_score.model_dump(mode="python")
+            ces = post.caption_effectiveness_score
+            post_data["caption_effectiveness_score"] = (
+                ces.model_dump(mode="python") if hasattr(ces, "model_dump") else str(ces)
+            )
         else:
             post_data["caption_effectiveness_score"] = None
 
         # S3 - Content Clarity
         if post.content_clarity_score is not None:
-            post_data["content_clarity_score"] = post.content_clarity_score.model_dump(mode="python")
+            ccs = post.content_clarity_score
+            post_data["content_clarity_score"] = (
+                ccs.model_dump(mode="python") if hasattr(ccs, "model_dump") else str(ccs)
+            )
         else:
             post_data["content_clarity_score"] = None
 
         # S5 - Engagement Potential
         if post.engagement_potential_score is not None:
-            post_data["engagement_potential_score"] = post.engagement_potential_score.model_dump(mode="python")
+            eps = post.engagement_potential_score
+            post_data["engagement_potential_score"] = (
+                eps.model_dump(mode="python") if hasattr(eps, "model_dump") else str(eps)
+            )
         else:
             post_data["engagement_potential_score"] = None
 
         # Weighted Post Score
         if post.weighted_post_score is not None:
-            post_data["weighted_post_score"] = post.weighted_post_score.model_dump(mode="python")
+            wps = post.weighted_post_score
+            post_data["weighted_post_score"] = (
+                wps.model_dump(mode="python") if hasattr(wps, "model_dump") else str(wps)
+            )
         else:
             post_data["weighted_post_score"] = None
 

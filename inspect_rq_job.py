@@ -39,7 +39,7 @@ try:
     # Check the app-level job keys
     for k in all_keys:
         if k.startswith("account_analysis:job:"):
-            job_id = k.split(":")[-1]
+            job_id = k.split(":", 2)[-1]
             out.write(f"\n=== App Job: {job_id} ===\n")
             val = r.get(k)
             if val:

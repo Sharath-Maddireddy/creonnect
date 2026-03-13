@@ -44,6 +44,10 @@ def compute_predicted_engagement_rate(
         notes.append("s5_total clamped to 0..50")
     s5 = _clamp(s5, 0.0, 50.0)
 
+    if tier_avg < 0:
+        notes.append("tier_avg_er is negative; treating predicted as 0")
+        return 0.0, notes
+
     predicted = tier_avg * (s5 / 50.0)
     predicted = max(0.0, predicted)
 

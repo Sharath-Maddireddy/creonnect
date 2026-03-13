@@ -40,9 +40,9 @@ def compare_posts(current_post: dict, previous_post: dict) -> dict:
         engagement_change_pct = 0.0
         explanation = "Engagement is unchanged at zero for both posts."
         special_case_explanation = True
-    elif engagement_previous == 0 and engagement_current > 0:
+    elif engagement_previous == 0:
         engagement_change_pct = None
-        explanation = "First engagement recorded."
+        explanation = "No previous engagement to compare against."
     else:
         engagement_change_pct = (
             (engagement_current - engagement_previous) / engagement_previous
