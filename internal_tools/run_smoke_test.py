@@ -14,8 +14,12 @@ import json
 import traceback
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+INTERNAL_TOOLS_DIR = Path(__file__).resolve().parent
+ARTIFACTS_DIR = INTERNAL_TOOLS_DIR / "artifacts"
+
 # ── Load .env BEFORE any backend imports ──────────────────────────
-env_path = Path("backend/.env")
+env_path = REPO_ROOT / "backend" / ".env"
 if env_path.exists():
     for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -59,7 +63,7 @@ def main() -> None:
     r.flushdb()
     print("[smoke] Redis database flushed", flush=True)
 
-    fixture_path = Path("fixtures/ig_dhirendra_raw.json")
+    fixture_path = INTERNAL_TOOLS_DIR / "fixtures" / "ig_dhirendra_raw.json"
     if not fixture_path.exists():
         print(f"[smoke] FATAL: Fixture not found at {fixture_path.resolve()}", flush=True)
         sys.exit(1)
@@ -152,11 +156,13 @@ def main() -> None:
 
         per_post_output.append(post_data)
 
-    Path("smoke_per_post.json").write_text(
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    smoke_per_post_path = ARTIFACTS_DIR / "smoke_per_post.json"
+    smoke_per_post_path.write_text(
         json.dumps(per_post_output, indent=2, ensure_ascii=False, default=str) + "\n",
         encoding="utf-8",
     )
-    print(f"[smoke] Per-post data written to smoke_per_post.json", flush=True)
+    print(f"[smoke] Per-post data written to {smoke_per_post_path}", flush=True)
 
     # Step 3: Run account-level analysis job directly
     job_id = "smoke-test-v2"
@@ -182,7 +188,8 @@ def main() -> None:
     from backend.app.infra.redis_client import get_json
     status = get_json(f"account_analysis:job:{job_id}")
     if status:
-        Path("smoke_final_status.json").write_text(
+        smoke_final_status_path = ARTIFACTS_DIR / "smoke_final_status.json"
+        smoke_final_status_path.write_text(
             json.dumps(status, indent=2, ensure_ascii=False, default=str) + "\n",
             encoding="utf-8",
         )
@@ -192,7 +199,7 @@ def main() -> None:
     else:
         print("[smoke] WARNING: No status found in Redis", flush=True)
 
-    print("[smoke] ✅ Smoke test complete. Check smoke_final_status.json + smoke_per_post.json", flush=True)
+    print(f"[smoke] Smoke test complete. Check {ARTIFACTS_DIR}", flush=True)
 
 
 if __name__ == "__main__":

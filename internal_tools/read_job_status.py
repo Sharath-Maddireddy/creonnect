@@ -1,6 +1,10 @@
 """Read job status directly from Redis and dump to a file."""
 import json
+from pathlib import Path
 import redis
+
+ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
+ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 r = redis.from_url("redis://localhost:6379/0", decode_responses=True)
 keys = r.keys("account_analysis:job:*")
@@ -30,6 +34,7 @@ else:
         else:
             print(f"No value for key: {key}")
     if all_jobs:
-        with open("smoke_job_status.json", "w", encoding="utf-8") as f:
+        output_path = ARTIFACTS_DIR / "smoke_job_status.json"
+        with output_path.open("w", encoding="utf-8") as f:
             json.dump(all_jobs, f, indent=2, ensure_ascii=False, default=str)
-        print(f"Full status data for {len(all_jobs)} job(s) written to smoke_job_status.json")
+        print(f"Full status data for {len(all_jobs)} job(s) written to {output_path}")

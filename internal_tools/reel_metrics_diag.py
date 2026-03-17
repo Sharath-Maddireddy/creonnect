@@ -3,7 +3,7 @@
 Cringe analysis test for Instagram reel DVVu6XMki_J
 with full TIME and COST tracking.
 
-Run: python test_reel_with_metrics.py
+Run: python internal_tools/reel_metrics_diag.py
 """
 import sys
 import os
@@ -13,8 +13,14 @@ import time
 import io
 import urllib.request
 from datetime import datetime
+from pathlib import Path
 
 sys.stdout.reconfigure(encoding='utf-8')
+
+INTERNAL_TOOLS_DIR = Path(__file__).resolve().parent
+ARTIFACTS_DIR = INTERNAL_TOOLS_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+REEL_INFO_PATH = ARTIFACTS_DIR / "reel_info.json"
 
 # ── Config ──────────────────────────────────────────────────────────────────
 REEL_URL     = "https://www.instagram.com/reel/DVbTkfTE98X/"
@@ -41,20 +47,20 @@ print(f"  Started  : {wall_start.strftime('%Y-%m-%d %H:%M:%S')}")
 print()
 
 # ── Step 1: Fetch thumbnail from Instagram page (og:image) ───────────────────
-print("📥  [1/4] Loading pre-fetched reel metadata from reel_info.json...")
+print(f"📥  [1/4] Loading pre-fetched reel metadata from {REEL_INFO_PATH.name}...")
 t0 = time.perf_counter()
 
 thumbnail_url = None
 caption_text  = "No caption found"
 
 try:
-    with open("reel_info.json", "r", encoding="utf-8") as f:
+    with REEL_INFO_PATH.open("r", encoding="utf-8") as f:
         info = json.load(f)
     thumbnail_url = info.get("thumbnail_url")
     caption_text  = info.get("caption", "No caption found")
-    print(f"     ✅  Loaded thumbnail URL and caption from reel_info.json")
+    print(f"     ✅  Loaded thumbnail URL and caption from {REEL_INFO_PATH}")
 except Exception as e:
-    print(f"     ❌  Could not load reel_info.json: {e}")
+    print(f"     ❌  Could not load {REEL_INFO_PATH}: {e}")
     sys.exit(1)
 
 timings["page_fetch_s"] = round(time.perf_counter() - t0, 3)
@@ -296,8 +302,8 @@ output = {
     },
 }
 
-out_path = "reel_DVbTkfTE98X_result.json"
-with open(out_path, "w", encoding="utf-8") as f:
+out_path = ARTIFACTS_DIR / "reel_DVbTkfTE98X_result.json"
+with out_path.open("w", encoding="utf-8") as f:
     json.dump(output, f, indent=2, ensure_ascii=False)
 print(f"\n  💾  Full results saved → {out_path}")
 print()

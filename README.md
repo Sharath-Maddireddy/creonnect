@@ -62,6 +62,12 @@ Note: `INSTAGRAM_SESSION_ID` is deprecated and only used for legacy dev scraper 
 - Generator script: `backend/app/demo/generate_fake_instagram.py`
 - Output file: `backend/app/demo/synthetic_creator.json`
 
+## Internal Tools
+
+- Root-level diagnostics, fixture assets, and operational helper scripts now live under `internal_tools/`.
+- Generated helper outputs are stored under `internal_tools/artifacts/`.
+- Sidecar experiments that are not part of the launch product live under `experimental/`.
+
 ## Dev Fixture Tools (Instagram Scraper)
 
 These scripts are `dev-only` for fixture generation/testing and are not part of production ingestion.
@@ -91,18 +97,18 @@ set INSTAGRAM_SESSION_ID=your_instagram_session_id   # Windows
 export INSTAGRAM_SESSION_ID=your_instagram_session_id  # Mac/Linux
 
 # Generate raw Instagram fixture JSON from scraper output (Windows single-line)
-python -m backend.app.tools.generate_ig_raw_fixtures --username <name> --limit 30 --out fixtures/ig_<name>_raw.json
+python -m backend.app.tools.generate_ig_raw_fixtures --username <name> --limit 30 --out internal_tools/fixtures/ig_<name>_raw.json
 
 # Generate raw Instagram fixture JSON from scraper output
 # (Mac/Linux with line continuation)
 python -m backend.app.tools.generate_ig_raw_fixtures \
   --username <name> \
   --limit 30 \
-  --out fixtures/ig_<name>_raw.json
+  --out internal_tools/fixtures/ig_<name>_raw.json
 
 # Enqueue account-analysis from a generated fixture
 python -m backend.app.tools.enqueue_account_analysis_from_fixture \
-  --fixture fixtures/ig_<name>_raw.json
+  --fixture internal_tools/fixtures/ig_<name>_raw.json
 ```
 
 If `INSTAGRAM_SESSION_ID` is missing, fixture generation exits with:

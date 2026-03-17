@@ -1,6 +1,7 @@
 """Inspect RQ job status directly and write output to file."""
 import os
 import sys
+from pathlib import Path
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import json
@@ -8,8 +9,12 @@ import redis
 from rq import Queue
 from rq.job import Job
 
+ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
+ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
 # Redirect all output to file
-out = open("inspect_output.txt", "w", encoding="utf-8")
+inspect_output_path = ARTIFACTS_DIR / "inspect_output.txt"
+out = inspect_output_path.open("w", encoding="utf-8")
 try:
     r = redis.from_url("redis://localhost:6379/0", decode_responses=True)
 
@@ -75,4 +80,4 @@ try:
                 out.write(f"Error fetching RQ job: {e}\n")
 finally:
     out.close()
-print("Written to inspect_output.txt")
+print(f"Written to {inspect_output_path}")

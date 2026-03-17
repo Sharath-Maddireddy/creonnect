@@ -1,4 +1,8 @@
 import urllib.request, re, sys, json
+from pathlib import Path
+
+INTERNAL_TOOLS_DIR = Path(__file__).resolve().parent
+ARTIFACTS_DIR = INTERNAL_TOOLS_DIR / "artifacts"
 
 REEL_URL = "https://www.instagram.com/reel/DVbTkfTE98X/"
 
@@ -47,6 +51,8 @@ print(f"CAPTION={caption}")
 
 # Save for main script
 info = {"thumbnail_url": found_url, "caption": caption}
-with open("reel_info.json", "w") as f:
+ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+reel_info_path = ARTIFACTS_DIR / "reel_info.json"
+with reel_info_path.open("w", encoding="utf-8") as f:
     json.dump(info, f, indent=2)
-print("Saved to reel_info.json")
+print(f"Saved to {reel_info_path}")

@@ -7,8 +7,12 @@ from pathlib import Path
 from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.services.post_insights_service import build_single_post_insights
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+INTERNAL_TOOLS_DIR = Path(__file__).resolve().parent
+ARTIFACTS_DIR = INTERNAL_TOOLS_DIR / "artifacts"
+
 # Load env variables from backend/.env if it exists
-env_path = Path("backend/.env")
+env_path = REPO_ROOT / "backend" / ".env"
 if env_path.exists():
     for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -65,7 +69,8 @@ async def analyze_user_post():
     )
     
     # Save the result
-    output_path = Path("user_post_analysis_result.json")
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = ARTIFACTS_DIR / "user_post_analysis_result.json"
     serialized_result = _to_jsonable(res)
     output_path.write_text(json.dumps(serialized_result, indent=2))
     print(f"Analysis complete. Results saved to {output_path}")

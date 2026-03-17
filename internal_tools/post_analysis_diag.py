@@ -6,7 +6,11 @@ from datetime import datetime
 from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.services.post_insights_service import build_single_post_insights
 
-env_path = Path("backend/.env")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+INTERNAL_TOOLS_DIR = Path(__file__).resolve().parent
+ARTIFACTS_DIR = INTERNAL_TOOLS_DIR / "artifacts"
+
+env_path = REPO_ROOT / "backend" / ".env"
 if env_path.exists():
     for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -41,7 +45,9 @@ async def test_post():
     
     # Also write the result to a file for easy viewing
     dump_res = res["post"].model_dump(mode="python")
-    Path("test_analysis_result.json").write_text(json.dumps(dump_res, indent=2, default=str))
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = ARTIFACTS_DIR / "test_analysis_result.json"
+    output_path.write_text(json.dumps(dump_res, indent=2, default=str))
 
 if __name__ == "__main__":
     asyncio.run(test_post())

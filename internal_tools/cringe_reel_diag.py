@@ -1,6 +1,6 @@
 """
 Quick cringe analysis test for an Instagram reel thumbnail via Gemini.
-Run: python test_cringe_reel.py
+Run: python internal_tools/cringe_reel_diag.py
 """
 import os
 import json

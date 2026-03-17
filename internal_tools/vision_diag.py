@@ -1,11 +1,13 @@
 import asyncio
+from pathlib import Path
 from backend.app.services.ai_analysis_service import run_vision_analysis
 from backend.app.domain.post_models import SinglePostInsights, CoreMetrics, DerivedMetrics, BenchmarkMetrics
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 async def diag():
     import os
-    from pathlib import Path
-    env_path = Path("backend/.env")
+    env_path = REPO_ROOT / "backend" / ".env"
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()

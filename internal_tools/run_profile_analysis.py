@@ -1,8 +1,8 @@
 """Standalone profile analysis runner — no Redis or RQ required.
 
 Usage:
-    python run_profile_analysis.py --fixture fixtures/ig_ig_dhirendra_raw.json
-    python run_profile_analysis.py --fixture fixtures/ig_dhirendra_raw.json
+    python internal_tools/run_profile_analysis.py --fixture internal_tools/fixtures/ig_ig_dhirendra_raw.json
+    python internal_tools/run_profile_analysis.py --fixture internal_tools/fixtures/ig_dhirendra_raw.json
 """
 from __future__ import annotations
 
@@ -15,8 +15,10 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 # Load env vars (GEMINI_API_KEY, OPENAI_API_KEY, etc.)
-load_dotenv(Path(__file__).resolve().parent / "backend" / ".env", override=False)
+load_dotenv(REPO_ROOT / "backend" / ".env", override=False)
 load_dotenv(override=False)
 
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
@@ -104,7 +106,11 @@ async def _analyze_all_posts(posts: list[SinglePostInsights], concurrency: int) 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run profile analysis from fixture, no Redis needed.")
-    parser.add_argument("--fixture", required=True, help="Path to fixture JSON (e.g. fixtures/ig_ig_dhirendra_raw.json)")
+    parser.add_argument(
+        "--fixture",
+        required=True,
+        help="Path to fixture JSON (e.g. internal_tools/fixtures/ig_ig_dhirendra_raw.json)",
+    )
     parser.add_argument("--account-id", default=None, help="Override account_id (defaults to 'username' in fixture)")
     parser.add_argument("--concurrency", type=int, default=2, help="Max concurrent AI post analyses (max 3)")
     parser.add_argument("--out", default=None, help="Output JSON path for results (default: <fixture_stem>_result.json)")

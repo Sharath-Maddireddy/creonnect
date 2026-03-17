@@ -2,7 +2,9 @@ import os
 import asyncio
 from pathlib import Path
 
-env_path = Path("backend/.env")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+env_path = REPO_ROOT / "backend" / ".env"
 if env_path.exists():
     for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -38,4 +40,5 @@ async def test_vision():
         import traceback
         traceback.print_exc()
 
-asyncio.run(test_vision())
+if __name__ == "__main__":
+    asyncio.run(test_vision())
