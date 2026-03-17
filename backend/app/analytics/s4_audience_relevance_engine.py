@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 from backend.app.ai.llm_client import LLMClient, LLMClientError
 from backend.app.ai.prompts import S4_AUDIENCE_RELEVANCE_PROMPT
+from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.post_models import AudienceRelevanceScore
 
 
@@ -66,20 +66,22 @@ async def analyze_audience_relevance_via_llm(
         return compute_s4_audience_relevance(post_category, creator_dominant_category)
 
     prompt = {
-        "system": "Return only valid JSON matching the schema requested.",
+        "system": (
+            "Return only valid TOON format (Token-Oriented Object Notation). "
+            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
+        ),
         "user": S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", normalized_creator).replace(
             "{post_category}", normalized_post
         ),
-        "response_format": {"type": "json_object"},
     }
 
     try:
         raw_text = await asyncio.to_thread(LLMClient().generate, prompt)
         if not isinstance(raw_text, str) or not raw_text.strip():
             raise LLMClientError("LLM returned empty response.")
-        payload = json.loads(raw_text)
+        payload = toon_loads(raw_text)
         if not isinstance(payload, dict):
-            raise ValueError("LLM output must be a JSON object.")
+            raise ValueError("LLM output must be a TOON object.")
 
         s4_raw_0_100 = _coerce_int_0_100(payload.get("s4_raw_0_100"))
         affinity_band = payload.get("affinity_band")
@@ -106,7 +108,7 @@ async def analyze_audience_relevance_via_llm(
             total_0_50=total_0_50,
             notes=notes,
         )
-    except (json.JSONDecodeError, LLMClientError):
+    except (ValueError, LLMClientError):
         return compute_s4_audience_relevance(post_category, creator_dominant_category)
     except Exception:
         return compute_s4_audience_relevance(post_category, creator_dominant_category)

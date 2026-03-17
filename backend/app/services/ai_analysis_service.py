@@ -16,6 +16,7 @@ from urllib.parse import urlparse, urlunparse
 
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
 from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_RELEVANCE_PROMPT
+from backend.app.ai.toon import loads as toon_loads
 from backend.app.ai.llm_client import LLMClient
 from backend.app.analytics.caption_s2_engine import analyze_caption_via_llm
 from backend.app.analytics.content_score import compute_content_score
@@ -63,71 +64,6 @@ def _parse_timeout(env_key: str, default: float) -> float:
 LLM_TIMEOUT_SECONDS = _parse_timeout("LLM_TIMEOUT_SECONDS", 60.0)
 _GENAI_LOCK = threading.Lock()
 _ANALYSIS_CACHE_LOCK = threading.Lock()
-
-S5_JSON_SCHEMA: dict[str, Any] = {
-    "name": "post_analysis_response",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["summary", "drivers", "recommendations", "engagement_potential_score"],
-        "properties": {
-            "summary": {"type": "string"},
-            "drivers": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["id", "label", "type", "explanation"],
-                    "properties": {
-                        "id": {"type": "string"},
-                        "label": {"type": "string"},
-                        "type": {"type": "string", "enum": ["POSITIVE", "LIMITING"]},
-                        "explanation": {"type": "string"},
-                    },
-                },
-            },
-            "recommendations": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["id", "text", "impact_level"],
-                    "properties": {
-                        "id": {"type": "string"},
-                        "text": {"type": "string"},
-                        "impact_level": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
-                    },
-                },
-            },
-            "engagement_potential_score": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": [
-                    "emotional_resonance",
-                    "shareability",
-                    "save_worthiness",
-                    "comment_potential",
-                    "novelty_or_value",
-                    "total",
-                    "notes",
-                ],
-                "properties": {
-                    "emotional_resonance": {"type": "number", "minimum": 0, "maximum": 10},
-                    "shareability": {"type": "number", "minimum": 0, "maximum": 10},
-                    "save_worthiness": {"type": "number", "minimum": 0, "maximum": 10},
-                    "comment_potential": {"type": "number", "minimum": 0, "maximum": 10},
-                    "novelty_or_value": {"type": "number", "minimum": 0, "maximum": 10},
-                    "total": {"type": "number", "minimum": 0, "maximum": 50},
-                    "notes": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-            },
-        },
-    },
-    "strict": True,
-}
 
 
 class AIAnalysisResult(TypedDict):
@@ -493,13 +429,14 @@ def _apply_cringe_prompt_floor(cringe_score: int, cringe_signals: list[str]) -> 
 async def run_vision_analysis(
     post: SinglePostInsights,
 ) -> dict[str, Any]:
-    """Run Gemini Vision analysis for a post media URL with strict JSON parsing."""
+    """Run Gemini Vision analysis for a post media URL with strict TOON parsing."""
     from urllib.parse import urlparse
 
     instruction = (
         "You are an expert Social Media Art Director and Computer Vision analysis engine. "
         "Analyze the provided Instagram media (image/frame) strictly through the lens of technical visual quality "
-        "and compositional structure. Return ONLY valid JSON. Do not include markdown or extra keys.\n\n"
+        "and compositional structure. Return ONLY valid TOON format (Token-Oriented Object Notation). "
+        "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes.\n\n"
         "You must evaluate the image objectively on the following deterministic rules to calculate S1 sub-scores:\n"
         "1) COMPOSITION (0-10): Rule of Thirds/symmetry (+3), dominant_focus present (+4), >4 primary objects (-3), "
         "awkward crops (-3), remaining points (0-3) for depth-of-field/subject isolation.\n"
@@ -509,29 +446,30 @@ async def run_vision_analysis(
         "3) SUBJECT_CLARITY (0-10): subject in focus (+5), clear separation (+3), visible expressive face if human (+2).\n"
         "4) AESTHETIC_QUALITY (0-10): pro color grade (+3), harmonious palette (+2), "
         "heavy text overlays (-3) or very heavy (-5), remaining points for premium visual feel.\n\n"
-        "Output JSON must match this schema:\n"
-        "{"
-        "\"objects\": [\"...\"] ,"
-        "\"dominant_focus\": \"string|null\","
-        "\"scene_description\": \"string\","
-        "\"visual_style\": \"string\","
-        "\"scene_type\": \"string|null\","
-        "\"visual_quality_score\": {"
-        "\"composition\": 0.0-10.0,"
-        "\"lighting\": 0.0-10.0,"
-        "\"subject_clarity\": 0.0-10.0,"
-        "\"aesthetic_quality\": 0.0-10.0"
-        "},"
-        "\"technical_flaws\": [\"string\", \"string\"],"
-        "\"detected_text\": \"string|null\","
-        "\"hook_strength_score\": 0.0-1.0,"
-        "\"cringe_score\": 0-100,"
-        "\"cringe_signals\": [\"string\"],"
-        "\"cringe_fixes\": [\"string\"],"
-        "\"production_level\": \"low|medium|high\","
-        "\"adult_content_detected\": true|false,"
-        "\"adult_content_confidence\": 0-100"
-        "}\n\n"
+        "Output TOON must include exactly these keys:\n"
+        "objects\n"
+        "  - object\n"
+        "dominant_focus value_or_null\n"
+        "scene_description value\n"
+        "visual_style value\n"
+        "scene_type value_or_null\n"
+        "visual_quality_score\n"
+        "  composition 0.0-10.0\n"
+        "  lighting 0.0-10.0\n"
+        "  subject_clarity 0.0-10.0\n"
+        "  aesthetic_quality 0.0-10.0\n"
+        "technical_flaws\n"
+        "  - string\n"
+        "detected_text value_or_null\n"
+        "hook_strength_score 0.0-1.0\n"
+        "cringe_score 0-100\n"
+        "cringe_signals\n"
+        "  - string\n"
+        "cringe_fixes\n"
+        "  - string\n"
+        "production_level low|medium|high\n"
+        "adult_content_detected true|false\n"
+        "adult_content_confidence 0-100\n\n"
         "Cringe rubric: 0-20 polished/natural; 21-40 minor awkwardness; 41-60 noticeable awkwardness or weak concept; "
         "61-80 strong cringe (forced, confusing, low coherence); 81-100 extreme cringe. "
         "Floor rules: if concept is confusing or nonsensical score must be >=65; "
@@ -567,9 +505,9 @@ async def run_vision_analysis(
             instruction=instruction,
             media_url=media_url,
         )
-        payload = json.loads(raw_text)
+        payload = toon_loads(raw_text)
         if not isinstance(payload, dict):
-            raise ValueError("Gemini output must be a JSON object.")
+            raise ValueError("Gemini output must be a TOON object.")
 
         required_keys = {
             "objects",
@@ -589,7 +527,7 @@ async def run_vision_analysis(
             "adult_content_confidence",
         }
         if not required_keys.issubset(payload.keys()):
-            raise ValueError("Gemini JSON schema mismatch.")
+            raise ValueError("Gemini TOON schema mismatch.")
 
         objects = payload.get("objects")
         dominant_focus = payload.get("dominant_focus")
@@ -753,11 +691,36 @@ async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_
 
 
 def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, Any]:
-    """Build a compact prompt requesting strictly structured JSON output."""
+    """Build a compact prompt requesting strictly structured TOON output."""
     return {
         "system": (
             "You are an Instagram post analyst. "
-            "Return ONLY valid JSON with keys: "
+            "Return ONLY valid TOON format (Token-Oriented Object Notation). "
+            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes. "
+            "For lists of objects, put '-' on its own line and indent fields beneath it. "
+            "Example:\n"
+            "summary Example summary.\n"
+            "drivers\n"
+            "  -\n"
+            "    id driver_1\n"
+            "    label Strong hook\n"
+            "    type POSITIVE\n"
+            "    explanation Uses core_metrics.reach\n"
+            "recommendations\n"
+            "  -\n"
+            "    id rec_1\n"
+            "    text Add a clear CTA\n"
+            "    impact_level HIGH\n"
+            "engagement_potential_score\n"
+            "  emotional_resonance 6\n"
+            "  shareability 5\n"
+            "  save_worthiness 4\n"
+            "  comment_potential 3\n"
+            "  novelty_or_value 5\n"
+            "  total 23\n"
+            "  notes\n"
+            "    - concise note\n"
+            "Return ONLY valid TOON with keys: "
             "summary (string), "
             "drivers (array of objects with id, label, type, explanation), "
             "recommendations (array of objects with id, text, impact_level), "
@@ -767,7 +730,7 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             "Summary requirements: 3-5 sentences; must reference concrete values for reach and engagement_rate; "
             "must reference engagement_rate_percent_vs_avg when available; "
             "must reference percentile_engagement_rank when available; "
-            "When citing metrics, reference metric keys exactly as they appear in the input JSON, including paths "
+            "When citing metrics, reference metric keys exactly as they appear in the input payload, including paths "
             "such as core_metrics.reach, derived_metrics.engagement_rate, "
             "benchmark_metrics.engagement_rate_percent_vs_avg, and "
             "benchmark_metrics.percentile_engagement_rank. "
@@ -801,7 +764,7 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             "All five sub-scores must be numeric values in range 0..10. "
             "total must be numeric 0..50. "
             "notes must be an array of strings (can be empty). "
-            "Forbid extra keys at every level of the JSON output. "
+            "Forbid extra keys at every level of the TOON output. "
             "Do not invent new metric names, aliases, or paraphrased metric keys. "
             "avoid generic statements. "
             "Driver requirements: max 5 items; each driver must include measurable reasoning tied to provided metrics "
@@ -819,31 +782,21 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             },
             ensure_ascii=True,
         ),
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": S5_JSON_SCHEMA,
-        },
     }
 
 
 def _build_repair_prompt(raw_output: str) -> dict[str, Any]:
     return {
         "system": (
-            "Repair the assistant output into valid JSON only. "
-            "Return ONLY JSON matching this schema exactly and with no extra keys: "
-            "{summary:string, drivers:[{id,label,type,explanation}], "
-            "recommendations:[{id,text,impact_level}], "
-            "engagement_potential_score:{emotional_resonance,shareability,save_worthiness,"
-            "comment_potential,novelty_or_value,total,notes}}. "
+            "Repair the assistant output into valid TOON only. "
+            "Return ONLY TOON with these keys and no extra keys: "
+            "summary, drivers, recommendations, engagement_potential_score. "
+            "Use 2-space indentation for nesting and '-' for list items. "
             "Rules: driver.type in {POSITIVE,LIMITING}; recommendation.impact_level in {HIGH,MEDIUM,LOW}; "
             "all five engagement sub-scores numeric 0..10; total numeric 0..50; notes array of strings. "
             "If information is missing, fill safe defaults."
         ),
         "user": json.dumps({"raw_output": raw_output}, ensure_ascii=True),
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": S5_JSON_SCHEMA,
-        },
     }
 
 
@@ -863,7 +816,7 @@ async def _call_llm_async(prompt: dict[str, Any], llm_client: LLMClient | None) 
         return None
 
 
-async def _repair_llm_json_output(raw_text: str | None, llm_client: LLMClient | None) -> str | None:
+async def _repair_llm_toon_output(raw_text: str | None, llm_client: LLMClient | None) -> str | None:
     if not isinstance(raw_text, str) or not raw_text.strip():
         return None
     repair_prompt = _build_repair_prompt(raw_text)
@@ -876,7 +829,10 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
         return None
 
     prompt = {
-        "system": "Return only valid JSON matching the schema requested.",
+        "system": (
+            "Return only valid TOON format (Token-Oriented Object Notation). "
+            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
+        ),
         "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", caption_text),
     }
     raw_text = await _call_llm_async(prompt, llm_client)
@@ -884,14 +840,14 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
         return None
 
     try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError:
-        repaired = await _repair_llm_json_output(raw_text, llm_client)
+        payload = toon_loads(raw_text)
+    except Exception:
+        repaired = await _repair_llm_toon_output(raw_text, llm_client)
         if not isinstance(repaired, str):
             return None
         try:
-            payload = json.loads(repaired)
-        except json.JSONDecodeError:
+            payload = toon_loads(repaired)
+        except Exception:
             return None
 
     if not isinstance(payload, dict):
@@ -945,7 +901,10 @@ async def run_audience_relevance_llm(
 
     user_prompt = S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", creator_text).replace("{post_category}", post_text)
     prompt = {
-        "system": "Return only valid JSON matching the schema requested.",
+        "system": (
+            "Return only valid TOON format (Token-Oriented Object Notation). "
+            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
+        ),
         "user": user_prompt,
     }
     raw_text = await _call_llm_async(prompt, llm_client)
@@ -953,14 +912,14 @@ async def run_audience_relevance_llm(
         return None
 
     try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError:
-        repaired = await _repair_llm_json_output(raw_text, llm_client)
+        payload = toon_loads(raw_text)
+    except Exception:
+        repaired = await _repair_llm_toon_output(raw_text, llm_client)
         if not isinstance(repaired, str):
             return None
         try:
-            payload = json.loads(repaired)
-        except json.JSONDecodeError:
+            payload = toon_loads(repaired)
+        except Exception:
             return None
 
     if not isinstance(payload, dict):
@@ -1059,8 +1018,8 @@ def _parse_llm_response(
         return None, [], [], None
 
     try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError:
+        payload = toon_loads(raw_text)
+    except Exception:
         return None, [], [], None
 
     if not isinstance(payload, dict):
@@ -1109,7 +1068,7 @@ async def _parse_llm_response_with_repair(
         if primary_payload is not None and _sanitize_engagement_potential_score(primary_payload) is not None:
             return summary, drivers, recommendations, primary_payload
 
-    repaired_text = await _repair_llm_json_output(raw_text, llm_client)
+    repaired_text = await _repair_llm_toon_output(raw_text, llm_client)
     repaired = _parse_llm_response(repaired_text)
     repaired_summary, repaired_drivers, repaired_recommendations, repaired_engagement = repaired
     if repaired_summary is None:

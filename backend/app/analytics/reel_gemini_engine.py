@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 import time
@@ -11,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from backend.app.ai.toon import loads as toon_loads
 from backend.app.utils.logger import logger
 
 
@@ -20,7 +20,10 @@ GEMINI_FILE_POLL_MAX_ATTEMPTS = 20
 GEMINI_FILE_POLL_INTERVAL_SEC = 2.0
 REEL_VISION_INSTRUCTION = (
     "You are analyzing an Instagram Reel video. "
-    "Watch the full video and return ONLY valid JSON with exactly these keys: "
+    "Watch the full video and return ONLY valid TOON format (Token-Oriented Object Notation). "
+    "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes. "
+    "Use '-' for list items. "
+    "Return exactly these keys: "
     "hook_frame_score (float 0-1, visual grab in the first 3 seconds), "
     "hook_text_overlay (string or null, any text shown in the first 3 seconds), "
     "pacing_label (one of: fast|medium|slow), "
@@ -142,9 +145,9 @@ def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
         if not isinstance(raw_text, str):
             raise ValueError("Gemini returned no text.")
 
-        payload = json.loads(_strip_markdown_fences(raw_text))
+        payload = toon_loads(_strip_markdown_fences(raw_text))
         if not isinstance(payload, dict):
-            raise ValueError("Gemini output is not a JSON object.")
+            raise ValueError("Gemini output is not a TOON object.")
         return payload
 
     finally:

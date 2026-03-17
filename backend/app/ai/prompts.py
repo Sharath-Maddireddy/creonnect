@@ -91,7 +91,7 @@ S1_VISION_EVALUATION_PROMPT = """
 You are an expert Social Media Art Director and Computer Vision analysis engine.
 Analyze the provided Instagram media (image/frame) strictly through the lens of technical visual quality and compositional structure. 
 
-Return ONLY valid JSON. Your output must exactly match the schema requested. Do not include markdown formatting or extra text.
+Return ONLY valid TOON format (Token-Oriented Object Notation, YAML-like indentation, no braces, no quotes). Do not include markdown formatting or extra text.
 
 You must evaluate the image objectively on the following deterministic rules to calculate the S1 (Visual Quality) sub-scores:
 
@@ -120,28 +120,28 @@ You must evaluate the image objectively on the following deterministic rules to 
    - Are there disruptive, low-quality text overlays natively burned into the image? (Heavy Text: -3, Very Heavy Text: -5)
    - Score the remaining points on the overall premium "feel" and stopping-power (hook strength) of the visual.
 
-OUTPUT SCHEMA (STRICT JSON ONLY):
-{
-    "objects": ["array", "of", "detected", "primary", "items"],
-    "dominant_focus": "string (the main subject, or null if ambiguous)",
-    "visual_style": "string (e.g., 'Minimalist Portrait', 'Gritty Street', 'High-key studio')",
-    "scene_type": "string (e.g., 'Indoor gym', 'Outdoor cafe')",
-    "visual_quality_score": {
-        "composition": 0.0,
-        "lighting": 0.0,
-        "subject_clarity": 0.0,
-        "aesthetic_quality": 0.0
-    },
-    "technical_flaws": ["array", "of", "strings", "describing", "specific", "composition/lighting errors identified", "max 3"],
-    "detected_text": "string (any embedded text read via OCR, or null)"
-}
+OUTPUT EXAMPLE (STRICT TOON ONLY):
+objects
+  - person
+  - dumbbell
+dominant_focus athlete
+visual_style Minimalist Portrait
+scene_type Indoor gym
+visual_quality_score
+  composition 8.5
+  lighting 7.5
+  subject_clarity 9.0
+  aesthetic_quality 8.0
+technical_flaws
+  - Slight background clutter
+detected_text null
 """
 
 S2_CAPTION_EVALUATION_PROMPT = """
 You are an expert Social Media Copywriter and Engagement Strategist.
 Analyze the following Instagram caption strictly through the lens of psychological engagement and structural copywriting best practices.
 
-Return ONLY valid JSON matching the exact schema requested. Do not include markdown formatting or extra text.
+Return ONLY valid TOON format (Token-Oriented Object Notation, YAML-like indentation, no braces, no quotes). Do not include markdown formatting or extra text.
 
 Evaluate the caption on the following deterministic rules to calculate the S2 (Caption Effectiveness) sub-scores on a 0-100 scale:
 
@@ -170,16 +170,16 @@ Evaluate the caption on the following deterministic rules to calculate the S2 (C
    - Weak/Generic CTA ("Thoughts?", "Link in bio") = 60.
    - Missing or confusing CTA = 20.
 
-OUTPUT SCHEMA (STRICT JSON ONLY):
-{
-    "hook_score_0_100": <integer 0-100>,
-    "length_score_0_100": <integer 0-100>,
-    "hashtag_score_0_100": <integer 0-100>,
-    "cta_score_0_100": <integer 0-100>,
-    "s2_raw_0_100": <integer 0-100> (Calculate the weighted average: hook*0.30 + length*0.20 + hashtag*0.25 + cta*0.25),
-    "technical_flaws": ["array", "of", "strings", "describing", "specific", "weaknesses in the copy", "max 3"],
-    "improved_hook_suggestion": "string (Rewrite the first line to be maximally engaging)"
-}
+OUTPUT EXAMPLE (STRICT TOON ONLY):
+hook_score_0_100 92
+length_score_0_100 85
+hashtag_score_0_100 78
+cta_score_0_100 88
+s2_raw_0_100 86
+technical_flaws
+  - CTA could be more specific
+  - Hook takes too long to get to the payoff
+improved_hook_suggestion Lead with the transformation in the first line
 
 CAPTION TO ANALYZE:
 "{caption_text}"
@@ -194,7 +194,7 @@ S4_AUDIENCE_RELEVANCE_PROMPT = """
 You are an expert Social Media Algorithm Demographic Analyst.
 Your job is to determine the exact audience overlap between a Creator's core demographic and the specific topic of a single social media post.
 
-Return ONLY valid JSON matching the exact schema requested. Do not include markdown formatting or extra text.
+Return ONLY valid TOON format (Token-Oriented Object Notation, YAML-like indentation, no braces, no quotes). Do not include markdown formatting or extra text.
 
 Evaluate the relevance on the following strict 0-100 scale to calculate the S4 (Audience Relevance) score:
 
@@ -205,12 +205,10 @@ AFFINITY BAND RUBRIC:
 - UNRELATED (15 points): A complete pivot with low audience overlap.
 - UNKNOWN (50 points): If either category is missing or blank, return 50.
 
-OUTPUT SCHEMA (STRICT JSON ONLY):
-{
-    "s4_raw_0_100": <integer 15, 50, 65, 85, or 100>,
-    "affinity_band": <string: "EXACT", "HIGH_OVERLAP", "ADJACENT", "UNRELATED", or "UNKNOWN">,
-    "audience_overlap_explanation": "string (1-sentence explanation)"
-}
+OUTPUT EXAMPLE (STRICT TOON ONLY):
+s4_raw_0_100 85
+affinity_band HIGH_OVERLAP
+audience_overlap_explanation The post topic is different from the creator niche but strongly appeals to the same audience segment
 
 INPUT DATA:
 Creator Dominant Niche: "{creator_category}"

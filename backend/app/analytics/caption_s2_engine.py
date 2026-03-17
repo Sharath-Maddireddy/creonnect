@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 
 from backend.app.ai.llm_client import LLMClient, LLMClientError
 from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT
+from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.post_models import CaptionEffectivenessScore
 
 
@@ -39,18 +39,20 @@ async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScor
         return compute_s2_caption_effectiveness(caption_text)
 
     prompt = {
-        "system": "Return only valid JSON matching the schema requested.",
+        "system": (
+            "Return only valid TOON format (Token-Oriented Object Notation). "
+            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
+        ),
         "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", caption_text),
-        "response_format": {"type": "json_object"},
     }
 
     try:
         raw_text = await asyncio.to_thread(LLMClient().generate, prompt)
         if not isinstance(raw_text, str) or not raw_text.strip():
             raise LLMClientError("LLM returned empty response.")
-        payload = json.loads(raw_text)
+        payload = toon_loads(raw_text)
         if not isinstance(payload, dict):
-            raise ValueError("LLM output must be a JSON object.")
+            raise ValueError("LLM output must be a TOON object.")
 
         hook_score = _coerce_int_0_100(payload.get("hook_score_0_100"))
         length_score = _coerce_int_0_100(payload.get("length_score_0_100"))
@@ -72,7 +74,7 @@ async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScor
             total_0_50=total_0_50,
             notes=[],
         )
-    except (json.JSONDecodeError, LLMClientError):
+    except (ValueError, LLMClientError):
         return compute_s2_caption_effectiveness(caption_text)
     except Exception:
         return compute_s2_caption_effectiveness(caption_text)
