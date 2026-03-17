@@ -70,7 +70,7 @@ These scripts are `dev-only` for fixture generation/testing and are not part of 
 - Production ingestion must use official APIs where possible.
 - You are responsible for ensuring lawful and policy-compliant use; this project disclaims responsibility for misuse.
 
-**⚠️ Warning:** This dev scraper relies on a session cookie and should be used only in approved, compliant testing contexts.
+**Warning:** This dev scraper relies on a session cookie and should be used only in approved, compliant testing contexts.
 
 #### Security Note: `INSTAGRAM_SESSION_ID`
 
