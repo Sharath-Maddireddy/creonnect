@@ -296,6 +296,8 @@ async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
             target_post=creator_post,
             historical_posts=[],
             run_ai=True,
+            run_advanced_caption_ai=True,
+            run_advanced_audience_ai=True,
         )
     except Exception as exc:
         logger.exception("Failed to analyze post: %s", exc)

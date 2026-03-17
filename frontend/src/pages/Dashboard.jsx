@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
     LineChart,
     Line,
@@ -15,12 +16,21 @@ function Dashboard() {
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
+    const [userId, setUserId] = useState('')
+    const [username, setUsername] = useState('')
+    const navigate = useNavigate()
 
-    const fetchDashboard = async () => {
+    const fetchDashboard = async (currentUserId) => {
         setLoading(true)
         setError(null)
         try {
-            const res = await fetch('/api/creator/dashboard')
+            const res = await fetch(`/api/creator/dashboard?user_id=${encodeURIComponent(currentUserId)}`)
+            if (res.status === 401) {
+                localStorage.removeItem('user_id')
+                localStorage.removeItem('username')
+                navigate('/login', { replace: true })
+                return
+            }
             if (!res.ok) throw new Error('Failed to fetch dashboard data')
             const json = await res.json()
             setData(json)
@@ -32,8 +42,22 @@ function Dashboard() {
     }
 
     useEffect(() => {
-        fetchDashboard()
-    }, [])
+        const storedUserId = localStorage.getItem('user_id')
+        const storedUsername = localStorage.getItem('username') || ''
+        if (!storedUserId) {
+            navigate('/login', { replace: true })
+            return
+        }
+        setUserId(storedUserId)
+        setUsername(storedUsername)
+    }, [navigate])
+
+    useEffect(() => {
+        if (!userId) {
+            return
+        }
+        fetchDashboard(userId)
+    }, [userId])
 
     if (loading) {
         return (
@@ -48,7 +72,7 @@ function Dashboard() {
         return (
             <div className="error-container">
                 <p>Error: {error}</p>
-                <button onClick={fetchDashboard}>Retry</button>
+                <button onClick={() => fetchDashboard(userId)}>Retry</button>
             </div>
         )
     }
@@ -78,7 +102,7 @@ function Dashboard() {
             {/* Header */}
             <div className="dashboard-header">
                 <h1>Creator Analytics</h1>
-                <p className="username">@{summary.username}</p>
+                <p className="username">@{username || summary.username}</p>
             </div>
 
             {/* Summary Cards */}

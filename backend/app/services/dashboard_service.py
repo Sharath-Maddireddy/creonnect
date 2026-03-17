@@ -4,9 +4,15 @@ Dashboard Service
 Orchestrates creator dashboard data assembly.
 """
 
+import asyncio
 from datetime import date, timedelta
 
 from backend.app.demo.synthetic_loader import load_synthetic
+from backend.app.ingestion.instagram_mapper import map_instagram_to_ai_inputs
+from backend.app.ingestion.instagram_oauth import (
+    fetch_instagram_media,
+    fetch_instagram_profile,
+)
 from backend.app.ai.niche import detect_creator_niche
 from backend.app.ai.growth_score import compute_growth_score
 from backend.app.ai.post_insights import analyze_posts
@@ -16,17 +22,27 @@ from backend.core.momentum import calculate_momentum
 from backend.core.best_time import get_best_posting_hours
 
 
-def build_creator_dashboard(creator_id: str) -> dict:
+def build_creator_dashboard(creator_id: str, access_token: str | None = None) -> dict:
     """
     Build the full creator dashboard response.
 
     Raises:
         ValueError: if creator not found
     """
-    profile, posts = load_synthetic()
+    if access_token:
+        async def _fetch_instagram_data():
+            api_profile, api_media = await asyncio.gather(
+                fetch_instagram_profile(access_token),
+                fetch_instagram_media(access_token, limit=30),
+            )
+            return map_instagram_to_ai_inputs(api_profile, api_media)
 
-    if profile.username != creator_id and creator_id != "demo":
-        raise ValueError("Creator not found")
+        profile, posts = asyncio.run(_fetch_instagram_data())
+    else:
+        profile, posts = load_synthetic()
+
+        if profile.username != creator_id and creator_id != "demo":
+            raise ValueError("Creator not found")
 
     niche = detect_creator_niche(profile, posts)
     growth = compute_growth_score(profile, posts)

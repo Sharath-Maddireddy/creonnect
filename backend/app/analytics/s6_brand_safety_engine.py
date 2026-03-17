@@ -220,9 +220,12 @@ def compute_s6_brand_safety(
     cringe_score = cringe_section.get("cringe_score")
     production_level = cringe_section.get("production_level")
     adult_content_detected = bool(cringe_section.get("adult_content_detected", False))
+    normalized_cringe_score: float | None = None
+    if isinstance(cringe_score, (int, float)) and not isinstance(cringe_score, bool):
+        normalized_cringe_score = _clamp(float(cringe_score), 0.0, 100.0)
 
-    if isinstance(cringe_score, int):
-        if cringe_score >= 80:
+    if normalized_cringe_score is not None:
+        if normalized_cringe_score >= 80:
             raw_score -= 25.0
             penalties.append(
                 BrandSafetyPenalty(
@@ -232,8 +235,8 @@ def compute_s6_brand_safety(
                 )
             )
             notes.append("Extreme cringe signal reduced brand safety.")
-            logger.info("[Cringe] Applied S6 penalty key=extreme_cringe score=%s", cringe_score)
-        elif cringe_score >= 60:
+            logger.info("[Cringe] Applied S6 penalty key=extreme_cringe score=%.1f", normalized_cringe_score)
+        elif normalized_cringe_score >= 60:
             raw_score -= 15.0
             penalties.append(
                 BrandSafetyPenalty(
@@ -243,8 +246,8 @@ def compute_s6_brand_safety(
                 )
             )
             notes.append("High cringe signal reduced brand safety.")
-            logger.info("[Cringe] Applied S6 penalty key=high_cringe score=%s", cringe_score)
-        elif cringe_score >= 45:
+            logger.info("[Cringe] Applied S6 penalty key=high_cringe score=%.1f", normalized_cringe_score)
+        elif normalized_cringe_score >= 45:
             raw_score -= 8.0
             penalties.append(
                 BrandSafetyPenalty(
@@ -254,7 +257,7 @@ def compute_s6_brand_safety(
                 )
             )
             notes.append("Moderate cringe signal reduced brand safety.")
-            logger.info("[Cringe] Applied S6 penalty key=moderate_cringe score=%s", cringe_score)
+            logger.info("[Cringe] Applied S6 penalty key=moderate_cringe score=%.1f", normalized_cringe_score)
 
     if adult_content_detected:
         raw_score -= 30.0
@@ -293,7 +296,7 @@ def compute_s6_brand_safety(
         "low_image_quality": low_image_quality,
         "competitor_brand_mention": competitor_brand_mention,
         "alcohol_tobacco_detected": alcohol_tobacco_detected,
-        "cringe_detected": isinstance(cringe_score, int) and cringe_score >= 45,
+        "cringe_detected": bool(normalized_cringe_score is not None and normalized_cringe_score >= 45.0),
         "adult_content_detected": adult_content_detected,
         "low_production": production_level == "low",
         "controversial_topic": controversial_topic,

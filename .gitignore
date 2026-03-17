@@ -1,4 +1,4 @@
-﻿# Virtual environments
+# Virtual environments
 .venv/
 venv/
 env/
@@ -25,6 +25,7 @@ dist/
 # Environment variables
 .env
 .env.local
+backend/.env
 
 # IDE
 .vscode/
@@ -54,3 +55,7 @@ backend/app/ingestion/ig_session.json
 # Local run artifacts
 smoke_*.json
 test_output.txt
+test_reel_e2e.py
+test_brand_match.py
+
+pytest-cache-files-*/

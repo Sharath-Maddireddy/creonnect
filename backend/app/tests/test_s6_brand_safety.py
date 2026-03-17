@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.app.analytics import s6_brand_safety_engine
 from backend.app.analytics.s6_brand_safety_engine import compute_s6_brand_safety
 
 
@@ -76,3 +77,32 @@ def test_determinism() -> None:
     first = compute_s6_brand_safety(**payload).model_dump(mode="python")
     second = compute_s6_brand_safety(**payload).model_dump(mode="python")
     assert first == second
+
+
+def test_float_cringe_score_from_helper_applies_penalty(monkeypatch) -> None:
+    def _fake_build_cringe_section(_vision_analysis: dict) -> dict:
+        return {
+            "cringe_score": 80.5,
+            "cringe_label": "cringe",
+            "is_cringe": True,
+            "cringe_signals": ["awkward delivery"],
+            "production_level": None,
+            "adult_content_detected": False,
+        }
+
+    monkeypatch.setattr(
+        s6_brand_safety_engine,
+        "build_cringe_section_for_brand_safety",
+        _fake_build_cringe_section,
+    )
+
+    score = compute_s6_brand_safety(
+        caption_text="Clean caption",
+        vision={"signals": [{"objects": ["person"]}]},
+        s1_total_0_50=40.0,
+        extracted_brand_mentions=None,
+        extra_flags=None,
+    )
+    penalty_keys = {penalty.key for penalty in score.penalties}
+    assert "extreme_cringe" in penalty_keys
+    assert score.flags["cringe_detected"] is True

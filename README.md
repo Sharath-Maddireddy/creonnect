@@ -35,6 +35,23 @@ python -m backend.app.demo
 uvicorn backend.main:app --reload
 ```
 
+## Instagram OAuth (Recommended)
+
+This project now supports the official Instagram OAuth flow via the Meta Graph API.
+
+1. Create a Meta app with Instagram Basic Display or Graph API access.
+2. Set the OAuth redirect URI to:
+   `http://localhost:8000/api/auth/instagram/callback`
+3. Configure environment variables (see `.env.example` and `backend/.env.example`):
+
+```bash
+INSTAGRAM_APP_ID=your_facebook_app_id_here
+INSTAGRAM_APP_SECRET=your_facebook_app_secret_here
+INSTAGRAM_REDIRECT_URI=http://localhost:8000/api/auth/instagram/callback
+```
+
+Note: `INSTAGRAM_SESSION_ID` is deprecated and only used for legacy dev scraper tooling.
+
 ## Demo Data
 
 - Synthetic creator data lives under `backend/app/demo/`

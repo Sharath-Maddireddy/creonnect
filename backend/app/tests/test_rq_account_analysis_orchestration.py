@@ -190,6 +190,10 @@ def test_stale_queued_job_auto_fails_on_poll(monkeypatch) -> None:
     assert status["finished_at"] is not None
     assert status["error"]["type"] == "TimeoutError"
     assert "queued" in status["error"]["message"]
+    persisted = account_analysis_jobs._read_status(job_id)
+    assert persisted is not None
+    assert persisted["status"] == "queued"
+    assert persisted["finished_at"] is None
 
 
 def test_stale_started_job_auto_fails_on_poll(monkeypatch) -> None:
@@ -210,6 +214,10 @@ def test_stale_started_job_auto_fails_on_poll(monkeypatch) -> None:
     assert status["finished_at"] is not None
     assert status["error"]["type"] == "TimeoutError"
     assert "started" in status["error"]["message"]
+    persisted = account_analysis_jobs._read_status(job_id)
+    assert persisted is not None
+    assert persisted["status"] == "started"
+    assert persisted["finished_at"] is None
 
 
 def test_dedupe_returns_same_job_id(monkeypatch) -> None:

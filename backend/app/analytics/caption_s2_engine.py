@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 
+from backend.app.ai.llm_client import LLMClient, LLMClientError
+from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT
 from backend.app.domain.post_models import CaptionEffectivenessScore
 
 
@@ -17,6 +21,61 @@ _CTA_RE = re.compile(
 
 def _clamp_0_100(value: int | float) -> int:
     return int(max(0, min(100, round(float(value)))))
+
+
+def _coerce_int_0_100(value: int | float | str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(max(0.0, min(100.0, round(numeric))))
+
+
+async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScore:
+    """Analyze S2 caption effectiveness via LLM with deterministic fallback."""
+    if not isinstance(caption_text, str) or not caption_text.strip():
+        return compute_s2_caption_effectiveness(caption_text)
+
+    prompt = {
+        "system": "Return only valid JSON matching the schema requested.",
+        "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", caption_text),
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        raw_text = await asyncio.to_thread(LLMClient().generate, prompt)
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            raise LLMClientError("LLM returned empty response.")
+        payload = json.loads(raw_text)
+        if not isinstance(payload, dict):
+            raise ValueError("LLM output must be a JSON object.")
+
+        hook_score = _coerce_int_0_100(payload.get("hook_score_0_100"))
+        length_score = _coerce_int_0_100(payload.get("length_score_0_100"))
+        hashtag_score = _coerce_int_0_100(payload.get("hashtag_score_0_100"))
+        cta_score = _coerce_int_0_100(payload.get("cta_score_0_100"))
+        s2_raw_0_100 = _coerce_int_0_100(payload.get("s2_raw_0_100"))
+
+        if None in {hook_score, length_score, hashtag_score, cta_score, s2_raw_0_100}:
+            raise ValueError("Missing required S2 fields from LLM output.")
+
+        total_0_50 = round(s2_raw_0_100 / 2.0, 1)
+
+        return CaptionEffectivenessScore(
+            hook_score_0_100=hook_score,
+            length_score_0_100=length_score,
+            hashtag_score_0_100=hashtag_score,
+            cta_score_0_100=cta_score,
+            s2_raw_0_100=s2_raw_0_100,
+            total_0_50=total_0_50,
+            notes=[],
+        )
+    except (json.JSONDecodeError, LLMClientError):
+        return compute_s2_caption_effectiveness(caption_text)
+    except Exception:
+        return compute_s2_caption_effectiveness(caption_text)
 
 
 def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffectivenessScore:

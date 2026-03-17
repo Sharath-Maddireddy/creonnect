@@ -193,8 +193,8 @@ def _build_engagement_quality(
         return 50.0, notes, False, {
             "median_engagement_rate": None,
             "ratio_vs_account_avg": None,
-            "median_save_rate": _mean_or_none(save_rates),
-            "median_share_rate": _mean_or_none(share_rates),
+            "median_save_rate": median(save_rates) if save_rates else None,
+            "median_share_rate": median(share_rates) if share_rates else None,
         }
 
     median_engagement_rate = median(engagement_rates)
@@ -295,7 +295,7 @@ def _build_consistency(posts: list[SinglePostInsights]) -> tuple[float, list[str
         oldest = min(timestamps)
         window_seconds = max(1.0, (newest - oldest).total_seconds())
         time_window_days = max(1, int(window_seconds // 86400) + 1)
-        posts_per_week = len(posts) / (time_window_days / 7.0)
+        posts_per_week = len(timestamps) / (time_window_days / 7.0)
         posting_score = _map_posts_per_week_to_score(posts_per_week)
     else:
         notes.append("Insufficient timestamps for posting cadence calculation.")

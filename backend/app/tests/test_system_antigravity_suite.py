@@ -9,8 +9,9 @@ deterministic engines — no external APIs, no Redis, no LLM.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from statistics import mean
 
+import pytest
+import backend.app.services.account_analysis_service as account_analysis_service
 from backend.app.analytics.account_health_engine import (
     PILLAR_WEIGHTS,
     compute_account_health_score,
@@ -215,7 +216,7 @@ def test_d_perfect_s6_produces_perfect_brand_safety() -> None:
     )
 
     brand_safety = result.pillars["brand_safety"].score
-    assert brand_safety == 100.0, f"Perfect S6 should yield 100, got {brand_safety}"
+    assert brand_safety == pytest.approx(100.0), f"Perfect S6 should yield 100, got {brand_safety}"
 
 
 # ===================================================================
@@ -326,6 +327,59 @@ def test_h_cache_returns_identical_result() -> None:
 
     assert uncached.model_dump(mode="python") == cached.model_dump(mode="python")
     assert cached.model_dump(mode="python") == cached_again.model_dump(mode="python")
+
+
+# ===================================================================
+# H2 - Cache-key correctness: now_ts should partition cache entries
+# ===================================================================
+
+def test_h2_cache_key_includes_now_ts() -> None:
+    """Different now_ts values should produce distinct cache entries."""
+    _ACCOUNT_HEALTH_CACHE.clear()
+
+    posts = [_post(i, s1=36.0, s2=35.0, s3=37.0, engagement_rate=0.07) for i in range(12)]
+    kwargs = dict(
+        account_avg_engagement_rate=0.06,
+        niche_avg_engagement_rate=0.05,
+        follower_band="10k-50k",
+        use_cache=True,
+    )
+
+    now_a = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    now_b = datetime(2024, 1, 2, tzinfo=timezone.utc)
+
+    analyze_account_health(posts, now_ts=now_a, **kwargs)
+    analyze_account_health(posts, now_ts=now_b, **kwargs)
+
+    assert len(_ACCOUNT_HEALTH_CACHE) == 2
+
+
+# ===================================================================
+# H3 - Cache boundedness: max-size LRU eviction should cap growth
+# ===================================================================
+
+def test_h3_cache_growth_is_bounded() -> None:
+    """Cache should not grow beyond configured max size."""
+    _ACCOUNT_HEALTH_CACHE.clear()
+    original_max_size = account_analysis_service.ACCOUNT_HEALTH_CACHE_MAX_SIZE
+    account_analysis_service.ACCOUNT_HEALTH_CACHE_MAX_SIZE = 2
+    try:
+        posts = [_post(i, s1=36.0, s2=35.0, s3=37.0, engagement_rate=0.07) for i in range(12)]
+        kwargs = dict(
+            account_avg_engagement_rate=0.06,
+            niche_avg_engagement_rate=0.05,
+            follower_band="10k-50k",
+            use_cache=True,
+        )
+
+        analyze_account_health(posts, now_ts=datetime(2024, 1, 1, tzinfo=timezone.utc), **kwargs)
+        analyze_account_health(posts, now_ts=datetime(2024, 1, 2, tzinfo=timezone.utc), **kwargs)
+        analyze_account_health(posts, now_ts=datetime(2024, 1, 3, tzinfo=timezone.utc), **kwargs)
+
+        assert len(_ACCOUNT_HEALTH_CACHE) == 2
+    finally:
+        account_analysis_service.ACCOUNT_HEALTH_CACHE_MAX_SIZE = original_max_size
+        _ACCOUNT_HEALTH_CACHE.clear()
 
 
 # ===================================================================

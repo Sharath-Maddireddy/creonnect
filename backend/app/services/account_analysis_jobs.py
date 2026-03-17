@@ -21,6 +21,8 @@ from backend.app.infra.rq_queue import (
     DEFAULT_RESULT_TTL_SECONDS,
     get_queue,
 )
+from backend.app.ingestion.instagram_mapper import map_instagram_posts
+from backend.app.ingestion.instagram_oauth import fetch_instagram_media
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
 from backend.app.utils.logger import logger
@@ -424,6 +426,11 @@ def _fetch_posts_from_source(payload: dict[str, Any], post_limit: int) -> list[S
         for item in raw_posts[:post_limit]:
             posts.append(_coerce_single_post(item))
         return posts
+    if payload.get("access_token"):
+        access_token = payload["access_token"]
+        raw_media = asyncio.run(fetch_instagram_media(access_token, limit=post_limit))
+        creator_posts = map_instagram_posts(raw_media)
+        return [_coerce_single_post(p.model_dump()) for p in creator_posts[:post_limit]]
 
     raise ValueError("No post source configured. Provide precomputed posts in payload['posts'].")
 

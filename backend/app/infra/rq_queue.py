@@ -19,4 +19,6 @@ def get_queue(name: str = DEFAULT_QUEUE_NAME) -> Queue:
         name=name,
         connection=get_redis(),
         default_timeout=DEFAULT_JOB_TIMEOUT_SECONDS,
+        default_result_ttl=DEFAULT_RESULT_TTL_SECONDS,
+        default_failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
     )

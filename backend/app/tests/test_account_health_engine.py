@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from backend.app.analytics.account_health_engine import compute_account_health_score
+import pytest
+
+from backend.app.analytics.account_health_engine import _build_engagement_quality, compute_account_health_score
 from backend.app.domain.post_models import (
     AudienceRelevanceScore,
     BenchmarkMetrics,
@@ -205,3 +207,31 @@ def test_determinism() -> None:
     first = compute_account_health_score(posts, account_avg_engagement_rate=0.06, now_ts=now).model_dump(mode="python")
     second = compute_account_health_score(posts, account_avg_engagement_rate=0.06, now_ts=now).model_dump(mode="python")
     assert first == second
+
+
+def test_consistency_uses_timestamp_count_for_cadence() -> None:
+    posts = [_build_post(i, weighted_score=80.0, engagement_rate=0.07) for i in range(4)]
+    posts[1].published_at = None
+    posts[3].published_at = None
+
+    result = compute_account_health_score(posts, account_avg_engagement_rate=0.06)
+    assert result.pillars["consistency"].score == 90.0
+
+
+def test_engagement_quality_fallback_uses_median_save_share_rates() -> None:
+    posts = [
+        _build_post(0, engagement_rate=0.07, save_rate=0.01, share_rate=0.02),
+        _build_post(1, engagement_rate=0.07, save_rate=0.01, share_rate=0.02),
+        _build_post(2, engagement_rate=0.07, save_rate=0.90, share_rate=0.90),
+    ]
+    for post in posts:
+        post.derived_metrics.engagement_rate = None
+
+    score, notes, has_signal, metrics = _build_engagement_quality(posts, account_avg_engagement_rate=0.06)
+
+    assert score == 50.0
+    assert has_signal is False
+    assert any("Missing engagement_rate data" in note for note in notes)
+    assert metrics["median_engagement_rate"] is None
+    assert metrics["median_save_rate"] == pytest.approx(0.01)
+    assert metrics["median_share_rate"] == pytest.approx(0.02)

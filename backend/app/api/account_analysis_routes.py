@@ -29,6 +29,7 @@ class AccountAnalysisRequest(BaseModel):
     niche_avg_engagement_rate: float | None = None
     follower_band: str | None = None
     posts: list[dict[str, Any]] | None = None
+    access_token: str | None = None
     include_posts_summary: bool = False
     include_posts_summary_max: int = Field(default=30, ge=1, le=30)
 

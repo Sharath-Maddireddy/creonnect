@@ -17,13 +17,13 @@ from urllib.parse import urlparse, urlunparse
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
 from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_RELEVANCE_PROMPT
 from backend.app.ai.llm_client import LLMClient
-from backend.app.analytics.caption_s2_engine import compute_s2_caption_effectiveness
+from backend.app.analytics.caption_s2_engine import analyze_caption_via_llm
 from backend.app.analytics.content_score import compute_content_score
 from backend.app.analytics.post_weighted_score_engine import compute_weighted_post_score
 from backend.app.analytics.predicted_er_engine import compute_predicted_engagement_rate
-from backend.app.analytics.s4_audience_relevance_engine import compute_s4_audience_relevance
+from backend.app.analytics.s4_audience_relevance_engine import analyze_audience_relevance_via_llm
 from backend.app.analytics.s6_brand_safety_engine import compute_s6_brand_safety
-from backend.app.analytics.vision_s1_engine import compute_visual_quality_score
+from backend.app.analytics.vision_s1_engine import _as_float, compute_visual_quality_score
 from backend.app.analytics.vision_s3_engine import compute_s3_content_clarity
 from backend.app.domain.post_models import (
     AudienceRelevanceScore,
@@ -1475,10 +1475,10 @@ async def analyze_single_post_ai(
     caption_effectiveness_score = (
         post.caption_effectiveness_score
         if isinstance(post.caption_effectiveness_score, CaptionEffectivenessScore)
-        else compute_s2_caption_effectiveness(post.caption_text)
+        else await analyze_caption_via_llm(post.caption_text)
     )
     content_clarity_score = compute_s3_content_clarity(vision, post.caption_text)
-    audience_relevance_score = compute_s4_audience_relevance(
+    audience_relevance_score = await analyze_audience_relevance_via_llm(
         post.post_category,
         post.creator_dominant_category,
     )

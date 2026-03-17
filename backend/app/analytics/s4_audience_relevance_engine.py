@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
+from backend.app.ai.llm_client import LLMClient, LLMClientError
+from backend.app.ai.prompts import S4_AUDIENCE_RELEVANCE_PROMPT
 from backend.app.domain.post_models import AudienceRelevanceScore
 
 
@@ -37,6 +42,74 @@ def _normalize_category(value: str | None) -> str | None:
         return None
     normalized = value.strip().lower()
     return normalized if normalized else None
+
+
+def _coerce_int_0_100(value: int | float | str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(max(0.0, min(100.0, round(numeric))))
+
+
+async def analyze_audience_relevance_via_llm(
+    post_category: str | None,
+    creator_dominant_category: str | None,
+) -> AudienceRelevanceScore:
+    """Analyze S4 audience relevance via LLM with deterministic fallback."""
+    normalized_post = _normalize_category(post_category)
+    normalized_creator = _normalize_category(creator_dominant_category)
+
+    if normalized_post is None or normalized_creator is None:
+        return compute_s4_audience_relevance(post_category, creator_dominant_category)
+
+    prompt = {
+        "system": "Return only valid JSON matching the schema requested.",
+        "user": S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", normalized_creator).replace(
+            "{post_category}", normalized_post
+        ),
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        raw_text = await asyncio.to_thread(LLMClient().generate, prompt)
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            raise LLMClientError("LLM returned empty response.")
+        payload = json.loads(raw_text)
+        if not isinstance(payload, dict):
+            raise ValueError("LLM output must be a JSON object.")
+
+        s4_raw_0_100 = _coerce_int_0_100(payload.get("s4_raw_0_100"))
+        affinity_band = payload.get("affinity_band")
+        explanation = payload.get("audience_overlap_explanation")
+
+        if not isinstance(affinity_band, str):
+            raise ValueError("Invalid affinity_band from LLM output.")
+        affinity_band = affinity_band.strip().upper()
+        if affinity_band not in {"EXACT", "HIGH_OVERLAP", "ADJACENT", "UNRELATED", "UNKNOWN"}:
+            raise ValueError("Unsupported affinity_band from LLM output.")
+        if s4_raw_0_100 is None:
+            raise ValueError("Missing s4_raw_0_100 from LLM output.")
+        if not isinstance(explanation, str) or not explanation.strip():
+            raise ValueError("Missing audience_overlap_explanation from LLM output.")
+
+        total_0_50 = round(s4_raw_0_100 / 2.0, 1)
+        notes = [explanation.strip()[:160]]
+
+        return AudienceRelevanceScore(
+            post_category=normalized_post,
+            creator_dominant_category=normalized_creator,
+            affinity_band=affinity_band,
+            s4_raw_0_100=s4_raw_0_100,
+            total_0_50=total_0_50,
+            notes=notes,
+        )
+    except (json.JSONDecodeError, LLMClientError):
+        return compute_s4_audience_relevance(post_category, creator_dominant_category)
+    except Exception:
+        return compute_s4_audience_relevance(post_category, creator_dominant_category)
 
 
 def compute_s4_audience_relevance(

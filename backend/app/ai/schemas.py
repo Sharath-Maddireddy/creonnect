@@ -1,6 +1,11 @@
-from pydantic import BaseModel, field_validator
-from typing import List, Optional, Dict, Literal
+"""Pydantic schemas for creator profile and post AI inputs."""
+
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Dict, List, Literal, Optional
+
+from pydantic import BaseModel, field_validator
 
 
 # -----------------------------
@@ -61,6 +66,10 @@ class CreatorPostAIInput(BaseModel):
     likes: int = 0
     comments: int = 0
     views: Optional[int] = None
+    reel_duration_sec: Optional[float] = None
+    share_count: Optional[int] = None
+    saves: Optional[int] = None
+    watch_time_pct: Optional[float] = None  # 0.0 - 1.0
 
     audio_name: Optional[str] = None
 

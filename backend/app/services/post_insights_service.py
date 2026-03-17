@@ -102,14 +102,10 @@ async def build_single_post_insights(
     caption_effectiveness_score: CaptionEffectivenessScore | None = None
     if run_advanced_caption_ai and isinstance(post_copy.caption_text, str) and post_copy.caption_text.strip():
         s2_payload = await run_caption_analysis_llm(post_copy.caption_text)
-        print("DEBUG S2 PAYLOAD:", s2_payload)
         if isinstance(s2_payload, dict):
             try:
                 caption_effectiveness_score = CaptionEffectivenessScore.model_validate(s2_payload)
-            except Exception as e:
-                import traceback
-                print("DEBUG MODEL VALIDATION ERROR:")
-                traceback.print_exc()
+            except Exception:
                 caption_effectiveness_score = None
     if caption_effectiveness_score is None:
         caption_effectiveness_score = compute_s2_caption_effectiveness(post_copy.caption_text)

@@ -1,0 +1,202 @@
+{
+  "account_id": "test_user",
+  "media_id": "DV1UI3Dk2km",
+  "media_url": "https://images.unsplash.com/photo-1517836357463-d25dfeac3438?w=800",
+  "media_type": "REEL",
+  "caption_text": "Fuel the rage. Lift harder.",
+  "post_category": null,
+  "creator_dominant_category": null,
+  "extracted_brand_mentions": [],
+  "safety_extra_flags": {},
+  "follower_count": null,
+  "published_at": null,
+  "core_metrics": {
+    "reach": null,
+    "impressions": 1000,
+    "likes": 28,
+    "comments": 1,
+    "shares": null,
+    "saves": null,
+    "profile_visits": null,
+    "website_taps": null,
+    "source_engagement_rate": null
+  },
+  "derived_metrics": {
+    "engagement_rate": null,
+    "save_rate": null,
+    "share_rate": null,
+    "watch_through_rate": null,
+    "swipe_through_rate": null,
+    "like_rate": null,
+    "comment_rate": null,
+    "save_to_share_ratio": null,
+    "profile_visit_rate": null,
+    "website_tap_rate": null,
+    "reach_to_impression_ratio": null,
+    "engagements_total": 29
+  },
+  "benchmark_metrics": {
+    "account_avg_reach": null,
+    "account_avg_engagement_rate": null,
+    "percentile_engagement_rank": null,
+    "reach_percent_vs_avg": null,
+    "engagement_rate_percent_vs_avg": null,
+    "impressions_percent_vs_avg": null,
+    "likes_percent_vs_avg": null,
+    "comments_percent_vs_avg": null,
+    "shares_percent_vs_avg": null,
+    "saves_percent_vs_avg": null,
+    "profile_visits_percent_vs_avg": null,
+    "website_taps_percent_vs_avg": null
+  },
+  "vision_analysis": {
+    "provider": "gemini",
+    "status": "ok",
+    "signals": [
+      {
+        "objects": [
+          "woman",
+          "dumbbells",
+          "gym equipment",
+          "barbell plates",
+          "weight rack"
+        ],
+        "scene_description": "A woman in athletic wear stands in a gym, holding dumbbells with a focused expression. The background features blurred gym equipment and weight plates, creating a shallow depth of field.",
+        "detected_text": null,
+        "visual_style": "Professional fitness photography, cinematic contrast, shallow depth of field",
+        "visual_quality_score": {
+          "composition": 10.0,
+          "lighting": 9.0,
+          "subject_clarity": 10.0,
+          "aesthetic_quality": 9.5
+        },
+        "technical_flaws": [],
+        "hook_strength_score": 0.85,
+        "primary_objects": [
+          "woman",
+          "dumbbells",
+          "gym equipment",
+          "barbell plates",
+          "weight rack"
+        ],
+        "dominant_focus": "woman holding dumbbells",
+        "dominant_object": null,
+        "scene_type": "Fitness/Gym",
+        "lighting_quality": 9.0,
+        "subject_clarity": 10.0,
+        "aesthetic_quality": 9.5,
+        "cringe_score": 5,
+        "cringe_signals": [],
+        "cringe_fixes": [],
+        "production_level": "high",
+        "is_cringe": false,
+        "cringe_label": "not_cringe",
+        "adult_content_detected": false,
+        "adult_content_confidence": 0
+      }
+    ]
+  },
+  "reel_analysis": null,
+  "visual_quality_score": {
+    "composition": 10.0,
+    "lighting": 9.0,
+    "subject_clarity": 10.0,
+    "aesthetic_quality": 9.5,
+    "total": 48.5,
+    "notes": [
+      "S1 derived from vision visual_quality_score."
+    ]
+  },
+  "content_clarity_score": {
+    "message_singularity": 8.0,
+    "context_clarity": 9.0,
+    "caption_alignment": 5.0,
+    "visual_message_support": 7.0,
+    "cognitive_load": 10.0,
+    "total": 38.5,
+    "notes": []
+  },
+  "engagement_potential_score": {
+    "emotional_resonance": 5.0,
+    "shareability": 5.0,
+    "save_worthiness": 5.0,
+    "comment_potential": 5.0,
+    "novelty_or_value": 5.0,
+    "total": 25.0,
+    "notes": [
+      "fallback: invalid AI output"
+    ]
+  },
+  "caption_effectiveness_score": {
+    "hook_score_0_100": 70,
+    "length_score_0_100": 30,
+    "hashtag_score_0_100": 20,
+    "cta_score_0_100": 20,
+    "s2_raw_0_100": 38,
+    "total_0_50": 19.0,
+    "notes": [
+      "Too short to provide context",
+      "Missing hashtags",
+      "Lacks a clear CTA",
+      "improved_hook_suggestion: Unleash your inner strength: How lifting can transform your mindset!"
+    ]
+  },
+  "audience_relevance_score": {
+    "post_category": null,
+    "creator_dominant_category": null,
+    "affinity_band": "UNKNOWN",
+    "s4_raw_0_100": 50,
+    "total_0_50": 25.0,
+    "notes": [
+      "Missing post_category or creator_dominant_category; using neutral S4 score."
+    ]
+  },
+  "brand_safety_score": {
+    "s6_raw_0_100": 100,
+    "total_0_50": 50.0,
+    "penalties": [],
+    "flags": {
+      "profanity_detected": false,
+      "low_image_quality": false,
+      "competitor_brand_mention": false,
+      "alcohol_tobacco_detected": false,
+      "cringe_detected": false,
+      "adult_content_detected": false,
+      "low_production": false,
+      "controversial_topic": false,
+      "misinformation_flag": false
+    },
+    "notes": []
+  },
+  "weighted_post_score": {
+    "post_type": "REEL",
+    "score": 66.9,
+    "normalized_score_0_50": 33.45,
+    "components": {
+      "S1": 48.5,
+      "S2": 19.0,
+      "S3": 38.5,
+      "S4": 25.0,
+      "S5": 25.0,
+      "S6": 50.0,
+      "S7": null
+    },
+    "weights_used": {
+      "S1": 0.210526,
+      "S2": 0.210526,
+      "S3": 0.157895,
+      "S4": 0.157895,
+      "S5": 0.157895,
+      "S6": 0.105263
+    },
+    "notes": [
+      "Normalized over available components; missing: S7"
+    ]
+  },
+  "tier_avg_engagement_rate": null,
+  "predicted_engagement_rate": null,
+  "predicted_engagement_rate_notes": [
+    "missing tier_avg_er source",
+    "missing tier_avg_er"
+  ]
+}

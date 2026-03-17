@@ -12,6 +12,7 @@ from backend.app.infra.redis_client import get_redis
 
 # Import job module so the worker can resolve callable paths.
 from backend.app.services import account_analysis_jobs as _account_analysis_jobs  # noqa: F401
+from backend.app.services import reel_analysis_jobs as _reel_analysis_jobs  # noqa: F401
 
 load_dotenv(override=False)
 
