@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -368,6 +369,30 @@ def _enforce_rate_limit(account_id: str, running_job_id: str | None) -> None:
     )
 
 
+def _run_coroutine_sync(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - re-raised synchronously below
+            error["value"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if "value" in error:
+        raise error["value"]
+    return result.get("value")
+
+
 def _materialize_posts_for_enqueue(payload: dict[str, Any], post_limit: int) -> dict[str, Any]:
     sanitized_payload = dict(payload)
     access_token = sanitized_payload.pop("access_token", None)
@@ -378,9 +403,12 @@ def _materialize_posts_for_enqueue(payload: dict[str, Any], post_limit: int) -> 
     if not isinstance(access_token, str) or not access_token.strip():
         return sanitized_payload
 
-    raw_media = asyncio.run(fetch_instagram_media(access_token.strip(), limit=post_limit))
-    creator_posts = map_instagram_posts(raw_media)
-    sanitized_payload["posts"] = [post.model_dump(mode="python") for post in creator_posts[:post_limit]]
+    try:
+        raw_media = _run_coroutine_sync(fetch_instagram_media(access_token.strip(), limit=post_limit))
+        creator_posts = map_instagram_posts(raw_media)
+        sanitized_payload["posts"] = [post.model_dump(mode="python") for post in creator_posts[:post_limit]]
+    except Exception as exc:
+        raise ValueError(f"Failed to fetch Instagram media: {exc}") from exc
     return sanitized_payload
 
 

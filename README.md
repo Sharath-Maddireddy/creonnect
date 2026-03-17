@@ -49,7 +49,10 @@ INSTAGRAM_APP_ID=your_facebook_app_id_here
 INSTAGRAM_APP_SECRET=your_facebook_app_secret_here
 INSTAGRAM_REDIRECT_URI=http://localhost:8000/api/auth/instagram/callback
 CREONNECT_SESSION_SECRET=replace_with_a_long_random_secret_for_cookie_signing
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
+
+Use `CORS_ALLOWED_ORIGINS` as a comma-separated list for your frontend origins in non-local environments.
 
 Note: `INSTAGRAM_SESSION_ID` is deprecated and only used for legacy dev scraper tooling.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -136,3 +137,46 @@ def test_access_token_is_not_enqueued_in_job_payload(monkeypatch) -> None:
     assert queued_payload["post_limit"] == 5
     assert isinstance(queued_payload.get("posts"), list)
     assert len(queued_payload["posts"]) == 1
+
+
+def test_access_token_materialization_works_inside_running_event_loop(monkeypatch) -> None:
+    async def _fake_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
+        assert access_token == "secret-token"
+        assert limit == 5
+        return [{"id": "m_1"}]
+
+    def _fake_map_instagram_posts(raw_media: list[dict[str, str]]) -> list[SinglePostInsights]:
+        assert raw_media == [{"id": "m_1"}]
+        return [_build_post(1)]
+
+    monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _fake_fetch_instagram_media)
+    monkeypatch.setattr(account_analysis_jobs, "map_instagram_posts", _fake_map_instagram_posts)
+
+    async def _run_inside_loop() -> dict[str, Any]:
+        return account_analysis_jobs._materialize_posts_for_enqueue(
+            {"account_id": "acct_secure", "access_token": "secret-token"},
+            post_limit=5,
+        )
+
+    result = asyncio.run(_run_inside_loop())
+
+    assert "access_token" not in result
+    assert isinstance(result.get("posts"), list)
+    assert len(result["posts"]) == 1
+
+
+def test_access_token_materialization_wraps_fetch_failures(monkeypatch) -> None:
+    async def _failing_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
+        raise RuntimeError("instagram api unavailable")
+
+    monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _failing_fetch_instagram_media)
+
+    try:
+        account_analysis_jobs._materialize_posts_for_enqueue(
+            {"account_id": "acct_secure", "access_token": "secret-token"},
+            post_limit=5,
+        )
+    except ValueError as exc:
+        assert str(exc) == "Failed to fetch Instagram media: instagram api unavailable"
+    else:
+        raise AssertionError("Expected ValueError when Instagram media fetch fails")

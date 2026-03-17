@@ -24,15 +24,26 @@ from backend.app.utils.logger import logger
 load_dotenv(override=False)
 
 
+_DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
 def _resolve_session_secret() -> str:
-    configured_secret = (os.getenv("CREONNECT_SESSION_SECRET") or os.getenv("INSTAGRAM_APP_SECRET") or "").strip()
+    configured_secret = (os.getenv("CREONNECT_SESSION_SECRET") or "").strip()
     if configured_secret:
         return configured_secret
 
-    logger.warning(
-        "CREONNECT_SESSION_SECRET is not set; using an ephemeral session secret for this process."
-    )
+    if os.getenv("ENV", "dev").lower() not in {"dev", "development", "test"}:
+        raise RuntimeError("CREONNECT_SESSION_SECRET must be set in production environments")
+
+    logger.warning("CREONNECT_SESSION_SECRET is not set; using ephemeral secret (dev only).")
     return secrets.token_urlsafe(32)
+
+
+def _get_cors_origins() -> list[str]:
+    configured_origins = (os.getenv("CORS_ALLOWED_ORIGINS") or "").strip()
+    if configured_origins:
+        return [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
+    return _DEFAULT_CORS_ORIGINS
 
 
 SESSION_SECRET = _resolve_session_secret()
@@ -55,7 +66,7 @@ app = FastAPI(
 # CORS configuration for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

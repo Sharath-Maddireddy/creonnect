@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from datetime import date, datetime
 from pathlib import Path
 
 from backend.app.ai.schemas import CreatorPostAIInput
@@ -16,6 +17,20 @@ if env_path.exists():
         if "=" in line:
             key, _, value = line.partition("=")
             os.environ.setdefault(key.strip(), value.strip())
+
+
+def _to_jsonable(value):
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {str(key): _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
 
 async def analyze_user_post():
     # Instagram CDN media URLs expire. Provide a fresh one at runtime before rerunning.
@@ -51,8 +66,7 @@ async def analyze_user_post():
     
     # Save the result
     output_path = Path("user_post_analysis_result.json")
-    serialized_result = dict(res)
-    serialized_result["post"] = res["post"].model_dump(mode="json")
+    serialized_result = _to_jsonable(res)
     output_path.write_text(json.dumps(serialized_result, indent=2))
     print(f"Analysis complete. Results saved to {output_path}")
     
