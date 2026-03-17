@@ -27,7 +27,7 @@ class CreatorInput(BaseModel):
     ahs_score: float | None = None
     avg_visual_quality_score: float | None = None
     avg_brand_safety_score: float | None = None
-    adult_content_detected: bool = False
+    adult_content_detected: bool | None = None
 
 
 class BrandMatchRequest(BaseModel):
@@ -46,6 +46,8 @@ class BrandMatchResponse(BaseModel):
     ranked: bool = True
     total_evaluated: int
     disqualified_count: int
+    skipped_count: int = 0
+    skipped_creators: list[str] = Field(default_factory=list)
 
 
 @router.post("", response_model=BrandMatchResponse)
@@ -57,6 +59,7 @@ def match_creators_to_brand(request: BrandMatchRequest) -> BrandMatchResponse:
         len(request.creators),
     )
     matches: list[CreatorMatchScore] = []
+    skipped_creators: list[str] = []
     for creator in request.creators:
         try:
             result = score_creator_against_brand(
@@ -73,10 +76,10 @@ def match_creators_to_brand(request: BrandMatchRequest) -> BrandMatchResponse:
             matches.append(result)
         except Exception as exc:
             logger.warning("[BrandMatch] Failed scoring creator=%s: %s", creator.account_id, exc)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to score creator '{creator.account_id}': {exc}",
-            )
+            skipped_creators.append(creator.account_id)
+
+    if not matches:
+        raise HTTPException(status_code=400, detail="Failed to score any creators.")
 
     matches.sort(key=lambda match: (not match.disqualified, match.total_match_score), reverse=True)
     response = BrandMatchResponse(
@@ -84,10 +87,13 @@ def match_creators_to_brand(request: BrandMatchRequest) -> BrandMatchResponse:
         ranked=True,
         total_evaluated=len(matches),
         disqualified_count=sum(1 for match in matches if match.disqualified),
+        skipped_count=len(skipped_creators),
+        skipped_creators=skipped_creators,
     )
     logger.info(
-        "[BrandMatch] completed evaluated=%d disqualified=%d",
+        "[BrandMatch] completed evaluated=%d disqualified=%d skipped=%d",
         response.total_evaluated,
         response.disqualified_count,
+        response.skipped_count,
     )
     return response

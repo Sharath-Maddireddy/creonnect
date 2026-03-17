@@ -9,6 +9,7 @@ from backend.app.utils.logger import logger
 
 FACEBOOK_OAUTH_URL = "https://www.facebook.com/dialog/oauth"
 GRAPH_API_BASE = "https://graph.facebook.com/v19.0"
+HTTP_TIMEOUT_SECONDS = 30.0
 
 
 INSTAGRAM_APP_ID = os.getenv("INSTAGRAM_APP_ID")
@@ -29,7 +30,7 @@ def _raise_for_api_error(status_code: int, payload: dict[str, Any] | None) -> No
         raise RuntimeError(f"Instagram API error: {payload['error']}")
 
 
-def get_oauth_url() -> str:
+def get_oauth_url(state: str) -> str:
     client_id = _require_env("INSTAGRAM_APP_ID", INSTAGRAM_APP_ID)
     redirect_uri = _require_env("INSTAGRAM_REDIRECT_URI", INSTAGRAM_REDIRECT_URI)
 
@@ -39,6 +40,7 @@ def get_oauth_url() -> str:
             "redirect_uri": redirect_uri,
             "scope": "instagram_basic,instagram_manage_insights",
             "response_type": "code",
+            "state": state,
         }
     )
     return f"{FACEBOOK_OAUTH_URL}?{query}"
@@ -56,8 +58,8 @@ async def exchange_code_for_token(code: str) -> dict[str, Any]:
         "code": code,
     }
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(f"{GRAPH_API_BASE}/oauth/access_token", params=params)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+        response = await client.post(f"{GRAPH_API_BASE}/oauth/access_token", data=params)
     payload = response.json()
     _raise_for_api_error(response.status_code, payload)
     return payload
@@ -74,7 +76,7 @@ async def exchange_short_for_long_lived_token(short_token: str) -> dict[str, Any
         "fb_exchange_token": short_token,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
         response = await client.get(f"{GRAPH_API_BASE}/oauth/access_token", params=params)
     payload = response.json()
     _raise_for_api_error(response.status_code, payload)
@@ -87,7 +89,7 @@ async def fetch_instagram_profile(access_token: str) -> dict[str, Any]:
         "access_token": access_token,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
         response = await client.get(f"{GRAPH_API_BASE}/me", params=params)
     payload = response.json()
     _raise_for_api_error(response.status_code, payload)
@@ -107,7 +109,7 @@ async def fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict
     media: list[dict[str, Any]] = []
     after: str | None = None
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
         while True:
             if after:
                 params["after"] = after

@@ -24,7 +24,11 @@ def _strip_quotes(value: str) -> str:
 
 
 def _parse_scalar(value: str) -> Any:
-    text = _strip_quotes(value.strip())
+    raw = value.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        return _strip_quotes(raw)
+
+    text = raw
     lowered = text.lower()
     if lowered in {"null", "none"}:
         return None
@@ -40,6 +44,23 @@ def _parse_scalar(value: str) -> Any:
         return text
 
 
+def _needs_quoting(text: str) -> bool:
+    if text == "" or " " in text or text.startswith("-") or text.startswith("#"):
+        return True
+
+    lowered = text.lower()
+    if lowered in {"null", "none", "true", "false"}:
+        return True
+
+    try:
+        if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+            return True
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
 def _format_scalar(value: Any) -> str:
     if value is None:
         return "null"
@@ -48,7 +69,7 @@ def _format_scalar(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     text = str(value)
-    if text == "" or " " in text or text.startswith("-") or text.startswith("#"):
+    if _needs_quoting(text):
         escaped = text.replace('"', '\\"')
         return f"\"{escaped}\""
     return text

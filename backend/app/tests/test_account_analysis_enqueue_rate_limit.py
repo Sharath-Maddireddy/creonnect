@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from backend.app.services import account_analysis_jobs
+from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
 
 
 class _QueueStub:
@@ -15,6 +17,32 @@ class _QueueStub:
     def enqueue(self, *args: Any, **kwargs: Any) -> None:
         self._assert_ready()
         self.calls.append((args, kwargs))
+
+
+def _build_post(index: int) -> SinglePostInsights:
+    return SinglePostInsights(
+        account_id="acct_secure",
+        media_id=f"m_{index}",
+        media_type="IMAGE",
+        caption_text="Deterministic caption",
+        published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        core_metrics=CoreMetrics(
+            reach=1000 + index,
+            impressions=1100 + index,
+            likes=120,
+            comments=10,
+            saves=5,
+            shares=2,
+            profile_visits=1,
+            website_taps=0,
+        ),
+        derived_metrics=DerivedMetrics(
+            engagement_rate=0.08,
+            save_rate=0.01,
+            share_rate=0.005,
+        ),
+        benchmark_metrics=BenchmarkMetrics(account_avg_engagement_rate=0.06),
+    )
 
 
 def test_reusable_job_bypasses_rate_limit(monkeypatch) -> None:
@@ -71,3 +99,40 @@ def test_new_job_enforces_rate_limit_before_enqueue(monkeypatch) -> None:
     assert result["status"] == "queued"
     assert calls["rate_limit_calls"] == 1
     assert len(queue.calls) == 1
+
+
+def test_access_token_is_not_enqueued_in_job_payload(monkeypatch) -> None:
+    def _assert_ready() -> None:
+        return None
+
+    async def _fake_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
+        assert access_token == "secret-token"
+        assert limit == 5
+        return [{"id": "m_1"}]
+
+    def _fake_map_instagram_posts(raw_media: list[dict[str, str]]) -> list[SinglePostInsights]:
+        assert raw_media == [{"id": "m_1"}]
+        return [_build_post(1)]
+
+    queue = _QueueStub(assert_ready=_assert_ready)
+    monkeypatch.setattr(account_analysis_jobs, "_resolve_reusable_job", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(account_analysis_jobs, "_enforce_rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: queue)
+    monkeypatch.setattr(account_analysis_jobs, "initialize_job_status", lambda _job_id: {"job_id": _job_id})
+    monkeypatch.setattr(account_analysis_jobs, "_write_dedupe_job_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "_write_inputhash_job_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _fake_fetch_instagram_media)
+    monkeypatch.setattr(account_analysis_jobs, "map_instagram_posts", _fake_map_instagram_posts)
+
+    payload = {"account_id": "acct_secure", "post_limit": 5, "access_token": "secret-token"}
+    result = account_analysis_jobs.enqueue_account_analysis_job(payload)
+
+    assert result["status"] == "queued"
+    assert len(queue.calls) == 1
+    enqueue_args, _enqueue_kwargs = queue.calls[0]
+    queued_payload = enqueue_args[1]
+    assert "access_token" not in queued_payload
+    assert queued_payload["account_id"] == "acct_secure"
+    assert queued_payload["post_limit"] == 5
+    assert isinstance(queued_payload.get("posts"), list)
+    assert len(queued_payload["posts"]) == 1

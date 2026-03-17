@@ -40,4 +40,5 @@ async def diag():
     res = await run_vision_analysis(post)
     print("Vision Res:", res)
 
-asyncio.run(diag())
+if __name__ == "__main__":
+    asyncio.run(diag())

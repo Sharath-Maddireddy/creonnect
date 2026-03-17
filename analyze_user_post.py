@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from datetime import datetime
+
 from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.services.post_insights_service import build_single_post_insights
 
@@ -18,8 +18,12 @@ if env_path.exists():
             os.environ.setdefault(key.strip(), value.strip())
 
 async def analyze_user_post():
-    # Data extracted from https://www.instagram.com/p/DV1UI3Dk2km/
-    media_url = "https://instagram.fhyd3-1.fna.fbcdn.net/v/t51.82787-15/651751402_18427632301188392_5865403673126278636_n.jpg?stp=dst-jpegr_e35_tt6&_nc_cat=101&ig_cache_key=Mzg1MjA3MzYyNjA4NzE1NjAwNg%3D%3D.3-ccb7-5&ccb=7-5&_nc_sid=58cdad&efg=eyJ2ZW5jb2RlX3RhZyI6InhwaWRzLjE0NDB4MTkyMC5oZHIuQzMifQ%3D%3D&_nc_ohc=Go9cG5UrNY0Q7kNvwGRMPee&_nc_oc=Adlrz-IjiorIGpGsHhqV-4yVA4Tt-uWjrqifYEmNKFbUTLoZa5eEkJ1ay650B5V_VKs&_nc_zt=23&_nc_ht=instagram.fhyd3-1.fna&_nc_gid=TFeVrLX2wXK5LP_MKF4jzw&_nc_ss=8&oh=00_AfzMnNfANmctrZR_mhnd1_-x-mDW-kQnD16LAnrUiexhpQ&oe=69BC7207"
+    # Instagram CDN media URLs expire. Provide a fresh one at runtime before rerunning.
+    media_url = (os.getenv("ANALYZE_USER_POST_MEDIA_URL") or "").strip()
+    if not media_url:
+        raise RuntimeError(
+            "Set ANALYZE_USER_POST_MEDIA_URL to a fresh Instagram CDN media URL before running this script."
+        )
     caption_text = "Fuel the rage. Lift harder."
     
     creator_post = CreatorPostAIInput(
@@ -47,15 +51,9 @@ async def analyze_user_post():
     
     # Save the result
     output_path = Path("user_post_analysis_result.json")
-    # Convert SinglePostInsights to dict
-    post_data = res["post"].model_dump(mode="python")
-    # Clean up non-serializable objects (like datetime)
-    def json_serial(obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        raise TypeError (f"Type {type(obj)} not serializable")
-
-    output_path.write_text(json.dumps(res, indent=2, default=str)) # Use str as generic fallback for non-serializables
+    serialized_result = dict(res)
+    serialized_result["post"] = res["post"].model_dump(mode="json")
+    output_path.write_text(json.dumps(serialized_result, indent=2))
     print(f"Analysis complete. Results saved to {output_path}")
     
     # Print a summary to the console

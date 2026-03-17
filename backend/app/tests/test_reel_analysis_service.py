@@ -27,3 +27,10 @@ def test_watch_time_boost_applied() -> None:
     audio = ReelAudioScore()
     result = compute_reel_analysis(signals, audio, watch_time_pct=0.7)
     assert result.retention_score == 30.0
+
+
+def test_watch_time_boost_applied_for_integer_value() -> None:
+    signals = {"retention_signal": 0.5}
+    audio = ReelAudioScore()
+    result = compute_reel_analysis(signals, audio, watch_time_pct=1)
+    assert result.retention_score == 30.0

@@ -9,6 +9,7 @@ from backend.app.ai.llm_client import LLMClient, LLMClientError
 from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.post_models import CaptionEffectivenessScore
+from backend.app.utils.logger import logger
 
 
 _HOOK_KEYWORD_RE = re.compile(r"\b(you|your|this|secret|how|why)\b", re.IGNORECASE)
@@ -31,6 +32,21 @@ def _coerce_int_0_100(value: int | float | str | None) -> int | None:
     except (TypeError, ValueError):
         return None
     return int(max(0.0, min(100.0, round(numeric))))
+
+
+def _coerce_notes(value: object) -> list[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        notes: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    notes.append(text)
+        return notes
+    return []
 
 
 async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScore:
@@ -64,6 +80,12 @@ async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScor
             raise ValueError("Missing required S2 fields from LLM output.")
 
         total_0_50 = round(s2_raw_0_100 / 2.0, 1)
+        notes = _coerce_notes(payload.get("technical_flaws"))
+        improved_hook_suggestion = payload.get("improved_hook_suggestion")
+        if isinstance(improved_hook_suggestion, str) and improved_hook_suggestion.strip():
+            notes.append(f"Improved hook suggestion: {improved_hook_suggestion.strip()}")
+        if not notes:
+            notes = compute_s2_caption_effectiveness(caption_text).notes
 
         return CaptionEffectivenessScore(
             hook_score_0_100=hook_score,
@@ -72,11 +94,10 @@ async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScor
             cta_score_0_100=cta_score,
             s2_raw_0_100=s2_raw_0_100,
             total_0_50=total_0_50,
-            notes=[],
+            notes=notes,
         )
-    except (ValueError, LLMClientError):
-        return compute_s2_caption_effectiveness(caption_text)
-    except Exception:
+    except Exception as exc:
+        logger.warning("LLM caption analysis failed, using fallback: %s", exc)
         return compute_s2_caption_effectiveness(caption_text)
 
 

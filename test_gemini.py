@@ -1,7 +1,6 @@
 import os
 import asyncio
 from pathlib import Path
-from urllib.parse import urlparse
 
 env_path = Path("backend/.env")
 if env_path.exists():
@@ -14,7 +13,7 @@ if env_path.exists():
             os.environ.setdefault(key.strip(), value.strip())
 
 api_key = os.getenv("GEMINI_API_KEY")
-print("API Key starts with:", api_key[:10] if api_key else "None")
+print("API Key configured:", "Yes" if api_key else "No")
 
 import google.generativeai as genai
 

@@ -1,6 +1,11 @@
-"""Unit tests for deterministic S2 caption effectiveness scoring."""
+"""Unit tests for S2 caption effectiveness scoring."""
 
-from backend.app.analytics.caption_s2_engine import compute_s2_caption_effectiveness
+from __future__ import annotations
+
+import asyncio
+
+import backend.app.analytics.caption_s2_engine as caption_s2_engine
+from backend.app.analytics.caption_s2_engine import analyze_caption_via_llm, compute_s2_caption_effectiveness
 
 
 def test_hook_scoring_with_question_and_keyword() -> None:
@@ -49,3 +54,65 @@ def test_s2_weighted_total_matches_reference() -> None:
     assert score.cta_score_0_100 == 20
     assert score.s2_raw_0_100 == expected_raw
     assert score.total_0_50 == round(expected_raw / 2.0, 1)
+
+
+def test_llm_caption_analysis_preserves_diagnostic_notes(monkeypatch) -> None:
+    def fake_generate(self, prompt):  # noqa: ANN001
+        return """
+hook_score_0_100 82
+length_score_0_100 75
+hashtag_score_0_100 40
+cta_score_0_100 20
+s2_raw_0_100 58
+technical_flaws
+  - CTA could be more specific
+  - Hook takes too long to get to the payoff
+improved_hook_suggestion Lead with the transformation
+""".strip()
+
+    monkeypatch.setattr(caption_s2_engine.LLMClient, "generate", fake_generate)
+
+    result = asyncio.run(analyze_caption_via_llm("A short caption without a CTA"))
+
+    assert result.notes == [
+        "CTA could be more specific",
+        "Hook takes too long to get to the payoff",
+        "Improved hook suggestion: Lead with the transformation",
+    ]
+
+
+def test_llm_caption_analysis_falls_back_to_deterministic_notes_when_missing(monkeypatch) -> None:
+    caption = "Tiny caption"
+
+    def fake_generate(self, prompt):  # noqa: ANN001
+        return """
+hook_score_0_100 40
+length_score_0_100 30
+hashtag_score_0_100 20
+cta_score_0_100 20
+s2_raw_0_100 28
+""".strip()
+
+    monkeypatch.setattr(caption_s2_engine.LLMClient, "generate", fake_generate)
+
+    result = asyncio.run(analyze_caption_via_llm(caption))
+
+    assert result.notes == compute_s2_caption_effectiveness(caption).notes
+
+
+def test_llm_caption_analysis_logs_warning_on_failure(monkeypatch) -> None:
+    warnings: list[str] = []
+
+    def fake_generate(self, prompt):  # noqa: ANN001
+        raise RuntimeError("llm transport exploded")
+
+    def fake_warning(message: str, *args: object) -> None:
+        warnings.append(message % args if args else message)
+
+    monkeypatch.setattr(caption_s2_engine.LLMClient, "generate", fake_generate)
+    monkeypatch.setattr(caption_s2_engine.logger, "warning", fake_warning)
+
+    result = asyncio.run(analyze_caption_via_llm("A short caption without a CTA"))
+
+    assert result.notes == compute_s2_caption_effectiveness("A short caption without a CTA").notes
+    assert warnings == ["LLM caption analysis failed, using fallback: llm transport exploded"]

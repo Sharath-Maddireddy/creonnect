@@ -23,6 +23,8 @@ class BrandProfile(BaseModel):
     @field_validator("brand_name", "niche", mode="before")
     @classmethod
     def _strip_text(cls, value: str | None) -> str:
+        if not isinstance(value, str):
+            return ""
         return (value or "").strip()[:120]
 
     @field_validator("min_engagement_rate", mode="before")
@@ -67,6 +69,8 @@ class CreatorMatchScore(BaseModel):
     @field_validator("account_id", mode="before")
     @classmethod
     def _sanitize_account_id(cls, value: str | None) -> str:
+        if not isinstance(value, str):
+            return ""
         return (value or "").strip()[:120]
 
     @field_validator(

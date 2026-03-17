@@ -48,6 +48,7 @@ This project now supports the official Instagram OAuth flow via the Meta Graph A
 INSTAGRAM_APP_ID=your_facebook_app_id_here
 INSTAGRAM_APP_SECRET=your_facebook_app_secret_here
 INSTAGRAM_REDIRECT_URI=http://localhost:8000/api/auth/instagram/callback
+CREONNECT_SESSION_SECRET=replace_with_a_long_random_secret_for_cookie_signing
 ```
 
 Note: `INSTAGRAM_SESSION_ID` is deprecated and only used for legacy dev scraper tooling.

@@ -164,7 +164,7 @@ def score_creator_against_brand(
     predicted_engagement_rate: float | None = None,
     visual_quality_score_total: float = 0.0,
     brand_safety_score_total_0_50: float = 50.0,
-    adult_content_detected: bool = False,
+    adult_content_detected: bool | None = None,
 ) -> CreatorMatchScore:
     """Compute deterministic match score for one creator against a brand profile."""
     notes: list[str] = []
@@ -186,9 +186,12 @@ def score_creator_against_brand(
     notes.extend(niche_notes + engagement_notes + safety_notes + content_notes + audience_notes)
 
     disqualified = False
-    if adult_content_detected:
+    if adult_content_detected is True:
         disqualified = True
         disqualify_reasons.append("Adult content detected on creator posts.")
+    elif adult_content_detected is None:
+        disqualified = True
+        disqualify_reasons.append("Adult content status unknown.")
 
     safety_score_0_100 = _clamp(brand_safety * 2.0, 0.0, 100.0)
     if safety_score_0_100 < brand.required_brand_safety_min:

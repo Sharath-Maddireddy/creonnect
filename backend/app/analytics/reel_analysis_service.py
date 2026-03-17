@@ -53,7 +53,7 @@ def compute_reel_analysis(
     else:
         retention_score = 25.0
 
-    if isinstance(watch_time_pct, float):
+    if isinstance(watch_time_pct, (int, float)):
         if watch_time_pct >= 0.5:
             retention_score = _clamp(retention_score + 5.0, 0.0, 50.0)
             notes.append("Watch-time >=50% boosts retention.")

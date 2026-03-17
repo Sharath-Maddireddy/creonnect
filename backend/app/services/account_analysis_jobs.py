@@ -368,6 +368,22 @@ def _enforce_rate_limit(account_id: str, running_job_id: str | None) -> None:
     )
 
 
+def _materialize_posts_for_enqueue(payload: dict[str, Any], post_limit: int) -> dict[str, Any]:
+    sanitized_payload = dict(payload)
+    access_token = sanitized_payload.pop("access_token", None)
+
+    if isinstance(sanitized_payload.get("posts"), list):
+        return sanitized_payload
+
+    if not isinstance(access_token, str) or not access_token.strip():
+        return sanitized_payload
+
+    raw_media = asyncio.run(fetch_instagram_media(access_token.strip(), limit=post_limit))
+    creator_posts = map_instagram_posts(raw_media)
+    sanitized_payload["posts"] = [post.model_dump(mode="python") for post in creator_posts[:post_limit]]
+    return sanitized_payload
+
+
 def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
     """Enqueue account analysis background job and persist queued status."""
     payload = payload if isinstance(payload, dict) else {}
@@ -386,10 +402,11 @@ def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         return {"job_id": reusable_job_id, "status": reusable_status}
     _enforce_rate_limit(account_id, running_job_id=None)
 
+    sanitized_payload = _materialize_posts_for_enqueue(payload, post_limit=post_limit)
     queue = get_queue()
-    raw_job_id = _normalize_job_id(payload.get("job_id"))
+    raw_job_id = _normalize_job_id(sanitized_payload.get("job_id"))
     job_id = raw_job_id or str(uuid4())
-    full_payload = dict(payload)
+    full_payload = dict(sanitized_payload)
     full_payload["job_id"] = job_id
     full_payload["account_id"] = account_id
     full_payload["post_limit"] = post_limit
@@ -426,13 +443,9 @@ def _fetch_posts_from_source(payload: dict[str, Any], post_limit: int) -> list[S
         for item in raw_posts[:post_limit]:
             posts.append(_coerce_single_post(item))
         return posts
-    if payload.get("access_token"):
-        access_token = payload["access_token"]
-        raw_media = asyncio.run(fetch_instagram_media(access_token, limit=post_limit))
-        creator_posts = map_instagram_posts(raw_media)
-        return [_coerce_single_post(p.model_dump()) for p in creator_posts[:post_limit]]
-
-    raise ValueError("No post source configured. Provide precomputed posts in payload['posts'].")
+    raise ValueError(
+        "No post source configured. Provide precomputed posts in payload['posts'] via enqueue_account_analysis_job."
+    )
 
 
 def _build_warning(
