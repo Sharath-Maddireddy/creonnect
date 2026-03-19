@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from backend.app.api.account_analysis_routes import router as account_analysis_router
 from backend.app.api.brand_match_routes import router as brand_match_router
+from backend.app.api.campaign_routes import router as campaign_router
 from backend.app.api.post_analysis_routes import router as post_analysis_router
 from backend.app.api.reel_analysis_routes import router as reel_analysis_router
 from backend.app.api.dashboard import router as dashboard_router
@@ -82,6 +83,7 @@ app.add_middleware(
 app.include_router(dashboard_router)
 app.include_router(account_analysis_router)
 app.include_router(brand_match_router)
+app.include_router(campaign_router)
 app.include_router(post_analysis_router)
 app.include_router(reel_analysis_router)
 app.include_router(instagram_auth_router)
