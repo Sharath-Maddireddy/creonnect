@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from backend.app.ai.prompts import REEL_VISION_EVALUATION_PROMPT
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.utils.logger import logger
 
@@ -18,31 +19,6 @@ REEL_DOWNLOAD_TIMEOUT_SEC = 30.0
 MAX_VIDEO_BYTES = 100 * 1024 * 1024
 GEMINI_FILE_POLL_MAX_ATTEMPTS = 20
 GEMINI_FILE_POLL_INTERVAL_SEC = 2.0
-REEL_VISION_INSTRUCTION = (
-    "You are analyzing an Instagram Reel video. "
-    "Watch the full video and return ONLY valid TOON format (Token-Oriented Object Notation). "
-    "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes. "
-    "Use '-' for list items. "
-    "Return exactly these keys: "
-    "hook_frame_score (float 0-1, visual grab in the first 3 seconds), "
-    "hook_text_overlay (string or null, any text shown in the first 3 seconds), "
-    "pacing_label (one of: fast|medium|slow), "
-    "cut_count_estimate (integer, total number of scene cuts), "
-    "dominant_emotion (string, e.g. excitement|curiosity|calm|humour), "
-    "retention_signal (float 0-1, 0=likely drops off, 1=likely watched fully), "
-    "audio_visual_sync (float 0-1, how well visuals match audio mood), "
-    "objects (array of strings, main objects/subjects in the video), "
-    "scene_description (string, overall scene summary), "
-    "detected_text (string or null, any on-screen text), "
-    "visual_style (string, e.g. talking-head|b-roll|animation), "
-    "hook_strength_score (float 0-1, overall hook quality), "
-    "cringe_score (integer 0-100, 0=polished, 100=extreme cringe), "
-    "cringe_signals (array of strings, max 3), "
-    "cringe_fixes (array of strings, max 3), "
-    "production_level (one of: low|medium|high), "
-    "adult_content_detected (boolean). "
-    "Do not include markdown or extra keys."
-)
 
 
 def _download_reel(media_url: str) -> bytes | None:
@@ -123,7 +99,7 @@ def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
                 try:
                     response = client.models.generate_content(
                         model=model_name,
-                        contents=[REEL_VISION_INSTRUCTION, file_status],
+                        contents=[REEL_VISION_EVALUATION_PROMPT, file_status],
                     )
                     last_exc = None
                     break

@@ -75,6 +75,7 @@ async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScor
         hashtag_score = _coerce_int_0_100(payload.get("hashtag_score_0_100"))
         cta_score = _coerce_int_0_100(payload.get("cta_score_0_100"))
         s2_raw_0_100 = _coerce_int_0_100(payload.get("s2_raw_0_100"))
+        retention_probability_0_100 = _coerce_int_0_100(payload.get("retention_probability_0_100"))
 
         if None in {hook_score, length_score, hashtag_score, cta_score, s2_raw_0_100}:
             raise ValueError("Missing required S2 fields from LLM output.")
@@ -82,6 +83,11 @@ async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScor
         total_0_50 = round(s2_raw_0_100 / 2.0, 1)
         notes = _coerce_notes(payload.get("technical_flaws"))
         improved_hook_suggestion = payload.get("improved_hook_suggestion")
+        predicted_audience_sentiment = payload.get("predicted_audience_sentiment")
+        if isinstance(predicted_audience_sentiment, str) and predicted_audience_sentiment.strip():
+            notes.append(f"Predicted audience sentiment: {predicted_audience_sentiment.strip()}")
+        if retention_probability_0_100 is not None:
+            notes.append(f"Retention probability: {retention_probability_0_100}/100")
         if isinstance(improved_hook_suggestion, str) and improved_hook_suggestion.strip():
             notes.append(f"Improved hook suggestion: {improved_hook_suggestion.strip()}")
         if not notes:

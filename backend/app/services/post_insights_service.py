@@ -23,6 +23,7 @@ from backend.app.services.ai_analysis_service import (
     run_audience_relevance_llm,
     run_caption_analysis_llm,
 )
+from backend.app.services.post_snapshot_store import write_post_insights_snapshot
 
 
 class SinglePostInsightsResponse(TypedDict):
@@ -151,6 +152,13 @@ async def build_single_post_insights(
     ai_analysis: dict[str, Any] | None = None
     if run_ai:
         ai_analysis = await analyze_single_post_ai(post_copy)
+
+    if isinstance(post_copy.media_id, str) and post_copy.media_id.strip():
+        write_post_insights_snapshot(
+            post_copy.media_id,
+            post=post_copy,
+            ai_analysis=ai_analysis,
+        )
 
     return {
         "post": post_copy,

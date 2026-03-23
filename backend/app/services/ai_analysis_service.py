@@ -25,7 +25,7 @@ from backend.app.analytics.predicted_er_engine import compute_predicted_engageme
 from backend.app.analytics.s4_audience_relevance_engine import analyze_audience_relevance_via_llm
 from backend.app.analytics.s6_brand_safety_engine import compute_s6_brand_safety
 from backend.app.analytics.vision_s1_engine import _as_float, compute_visual_quality_score
-from backend.app.analytics.vision_s3_engine import compute_s3_content_clarity
+from backend.app.analytics.vision_s3_engine import analyze_content_clarity_via_llm
 from backend.app.domain.post_models import (
     AudienceRelevanceScore,
     BrandSafetyScore,
@@ -505,26 +505,20 @@ async def run_vision_analysis(
             instruction=instruction,
             media_url=media_url,
         )
-        payload = toon_loads(raw_text)
+        stripped_raw_text = raw_text.strip()
+        if stripped_raw_text.startswith("{"):
+            payload = json.loads(stripped_raw_text)
+        else:
+            payload = toon_loads(raw_text)
         if not isinstance(payload, dict):
             raise ValueError("Gemini output must be a TOON object.")
 
         required_keys = {
             "objects",
-            "dominant_focus",
             "scene_description",
             "visual_style",
-            "scene_type",
-            "visual_quality_score",
-            "technical_flaws",
             "detected_text",
             "hook_strength_score",
-            "cringe_score",
-            "cringe_signals",
-            "cringe_fixes",
-            "production_level",
-            "adult_content_detected",
-            "adult_content_confidence",
         }
         if not required_keys.issubset(payload.keys()):
             raise ValueError("Gemini TOON schema mismatch.")
@@ -535,8 +529,8 @@ async def run_vision_analysis(
         detected_text = payload.get("detected_text")
         visual_style = payload.get("visual_style")
         scene_type = payload.get("scene_type")
-        visual_quality_score = payload.get("visual_quality_score")
-        technical_flaws = payload.get("technical_flaws")
+        visual_quality_score = payload.get("visual_quality_score") or {}
+        technical_flaws = payload.get("technical_flaws") or []
         hook_strength_score = payload.get("hook_strength_score")
 
         if not isinstance(objects, list) or not all(isinstance(item, str) for item in objects):
@@ -574,18 +568,19 @@ async def run_vision_analysis(
         subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))
         aesthetic_quality_raw = _as_float(visual_quality_score.get("aesthetic_quality"))
         if None in {composition_raw, lighting_raw, subject_clarity_raw, aesthetic_quality_raw}:
-            raise ValueError("Invalid visual_quality_score fields.")
-        normalized_visual_quality = {
-            "composition": max(0.0, min(10.0, float(composition_raw))),
-            "lighting": max(0.0, min(10.0, float(lighting_raw))),
-            "subject_clarity": max(0.0, min(10.0, float(subject_clarity_raw))),
-            "aesthetic_quality": max(0.0, min(10.0, float(aesthetic_quality_raw))),
-        }
+            normalized_visual_quality = None
+        else:
+            normalized_visual_quality = {
+                "composition": max(0.0, min(10.0, float(composition_raw))),
+                "lighting": max(0.0, min(10.0, float(lighting_raw))),
+                "subject_clarity": max(0.0, min(10.0, float(subject_clarity_raw))),
+                "aesthetic_quality": max(0.0, min(10.0, float(aesthetic_quality_raw))),
+            }
         clamped_hook_strength_score = max(0.0, min(1.0, float(hook_strength_score)))
         dominant_object = payload.get("dominant_object")
-        lighting_quality = normalized_visual_quality.get("lighting")
-        subject_clarity = normalized_visual_quality.get("subject_clarity")
-        aesthetic_quality = normalized_visual_quality.get("aesthetic_quality")
+        lighting_quality = normalized_visual_quality.get("lighting") if isinstance(normalized_visual_quality, dict) else None
+        subject_clarity = normalized_visual_quality.get("subject_clarity") if isinstance(normalized_visual_quality, dict) else None
+        aesthetic_quality = normalized_visual_quality.get("aesthetic_quality") if isinstance(normalized_visual_quality, dict) else None
         cringe_score = _clamp_int_0_100(payload.get("cringe_score"))
         cringe_signals = _normalize_short_text_list(payload.get("cringe_signals"), limit=3)
         cringe_fixes = _normalize_short_text_list(payload.get("cringe_fixes"), limit=3)
@@ -1436,7 +1431,7 @@ async def analyze_single_post_ai(
         if isinstance(post.caption_effectiveness_score, CaptionEffectivenessScore)
         else await analyze_caption_via_llm(post.caption_text)
     )
-    content_clarity_score = compute_s3_content_clarity(vision, post.caption_text)
+    content_clarity_score = await analyze_content_clarity_via_llm(vision, post.caption_text)
     audience_relevance_score = await analyze_audience_relevance_via_llm(
         post.post_category,
         post.creator_dominant_category,

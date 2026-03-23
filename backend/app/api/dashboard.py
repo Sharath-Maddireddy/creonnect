@@ -6,7 +6,7 @@ All computations are done server-side - frontend only plots.
 """
 
 from fastapi import APIRouter, HTTPException
-from backend.app.services.dashboard_service import build_creator_dashboard
+from backend.app.services.dashboard_service import build_creator_analytics, build_creator_dashboard
 from backend.app.services.snapshot_service import build_creator_snapshot_service
 from backend.app.services.script_service import generate_creator_script_service
 from backend.app.infra.token_store import get_token
@@ -33,6 +33,26 @@ def creator_dashboard(user_id: str | None = None):
                 raise HTTPException(status_code=401, detail="Not authenticated")
             return build_creator_dashboard("demo", access_token=token["access_token"])
         return build_creator_dashboard("demo")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Creator not found")
+
+
+@router.get("/creator/analytics")
+def creator_analytics(user_id: str | None = None):
+    """
+    Get enriched creator analytics including dashboard, account health,
+    and content-type breakdown.
+    Notes:
+    - When user_id is provided, real Instagram data is fetched via OAuth.
+    - When user_id is omitted, demo mode is used.
+    """
+    try:
+        if user_id:
+            token = get_token(user_id)
+            if not token or not token.get("access_token"):
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            return build_creator_analytics("demo", access_token=token["access_token"])
+        return build_creator_analytics("demo")
     except ValueError:
         raise HTTPException(status_code=404, detail="Creator not found")
 

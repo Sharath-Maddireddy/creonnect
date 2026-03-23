@@ -1,55 +1,50 @@
-"""Brand-focused LLM prompts."""
+"""Prompt templates for brand campaign features."""
+
+from __future__ import annotations
 
 
-CAMPAIGN_BRIEF_EXTRACTION_PROMPT = """
-System:
-You are an expert brand marketing campaign strategist. Extract structured campaign requirements from a brand's natural language description of their ideal creator or campaign.
+CAMPAIGN_BRIEF_EXTRACTION_PROMPT = """You are an expert brand marketing campaign strategist. Extract structured campaign requirements from a brand's natural language description of their ideal creator or campaign.
 
-Return ONLY valid TOON format (Token-Oriented Object Notation, YAML-like indentation, no braces, no quotes). Do not include markdown formatting or extra text.
+We use a plain text format called TOON for our outputs.
+Return exactly the TOON representation of the parsed brand profile, following these rules.
 
-Extract exactly these fields:
-- brand_name
-- niche
-- min_followers
-- max_followers
-- min_engagement_rate
-- campaign_goal
-- content_type_preference
-- additional_requirements
+# Output Rules
+1. Only return the requested keys, exactly as named.
+2. Provide a single flat list of key-value pairs (no nested arrays or objects).
+3. Do not include quotes, braces, commas, backticks, or markdown blocks unless it is part of a string value.
+4. Each key-value pair must be on its own line: `key: value`.
+5. For arrays, split items onto multiple lines using the exact format `  - item` under the key line.
 
-Rules:
-- If the user does not mention a field, output null.
-- min_followers and max_followers must be integers or null.
-- min_engagement_rate must be a decimal between 0.0 and 1.0 or null.
-- additional_requirements must be an array of short strings, or null if nothing meaningful is mentioned.
-- Normalize follower shorthand using this rubric:
-  - nano creators = min_followers 1000, max_followers 10000
-  - micro creators = min_followers 10000, max_followers 100000
-  - mid-tier = min_followers 100000, max_followers 500000
-  - macro = min_followers 500000, max_followers 1000000
-  - 50k+ = min_followers 50000, max_followers null
-  - 100k followers = min_followers 100000, max_followers 100000
-- If the user gives a clear follower floor only, set max_followers to null unless a maximum is explicitly stated.
-- If the user gives a clear exact follower target, set min_followers and max_followers to the same number.
-- Convert engagement requirements like 5 percent into 0.05.
-- Keep campaign_goal concise and outcome-oriented.
-- Keep content_type_preference concise, such as reels, static posts, stories, ugc videos, tutorial content, or null.
+# Required Fields
+- brand_name: string or null
+- niche: string or null (e.g. fitness, food, tech, gaming, beauty, fashion, travel)
+- min_followers: integer or null
+- max_followers: integer or null
+- min_engagement_rate: decimal (0.0 to 1.0) or null
+- campaign_goal: string or null
+- content_type_preference: string or null (e.g. REEL, IMAGE, STORY)
+- additional_requirements: list of strings (if empty, omit array elements)
 
-OUTPUT EXAMPLE (STRICT TOON ONLY):
-brand_name GlowSkin
-niche beauty
-min_followers 50000
-max_followers null
-min_engagement_rate 0.04
-campaign_goal Drive awareness and product trials for a new vitamin C serum
-content_type_preference reels
-additional_requirements
-  - Skincare creators only
-  - Before-and-after style storytelling
-  - Preference for creators based in India
+# Follower Range Meaning
+- "nano creators" = min_followers: 1000, max_followers: 10000
+- "micro creators" = min_followers: 10000, max_followers: 100000
+- "mid-tier" = min_followers: 100000, max_followers: 500000
+- "macro" = min_followers: 500000, max_followers: 1000000
+- "50k+" = min_followers: 50000
+- "100k followers" = min_followers: 100000, max_followers: 100000
 
-User:
-Extract the structured campaign brief from this request:
+--- OUTPUT EXAMPLE ---
+brand_name: FitLife Athletics
+niche: fitness
+min_followers: 50000
+max_followers: null
+min_engagement_rate: 0.05
+campaign_goal: product launch for new pre-workout
+content_type_preference: REEL
+additional_requirements:
+  - Must have energetic presentation style
+  - Preferably based in USA
 
+--- TARGET INPUT TO PARSE ---
 {user_prompt}
 """

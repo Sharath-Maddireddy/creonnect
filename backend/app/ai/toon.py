@@ -135,6 +135,7 @@ def loads(text: str) -> dict[str, Any]:
 
         if " " in content:
             key, value_text = content.split(" ", 1)
+            key = key.rstrip(":")
             if isinstance(container, dict):
                 container[key] = _parse_scalar(value_text)
             else:

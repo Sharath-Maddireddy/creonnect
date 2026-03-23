@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 from typing import Any
 
+from backend.app.ai.llm_client import LLMClient, LLMClientError
+from backend.app.ai.prompts import S3_CLARITY_EVALUATION_PROMPT
+from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.post_models import ContentClarityScore, VisionSignal
+from backend.app.utils.logger import logger
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -45,6 +51,31 @@ _STOPWORDS = {
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
+
+
+def _coerce_int_0_10(value: int | float | str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(max(0.0, min(10.0, round(numeric))))
+
+
+def _coerce_notes(value: object) -> list[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        notes: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    notes.append(text)
+        return notes
+    return []
 
 
 def normalize_text(value: str) -> str:
@@ -132,6 +163,17 @@ def _extract_signal(vision: VisionSignal | dict[str, Any] | None) -> dict[str, A
     return vision
 
 
+def _serialize_vision_signals(vision: VisionSignal | dict[str, Any] | None) -> str:
+    signal = _extract_signal(vision)
+    if not signal:
+        return "{}"
+    try:
+        return json.dumps(signal, ensure_ascii=True, sort_keys=True, default=str)
+    except TypeError:
+        sanitized = {str(key): str(value) for key, value in signal.items()}
+        return json.dumps(sanitized, ensure_ascii=True, sort_keys=True)
+
+
 def get_dominant_focus(signal: dict[str, Any]) -> str | None:
     dominant_focus = signal.get("dominant_focus")
     if isinstance(dominant_focus, str) and dominant_focus.strip():
@@ -188,6 +230,70 @@ def _mentions_focus_or_object(caption: str, dominant_focus: str | None, objects:
         if obj_tokens & caption_tokens:
             return True
     return False
+
+
+async def analyze_content_clarity_via_llm(
+    vision: VisionSignal | dict[str, Any] | None,
+    caption_text: str,
+) -> ContentClarityScore:
+    """Analyze S3 content clarity via LLM with deterministic fallback."""
+    caption = caption_text if isinstance(caption_text, str) else ""
+    prompt = {
+        "system": (
+            "Return only valid TOON format (Token-Oriented Object Notation). "
+            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
+        ),
+        "user": S3_CLARITY_EVALUATION_PROMPT.replace("{caption_text}", caption).replace(
+            "{vision_signals}", _serialize_vision_signals(vision)
+        ),
+    }
+
+    try:
+        raw_text = await asyncio.to_thread(LLMClient().generate, prompt)
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            raise LLMClientError("LLM returned empty response.")
+        payload = toon_loads(raw_text)
+        if not isinstance(payload, dict):
+            raise ValueError("LLM output must be a TOON object.")
+
+        message_singularity = _coerce_int_0_10(payload.get("message_singularity_0_10"))
+        context_clarity = _coerce_int_0_10(payload.get("context_clarity_0_10"))
+        caption_alignment = _coerce_int_0_10(payload.get("caption_alignment_0_10"))
+        visual_message_support = _coerce_int_0_10(payload.get("visual_message_support_0_10"))
+        cognitive_load = _coerce_int_0_10(payload.get("cognitive_load_0_10"))
+
+        if None in {
+            message_singularity,
+            context_clarity,
+            caption_alignment,
+            visual_message_support,
+            cognitive_load,
+        }:
+            raise ValueError("Missing required S3 fields from LLM output.")
+
+        total = (
+            message_singularity * 0.25
+            + context_clarity * 0.20
+            + caption_alignment * 0.20
+            + visual_message_support * 0.20
+            + cognitive_load * 0.15
+        ) * 5.0
+        notes = _coerce_notes(payload.get("technical_flaws"))
+        if not notes:
+            notes = compute_s3_content_clarity(vision, caption_text).notes
+
+        return ContentClarityScore(
+            message_singularity=message_singularity,
+            context_clarity=context_clarity,
+            caption_alignment=caption_alignment,
+            visual_message_support=visual_message_support,
+            cognitive_load=cognitive_load,
+            total=_clamp(total, 0.0, 50.0),
+            notes=notes,
+        )
+    except Exception as exc:
+        logger.warning("LLM S3 content clarity analysis failed, using fallback: %s", exc)
+        return compute_s3_content_clarity(vision, caption_text)
 
 
 def compute_s3_content_clarity(

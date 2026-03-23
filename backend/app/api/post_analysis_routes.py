@@ -17,6 +17,7 @@ from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.domain.post_models import SinglePostInsights, VisionAnalysis
 from backend.app.infra.redis_client import get_json, set_json
 from backend.app.services.post_insights_service import build_single_post_insights
+from backend.app.services.post_snapshot_store import read_post_insights_snapshot
 from backend.app.utils.logger import logger
 
 
@@ -350,3 +351,28 @@ def post_cringe_summary(post_id: str) -> dict[str, Any]:
             detail="Cringe summary not found for post_id. Run /api/post-analysis for this post first.",
         )
     return payload
+
+
+@router.get("/v1/posts/{post_id}/insights")
+def get_post_insights(post_id: str) -> dict[str, Any]:
+    """Return cached SinglePostInsights + ai_analysis payload for a previously analyzed post."""
+    normalized_post_id = post_id.strip()
+    if not normalized_post_id:
+        raise HTTPException(status_code=400, detail="post_id must be non-empty.")
+
+    payload = read_post_insights_snapshot(normalized_post_id)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=404,
+            detail="Post insights not found for post_id. Run /api/post-analysis for this post first.",
+        )
+
+    raw_post = payload.get("post")
+    if not isinstance(raw_post, dict):
+        raise HTTPException(status_code=500, detail="Cached post insights payload is invalid.")
+
+    return {
+        "status": "succeeded",
+        "post": raw_post,
+        "ai_analysis": payload.get("ai_analysis") if isinstance(payload.get("ai_analysis"), dict) else None,
+    }

@@ -64,6 +64,8 @@ length_score_0_100 75
 hashtag_score_0_100 40
 cta_score_0_100 20
 s2_raw_0_100 58
+predicted_audience_sentiment Curious
+retention_probability_0_100 73
 technical_flaws
   - CTA could be more specific
   - Hook takes too long to get to the payoff
@@ -77,7 +79,32 @@ improved_hook_suggestion Lead with the transformation
     assert result.notes == [
         "CTA could be more specific",
         "Hook takes too long to get to the payoff",
+        "Predicted audience sentiment: Curious",
+        "Retention probability: 73/100",
         "Improved hook suggestion: Lead with the transformation",
+    ]
+
+
+def test_llm_caption_analysis_appends_only_available_new_insights(monkeypatch) -> None:
+    def fake_generate(self, prompt):  # noqa: ANN001
+        return """
+hook_score_0_100 82
+length_score_0_100 75
+hashtag_score_0_100 40
+cta_score_0_100 20
+s2_raw_0_100 58
+predicted_audience_sentiment Inspirational
+technical_flaws
+  - CTA could be more specific
+""".strip()
+
+    monkeypatch.setattr(caption_s2_engine.LLMClient, "generate", fake_generate)
+
+    result = asyncio.run(analyze_caption_via_llm("A short caption without a CTA"))
+
+    assert result.notes == [
+        "CTA could be more specific",
+        "Predicted audience sentiment: Inspirational",
     ]
 
 

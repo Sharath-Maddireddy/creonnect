@@ -176,6 +176,8 @@ length_score_0_100 85
 hashtag_score_0_100 78
 cta_score_0_100 88
 s2_raw_0_100 86
+predicted_audience_sentiment Curious
+retention_probability_0_100 73
 technical_flaws
   - CTA could be more specific
   - Hook takes too long to get to the payoff
@@ -183,6 +185,142 @@ improved_hook_suggestion Lead with the transformation in the first line
 
 CAPTION TO ANALYZE:
 "{caption_text}"
+"""
+
+
+S3_CLARITY_EVALUATION_PROMPT = """
+You are an expert Social Media Creative Strategist and Content Clarity evaluator.
+Analyze the Instagram post using the caption and the summarized S1 vision payload.
+
+Return ONLY valid TOON format (Token-Oriented Object Notation, YAML-like indentation, no braces, no quotes). Do not include markdown formatting or extra text.
+
+Score each field as an integer from 0 to 10:
+
+1. MESSAGE_SINGULARITY_0_10
+   - Measures whether the post communicates one clear primary idea instead of multiple competing messages.
+   - High score when the content has a single dominant subject or takeaway.
+   - Low score when the visual is cluttered, text-heavy, or conceptually scattered.
+
+2. CONTEXT_CLARITY_0_10
+   - Measures how easy it is to understand what is happening and why it matters.
+   - Consider caption clarity, scene context, and whether the viewer can quickly orient themselves.
+
+3. CAPTION_ALIGNMENT_0_10
+   - Measures how well the caption reinforces the visual message instead of drifting away from it.
+   - High score when caption and visual clearly support the same message.
+
+4. VISUAL_MESSAGE_SUPPORT_0_10
+   - Measures whether the visual elements strengthen the intended message.
+   - High score when the image/frame itself carries or supports the idea clearly.
+
+5. COGNITIVE_LOAD_0_10
+   - Measures ease of comprehension.
+   - High score means low overload and easy comprehension.
+   - Low score means too much clutter, too much text, too many competing objects, or a confusing caption.
+
+Also output:
+- technical_flaws: array of short strings describing the main clarity problems or diagnostics
+
+OUTPUT EXAMPLE (STRICT TOON ONLY):
+message_singularity_0_10 8
+context_clarity_0_10 7
+caption_alignment_0_10 8
+visual_message_support_0_10 7
+cognitive_load_0_10 6
+technical_flaws
+  - Slight visual clutter
+  - Caption could clarify the payoff sooner
+
+INPUT DATA:
+Caption:
+{caption_text}
+
+Vision Signals JSON:
+{vision_signals}
+"""
+
+
+REEL_VISION_EVALUATION_PROMPT = """
+You are an expert short-form video creative strategist analyzing an Instagram Reel.
+Watch the full video before scoring. Evaluate what is actually visible and audible in the clip.
+Do not invent details that are not present.
+
+Return ONLY valid TOON format (Token-Oriented Object Notation, YAML-like indentation, no braces, no quotes). Use 2-space indentation for nesting and '-' for list items. Do not include markdown, commentary, or extra keys.
+
+Return exactly these keys:
+- hook_frame_score (float 0-1): how visually arresting the first 3 seconds are
+- hook_text_overlay (string or null): any text shown in the first 3 seconds that acts as a hook
+- pacing_label (fast|medium|slow)
+- cut_count_estimate (integer): estimated total scene cuts
+- dominant_emotion (string): primary emotional tone such as excitement, curiosity, calm, humour
+- retention_signal (float 0-1): estimated likelihood viewers keep watching
+- audio_visual_sync (float 0-1): how well visuals, cuts, gestures, and motion match the audio beat/mood/message
+- objects (array of strings): main visible subjects or objects
+- scene_description (string): concise summary of what happens in the reel
+- detected_text (string or null): notable on-screen text
+- visual_style (string): style such as talking-head, b-roll, cinematic, tutorial, animation, vlog
+- hook_strength_score (float 0-1): overall hook quality across visual motion, framing, text, face presence, and opening energy
+- cringe_score (integer 0-100): 0 polished, 100 extreme cringe
+- cringe_signals (array of strings, max 3)
+- cringe_fixes (array of strings, max 3)
+- production_level (low|medium|high)
+- adult_content_detected (boolean)
+
+Scoring rubric for hook_strength_score (0-1):
+- 0.90-1.00: elite hook; first 2 seconds contain multiple strong hook signals such as immediate motion, high-contrast framing, clear subject, compelling text or payoff, and the opening feels impossible to ignore. If spoken/audio-led, the audio hook is strong immediately. Face or clear subject is typically visible early.
+- 0.75-0.89: strong hook; opening is engaging and clear with noticeable motion, a clear subject, and at least one strong attention device such as text, expression, surprise, or dramatic visual change.
+- 0.50-0.74: decent hook; opening is understandable and somewhat engaging, but lacks exceptional urgency, novelty, or stopping power.
+- 0.30-0.49: weak hook; opening is slow, generic, poorly framed, visually flat, or does not make the viewer curious quickly.
+- 0.10-0.29: very weak hook; slow pacing, low energy, poor lighting, no meaningful text, unclear subject, or the reel takes too long to reveal what it is about.
+- 0.00-0.09: failed hook; opening is confusing, static, dark, empty, or likely to cause immediate scroll-away.
+
+Hard constraints for hook_strength_score:
+- Do not score above 0.90 unless the opening shows clear early stopping power, not just a nice-looking frame.
+- Do not score above 0.80 if the first 2-3 seconds are visually static and offer no strong curiosity trigger.
+- Do not score above 0.70 if the main subject is unclear in the opening.
+- Slow pacing, dark lighting, no text, and no clear motion should generally land in 0.10-0.30.
+
+Scoring rubric for audio_visual_sync (0-1):
+- 0.90-1.00: visuals are tightly synchronized to the audio beat, spoken emphasis, or mood; cuts, gestures, captions, and action feel intentionally timed.
+- 0.75-0.89: strong sync; most transitions and visual moments fit the audio well with only minor drift.
+- 0.50-0.74: moderate sync; audio and visuals broadly fit, but timing is inconsistent or only loosely coordinated.
+- 0.30-0.49: weak sync; visuals often feel disconnected from the audio tone, rhythm, or message.
+- 0.10-0.29: poor sync; cuts, pacing, and subject action noticeably clash with the audio.
+- 0.00-0.09: no meaningful sync; audio and visuals feel unrelated or actively conflicting.
+
+Hard constraints for audio_visual_sync:
+- If there is little or no usable audio, score based on whether the visuals still align with any spoken or rhythmic structure present; otherwise keep the score conservative.
+- Do not score above 0.85 unless there are clear timed cuts, gestures, text reveals, or motion beats matching the audio.
+- If the audio mood and the visuals feel mismatched, keep the score below 0.50.
+
+Additional guidance:
+- Prefer conservative scoring over generous scoring.
+- Keep cringe_signals and cringe_fixes specific and actionable.
+- If on-screen text is absent, return null for hook_text_overlay or detected_text where appropriate.
+- adult_content_detected must be true only when sexual nudity or explicit adult sexual framing is actually present.
+
+OUTPUT EXAMPLE (STRICT TOON ONLY):
+hook_frame_score 0.72
+hook_text_overlay Stop scrolling
+pacing_label fast
+cut_count_estimate 11
+dominant_emotion curiosity
+retention_signal 0.68
+audio_visual_sync 0.74
+objects
+  - creator
+  - phone
+scene_description Creator points at text callouts while demonstrating a quick workflow
+detected_text 3 editing mistakes
+visual_style talking-head tutorial
+hook_strength_score 0.78
+cringe_score 18
+cringe_signals
+  - Slightly generic thumbnail pose
+cringe_fixes
+  - Start with the strongest payoff frame
+production_level medium
+adult_content_detected false
 """
 
 

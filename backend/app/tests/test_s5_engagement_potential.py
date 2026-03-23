@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timezone
 
+from backend.app.ai.toon import dumps as toon_dumps
 from backend.app.domain.post_models import (
     BenchmarkMetrics,
     ContentClarityScore,
@@ -45,7 +45,7 @@ def _build_post(
 
 
 def _valid_llm_payload(engagement_block: dict[str, object]) -> str:
-    return json.dumps(
+    return toon_dumps(
         {
             "summary": "Solid post with clear positioning and above-average audience response.",
             "drivers": [
@@ -103,7 +103,7 @@ def test_s5_parse_invalid_then_repair(monkeypatch) -> None:
             }
         )
 
-    monkeypatch.setattr(ai_analysis_service, "_repair_llm_json_output", fake_repair)
+    monkeypatch.setattr(ai_analysis_service, "_repair_llm_toon_output", fake_repair)
     summary, _, _, engagement = asyncio.run(
         ai_analysis_service._parse_llm_response_with_repair("not-json-output", llm_client=None)
     )
@@ -127,7 +127,7 @@ def test_s5_still_fallback_if_repair_fails(monkeypatch) -> None:
 
     monkeypatch.setattr(ai_analysis_service, "run_vision_analysis", fake_run_vision_analysis)
     monkeypatch.setattr(ai_analysis_service, "_call_llm_async", fake_call_llm_async)
-    monkeypatch.setattr(ai_analysis_service, "_repair_llm_json_output", fake_repair)
+    monkeypatch.setattr(ai_analysis_service, "_repair_llm_toon_output", fake_repair)
 
     post = _build_post(media_id="m_s5_repair_fail")
     result = asyncio.run(ai_analysis_service.analyze_single_post_ai(post))
@@ -387,7 +387,7 @@ def test_s5_consistency_cap_for_low_s1_s3(monkeypatch) -> None:
             total=10.0,
         )
 
-    def fake_s3(_vision: dict[str, object], _caption: str) -> ContentClarityScore:
+    async def fake_s3(_vision: dict[str, object], _caption: str) -> ContentClarityScore:
         return ContentClarityScore(
             message_singularity=2.0,
             context_clarity=2.0,
@@ -400,7 +400,7 @@ def test_s5_consistency_cap_for_low_s1_s3(monkeypatch) -> None:
     monkeypatch.setattr(ai_analysis_service, "run_vision_analysis", fake_run_vision_analysis)
     monkeypatch.setattr(ai_analysis_service, "_call_llm_async", fake_call_llm_async)
     monkeypatch.setattr(ai_analysis_service, "compute_visual_quality_score", fake_s1)
-    monkeypatch.setattr(ai_analysis_service, "compute_s3_content_clarity", fake_s3)
+    monkeypatch.setattr(ai_analysis_service, "analyze_content_clarity_via_llm", fake_s3)
 
     post = _build_post(media_id="m_s5_cap")
     result = asyncio.run(ai_analysis_service.analyze_single_post_ai(post))
