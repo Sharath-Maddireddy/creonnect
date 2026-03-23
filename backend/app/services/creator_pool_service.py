@@ -4,41 +4,74 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 
 from backend.app.utils.logger import logger
 
 
 _CREATOR_POOL_CACHE: list[dict] | None = None
+_CREATOR_POOL_LOADED_AT: float | None = None
 _CREATOR_POOL_LOCK = threading.Lock()
+_CACHE_TTL_SECONDS = 300
 
 
 def _load_creator_pool() -> list[dict]:
     """Load the creator pool JSON file. Uses a thread-safe module cache."""
-    global _CREATOR_POOL_CACHE
-    if _CREATOR_POOL_CACHE is not None:
+    global _CREATOR_POOL_CACHE, _CREATOR_POOL_LOADED_AT
+    now = time.time()
+
+    if (
+        _CREATOR_POOL_CACHE is not None
+        and _CREATOR_POOL_LOADED_AT is not None
+        and now - _CREATOR_POOL_LOADED_AT <= _CACHE_TTL_SECONDS
+    ):
         return _CREATOR_POOL_CACHE
+
+    if _CREATOR_POOL_CACHE is not None:
+        _CREATOR_POOL_CACHE = None
+        _CREATOR_POOL_LOADED_AT = None
 
     with _CREATOR_POOL_LOCK:
         # Double-check inside lock
-        if _CREATOR_POOL_CACHE is not None:
+        now = time.time()
+        if (
+            _CREATOR_POOL_CACHE is not None
+            and _CREATOR_POOL_LOADED_AT is not None
+            and now - _CREATOR_POOL_LOADED_AT <= _CACHE_TTL_SECONDS
+        ):
             return _CREATOR_POOL_CACHE
+
+        if _CREATOR_POOL_CACHE is not None:
+            _CREATOR_POOL_CACHE = None
+            _CREATOR_POOL_LOADED_AT = None
 
         try:
             pool_path = Path(__file__).parent.parent / "demo" / "creator_pool.json"
             if not pool_path.exists():
                 logger.warning(f"[CreatorPoolService] Pool file not found at {pool_path}")
                 _CREATOR_POOL_CACHE = []
+                _CREATOR_POOL_LOADED_AT = time.time()
                 return _CREATOR_POOL_CACHE
 
             with open(pool_path, "r", encoding="utf-8") as f:
                 _CREATOR_POOL_CACHE = json.load(f)
+            _CREATOR_POOL_LOADED_AT = time.time()
             logger.info(f"[CreatorPoolService] Loaded {len(_CREATOR_POOL_CACHE)} creators into pool cache.")
         except Exception as e:
             logger.exception(f"[CreatorPoolService] Error loading creator pool: {e}")
             _CREATOR_POOL_CACHE = []
+            _CREATOR_POOL_LOADED_AT = time.time()
 
         return _CREATOR_POOL_CACHE
+
+
+def reload_creator_pool() -> None:
+    """Force a cache reset so the creator pool reloads on next access."""
+    global _CREATOR_POOL_CACHE, _CREATOR_POOL_LOADED_AT
+    with _CREATOR_POOL_LOCK:
+        _CREATOR_POOL_CACHE = None
+        _CREATOR_POOL_LOADED_AT = None
 
 
 def get_all_creators() -> list[dict]:

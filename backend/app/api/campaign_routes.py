@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.analytics.brand_match_engine import score_creator_against_brand
+from backend.app.api.auth import verify_api_key
+from backend.app.api.rate_limiter import InMemoryRateLimiter
 from backend.app.domain.brand_models import BrandProfile, CreatorMatchScore
 from backend.app.services.campaign_prompt_service import (
     build_brand_profile_from_parsed,
@@ -17,6 +19,7 @@ from backend.app.services.creator_pool_service import query_creator_pool
 from backend.app.utils.logger import logger
 
 router = APIRouter(prefix="/api/brand/campaign", tags=["Brand Campaign"])
+rate_limiter = InMemoryRateLimiter(max_requests=10, window_seconds=60)
 
 
 class CampaignMatchRequest(BaseModel):
@@ -81,7 +84,10 @@ def _process_pool_matching(brand: BrandProfile, candidates: list[dict]) -> tuple
 
 
 @router.post("/match", response_model=CampaignMatchResponse)
-async def manual_campaign_match(request: CampaignMatchRequest):
+def manual_campaign_match(
+    request: CampaignMatchRequest,
+    api_key: str = Depends(verify_api_key),
+):
     """
     Score the creator pool against a structured brand profile (manual form submission).
     """
@@ -108,13 +114,24 @@ async def manual_campaign_match(request: CampaignMatchRequest):
 
 
 @router.post("/discover", response_model=CampaignDiscoverResponse)
-async def ai_campaign_discover(request: CampaignDiscoverRequest):
+def ai_campaign_discover(
+    request: Request,
+    campaign_request: CampaignDiscoverRequest,
+    api_key: str = Depends(verify_api_key),
+):
     """
     Use AI to parse a natural language prompt, build a brand profile, and find matches.
     """
     try:
+        client_ip = request.client.host if request.client else "unknown"
+        if rate_limiter.check(client_ip):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+
         # 1. Parse prompt
-        parsed_brief = await parse_campaign_prompt(prompt=request.prompt, brand_name=request.brand_name)
+        parsed_brief = parse_campaign_prompt(
+            prompt=campaign_request.prompt,
+            brand_name=campaign_request.brand_name,
+        )
         
         # 2. Build profile validation
         try:
@@ -150,6 +167,8 @@ async def ai_campaign_discover(request: CampaignDiscoverRequest):
             ai_explanation=summary
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("[CampaignRoutes] Error during AI campaign discovery.")
         raise HTTPException(status_code=500, detail="Internal server error extracting brief and matching creators.")
