@@ -28,10 +28,6 @@ def _load_creator_pool() -> list[dict]:
     ):
         return _CREATOR_POOL_CACHE
 
-    if _CREATOR_POOL_CACHE is not None:
-        _CREATOR_POOL_CACHE = None
-        _CREATOR_POOL_LOADED_AT = None
-
     with _CREATOR_POOL_LOCK:
         # Double-check inside lock
         now = time.time()
