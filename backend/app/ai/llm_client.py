@@ -150,5 +150,26 @@ class LLMClient:
         # All retries exhausted
         raise LLMClientError(f"LLM request failed after {self.max_retries + 1} attempts: {last_error}")
 
+    def embed(self, text: str) -> list[float] | None:
+        """Generate an embedding vector for the given text."""
+        if self._client is None:
+            logger.error("[LLM] Embedding request failed: client not initialized")
+            return None
+
+        try:
+            logger.info("[LLM] Embedding request start")
+            start_time = time.time()
+            response = self._client.embeddings.create(
+                input=text,
+                model="text-embedding-3-small",
+            )
+            duration = time.time() - start_time
+            logger.info(f"[LLM] Embedding request completed in {duration:.2f}s")
+            return response.data[0].embedding
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.warning(f"[LLM] Embedding request failed after {duration:.2f}s: {e}")
+            return None
+
 
 

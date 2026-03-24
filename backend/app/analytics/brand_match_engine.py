@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
+from backend.app.analytics.audience_quality import calculate_authenticity_score
 from backend.app.domain.brand_models import BrandProfile, CreatorMatchScore
 from backend.app.utils.logger import logger
 
@@ -44,6 +46,52 @@ def _niche_fit(creator_category: str | None, brand_niche: str) -> tuple[float, l
 
     notes.append(f"No niche match: creator='{category}', brand='{niche}'.")
     return 3.0, notes
+
+
+def _cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
+    if not vec1 or not vec2 or len(vec1) != len(vec2):
+        return 0.0
+
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    magnitude1 = math.sqrt(sum(a * a for a in vec1))
+    magnitude2 = math.sqrt(sum(b * b for b in vec2))
+    if magnitude1 == 0.0 or magnitude2 == 0.0:
+        return 0.0
+    return dot_product / (magnitude1 * magnitude2)
+
+
+def _semantic_fit(
+    creator_category: str | None,
+    brand_niche: str,
+    *,
+    brand_search_embedding: list[float] | None = None,
+    creator_embedding: list[float] | None = None,
+) -> tuple[float, list[str]]:
+    """
+    Score semantic niche fit (0-20) using embeddings when available,
+    otherwise fall back to the legacy niche rules.
+    """
+    if brand_search_embedding is not None and creator_embedding is not None:
+        similarity = _cosine_similarity(brand_search_embedding, creator_embedding)
+        normalized = _clamp((similarity + 1.0) / 2.0, 0.0, 1.0)
+        semantic_score = _clamp(normalized * 20.0, 0.0, 20.0)
+
+        # Make common positive similarities feel stronger than a purely linear map.
+        if similarity >= 0.5:
+            semantic_score = max(semantic_score, 20.0)
+        elif similarity < 0.2:
+            semantic_score = min(semantic_score, 5.0)
+
+        notes = [
+            (
+                f"AI Semantic Match: cosine similarity={similarity:.3f} "
+                f"-> niche_fit={semantic_score:.1f}/20."
+            )
+        ]
+        return round(semantic_score, 2), notes
+
+    score, notes = _niche_fit(creator_category, brand_niche)
+    return score, [f"Fallback Match: {note}" for note in notes]
 
 
 def _engagement_quality(ahs_score: float | None, predicted_er: float | None) -> tuple[float, list[str]]:
@@ -159,7 +207,12 @@ def score_creator_against_brand(
     brand: BrandProfile,
     *,
     creator_dominant_category: str | None = None,
+    brand_search_embedding: list[float] | None = None,
+    creator_embedding: list[float] | None = None,
     follower_count: int | None = None,
+    avg_views: int = 0,
+    avg_likes: int = 0,
+    avg_comments: int = 0,
     ahs_score: float | None = None,
     predicted_engagement_rate: float | None = None,
     visual_quality_score_total: float = 0.0,
@@ -172,13 +225,24 @@ def score_creator_against_brand(
 
     visual_quality = _clamp(float(visual_quality_score_total or 0.0), 0.0, 50.0)
     brand_safety = _clamp(float(brand_safety_score_total_0_50 or 0.0), 0.0, 50.0)
+    authenticity_score = calculate_authenticity_score(
+        follower_count=int(follower_count or 0),
+        avg_views=int(avg_views or 0),
+        avg_likes=int(avg_likes or 0),
+        avg_comments=int(avg_comments or 0),
+    )
     predicted_er = (
         _clamp(float(predicted_engagement_rate), 0.0, 1.0)
         if isinstance(predicted_engagement_rate, float)
         else None
     )
 
-    niche_fit, niche_notes = _niche_fit(creator_dominant_category, brand.niche)
+    niche_fit, niche_notes = _semantic_fit(
+        creator_dominant_category,
+        brand.niche,
+        brand_search_embedding=brand_search_embedding,
+        creator_embedding=creator_embedding,
+    )
     engagement_quality, engagement_notes = _engagement_quality(ahs_score, predicted_er)
     brand_safety_fit, safety_notes = _brand_safety_fit(brand_safety)
     content_quality_fit, content_notes = _content_quality_fit(visual_quality)
@@ -186,6 +250,15 @@ def score_creator_against_brand(
     notes.extend(niche_notes + engagement_notes + safety_notes + content_notes + audience_notes)
 
     disqualified = False
+    notes.append(f"Audience authenticity score={authenticity_score:.1f}/100.")
+
+    if authenticity_score < 40.0:
+        disqualified = True
+        disqualify_reasons.append(
+            "Failed Audience Authenticity Check "
+            f"(Score: {authenticity_score:.1f}). High probability of fake followers or bot engagement."
+        )
+
     if adult_content_detected is True:
         disqualified = True
         disqualify_reasons.append("Adult content detected on creator posts.")

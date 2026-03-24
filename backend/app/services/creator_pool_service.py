@@ -3,17 +3,52 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from pathlib import Path
 
+from backend.app.ai.llm_client import LLMClient
 from backend.app.utils.logger import logger
 
 
 _CREATOR_POOL_CACHE: list[dict] | None = None
+_CREATOR_EMBEDDINGS_CACHE = {}
 _CREATOR_POOL_LOADED_AT: float | None = None
 _CREATOR_POOL_LOCK = threading.Lock()
 _CACHE_TTL_SECONDS = 300
+_LLM_CLIENT: LLMClient | None = None
+
+
+def _get_llm_client() -> LLMClient:
+    global _LLM_CLIENT
+    if _LLM_CLIENT is None:
+        _LLM_CLIENT = LLMClient()
+    return _LLM_CLIENT
+
+
+def _get_creator_text(creator: dict) -> str:
+    """Combine creator fields into a single string for embedding."""
+    dominant_category = str(creator.get("creator_dominant_category") or "").strip()
+    niche_tags = creator.get("niche_tags") or []
+    niche_tags_text = " ".join(str(tag).strip() for tag in niche_tags if str(tag).strip())
+    bio = str(creator.get("bio") or "").strip()
+    return " ".join(part for part in (dominant_category, niche_tags_text, bio) if part)
+
+
+def cosine_similarity(vec1, vec2) -> float:
+    """Compute cosine similarity between two vectors."""
+    if not vec1 or not vec2 or len(vec1) != len(vec2):
+        return 0.0
+
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    magnitude1 = math.sqrt(sum(a * a for a in vec1))
+    magnitude2 = math.sqrt(sum(b * b for b in vec2))
+
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0.0
+
+    return dot_product / (magnitude1 * magnitude2)
 
 
 def _load_creator_pool() -> list[dict]:
@@ -52,6 +87,21 @@ def _load_creator_pool() -> list[dict]:
 
             with open(pool_path, "r", encoding="utf-8") as f:
                 _CREATOR_POOL_CACHE = json.load(f)
+
+            llm_client = _get_llm_client()
+            for creator in _CREATOR_POOL_CACHE:
+                account_id = creator.get("account_id")
+                if not account_id or account_id in _CREATOR_EMBEDDINGS_CACHE:
+                    continue
+
+                creator_text = _get_creator_text(creator)
+                if not creator_text:
+                    continue
+
+                embedding = llm_client.embed(creator_text)
+                if embedding is not None:
+                    _CREATOR_EMBEDDINGS_CACHE[account_id] = embedding
+
             _CREATOR_POOL_LOADED_AT = time.time()
             logger.info(f"[CreatorPoolService] Loaded {len(_CREATOR_POOL_CACHE)} creators into pool cache.")
         except Exception as e:
@@ -68,6 +118,7 @@ def reload_creator_pool() -> None:
     with _CREATOR_POOL_LOCK:
         _CREATOR_POOL_CACHE = None
         _CREATOR_POOL_LOADED_AT = None
+        _CREATOR_EMBEDDINGS_CACHE.clear()
 
 
 def get_all_creators() -> list[dict]:
@@ -119,3 +170,27 @@ def query_creator_pool(
         filtered.append(creator)
 
     return filtered
+
+
+def find_lookalikes(account_id: str, k: int = 3) -> list[dict]:
+    """Return the top-k most semantically similar creators for a given account."""
+    pool = _load_creator_pool()
+    target_embedding = _CREATOR_EMBEDDINGS_CACHE.get(account_id)
+    if target_embedding is None:
+        return []
+
+    scored_matches: list[tuple[float, dict]] = []
+    for creator in pool:
+        other_account_id = creator.get("account_id")
+        if not other_account_id or other_account_id == account_id:
+            continue
+
+        other_embedding = _CREATOR_EMBEDDINGS_CACHE.get(other_account_id)
+        if other_embedding is None:
+            continue
+
+        similarity = cosine_similarity(target_embedding, other_embedding)
+        scored_matches.append((similarity, creator))
+
+    scored_matches.sort(key=lambda item: item[0], reverse=True)
+    return [creator for _, creator in scored_matches[:k]]
