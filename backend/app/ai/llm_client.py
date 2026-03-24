@@ -156,9 +156,9 @@ class LLMClient:
             logger.error("[LLM] Embedding request failed: client not initialized")
             return None
 
+        start_time = time.time()
         try:
             logger.info("[LLM] Embedding request start")
-            start_time = time.time()
             response = self._client.embeddings.create(
                 input=text,
                 model="text-embedding-3-small",

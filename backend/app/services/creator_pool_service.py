@@ -16,6 +16,7 @@ _CREATOR_POOL_CACHE: list[dict] | None = None
 _CREATOR_EMBEDDINGS_CACHE = {}
 _CREATOR_POOL_LOADED_AT: float | None = None
 _CREATOR_POOL_LOCK = threading.Lock()
+_CREATOR_EMBEDDINGS_LOCK = threading.Lock()
 _CACHE_TTL_SECONDS = 300
 _LLM_CLIENT: LLMClient | None = None
 
@@ -23,7 +24,9 @@ _LLM_CLIENT: LLMClient | None = None
 def _get_llm_client() -> LLMClient:
     global _LLM_CLIENT
     if _LLM_CLIENT is None:
-        _LLM_CLIENT = LLMClient()
+        with _CREATOR_POOL_LOCK:
+            if _LLM_CLIENT is None:
+                _LLM_CLIENT = LLMClient()
     return _LLM_CLIENT
 
 
@@ -49,6 +52,34 @@ def cosine_similarity(vec1, vec2) -> float:
         return 0.0
 
     return dot_product / (magnitude1 * magnitude2)
+
+
+def _ensure_creator_embedding(creator: dict) -> list[float] | None:
+    """Lazily compute and cache a creator embedding outside the pool-load lock."""
+    account_id = creator.get("account_id")
+    if not account_id:
+        return None
+
+    cached_embedding = _CREATOR_EMBEDDINGS_CACHE.get(account_id)
+    if cached_embedding is not None:
+        creator["embedding"] = cached_embedding
+        return cached_embedding
+
+    creator_text = _get_creator_text(creator)
+    if not creator_text:
+        return None
+
+    with _CREATOR_EMBEDDINGS_LOCK:
+        cached_embedding = _CREATOR_EMBEDDINGS_CACHE.get(account_id)
+        if cached_embedding is not None:
+            creator["embedding"] = cached_embedding
+            return cached_embedding
+
+        embedding = _get_llm_client().embed(creator_text)
+        if embedding is not None:
+            _CREATOR_EMBEDDINGS_CACHE[account_id] = embedding
+            creator["embedding"] = embedding
+        return embedding
 
 
 def _load_creator_pool() -> list[dict]:
@@ -87,20 +118,6 @@ def _load_creator_pool() -> list[dict]:
 
             with open(pool_path, "r", encoding="utf-8") as f:
                 _CREATOR_POOL_CACHE = json.load(f)
-
-            llm_client = _get_llm_client()
-            for creator in _CREATOR_POOL_CACHE:
-                account_id = creator.get("account_id")
-                if not account_id or account_id in _CREATOR_EMBEDDINGS_CACHE:
-                    continue
-
-                creator_text = _get_creator_text(creator)
-                if not creator_text:
-                    continue
-
-                embedding = llm_client.embed(creator_text)
-                if embedding is not None:
-                    _CREATOR_EMBEDDINGS_CACHE[account_id] = embedding
 
             _CREATOR_POOL_LOADED_AT = time.time()
             logger.info(f"[CreatorPoolService] Loaded {len(_CREATOR_POOL_CACHE)} creators into pool cache.")
@@ -167,15 +184,20 @@ def query_creator_pool(
                 continue
                 
         # If we made it here, the creator passes all filters
+        _ensure_creator_embedding(creator)
         filtered.append(creator)
 
     return filtered
 
 
-def find_lookalikes(account_id: str, k: int = 3) -> list[dict]:
-    """Return the top-k most semantically similar creators for a given account."""
+def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
+    """Return top-k lookalikes, or None when the target creator does not exist."""
     pool = _load_creator_pool()
-    target_embedding = _CREATOR_EMBEDDINGS_CACHE.get(account_id)
+    target_creator = next((creator for creator in pool if creator.get("account_id") == account_id), None)
+    if target_creator is None:
+        return None
+
+    target_embedding = _ensure_creator_embedding(target_creator)
     if target_embedding is None:
         return []
 
@@ -185,7 +207,7 @@ def find_lookalikes(account_id: str, k: int = 3) -> list[dict]:
         if not other_account_id or other_account_id == account_id:
             continue
 
-        other_embedding = _CREATOR_EMBEDDINGS_CACHE.get(other_account_id)
+        other_embedding = _ensure_creator_embedding(creator)
         if other_embedding is None:
             continue
 

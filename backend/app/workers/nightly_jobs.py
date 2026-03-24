@@ -7,16 +7,24 @@ from backend.app.services.creator_pool_service import query_creator_pool
 from backend.app.utils.logger import logger
 
 
+def _safe_int(value, default: int = 0) -> int:
+    """Safely convert a value to int, returning default on invalid input."""
+    try:
+        return int(value) if value else default
+    except (TypeError, ValueError):
+        return default
+
+
 def run_authenticity_refresh_job() -> None:
     """Simulate nightly authenticity score pre-computation for all creators."""
     creators = query_creator_pool()
 
     for creator in creators:
         username = creator.get("username", "unknown")
-        follower_count = int(creator.get("follower_count", 0) or 0)
-        avg_views = int(creator.get("avg_views", 0) or 0)
-        avg_likes = int(creator.get("avg_likes", 0) or 0)
-        avg_comments = int(creator.get("avg_comments", 0) or 0)
+        follower_count = _safe_int(creator.get("follower_count"))
+        avg_views = _safe_int(creator.get("avg_views"))
+        avg_likes = _safe_int(creator.get("avg_likes"))
+        avg_comments = _safe_int(creator.get("avg_comments"))
 
         score = calculate_authenticity_score(
             follower_count=follower_count,

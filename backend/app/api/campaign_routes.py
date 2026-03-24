@@ -203,7 +203,7 @@ def get_creator_lookalikes(
 ):
     """Return semantic lookalikes for a creator account."""
     lookalikes = find_lookalikes(account_id, k=5)
-    if not lookalikes:
-        raise HTTPException(status_code=404, detail="Creator not found or no lookalikes available.")
+    if lookalikes is None:
+        raise HTTPException(status_code=404, detail="Creator not found.")
 
     return LookalikeResponse(account_id=account_id, lookalikes=lookalikes)

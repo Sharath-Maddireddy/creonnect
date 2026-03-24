@@ -9,6 +9,8 @@ from backend.app.analytics.audience_quality import calculate_authenticity_score
 from backend.app.domain.brand_models import BrandProfile, CreatorMatchScore
 from backend.app.utils.logger import logger
 
+MIN_AUTHENTICITY_THRESHOLD = 40.0
+
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
@@ -73,14 +75,15 @@ def _semantic_fit(
     """
     if brand_search_embedding is not None and creator_embedding is not None:
         similarity = _cosine_similarity(brand_search_embedding, creator_embedding)
-        normalized = _clamp((similarity + 1.0) / 2.0, 0.0, 1.0)
-        semantic_score = _clamp(normalized * 20.0, 0.0, 20.0)
-
-        # Make common positive similarities feel stronger than a purely linear map.
-        if similarity >= 0.5:
-            semantic_score = max(semantic_score, 20.0)
-        elif similarity < 0.2:
-            semantic_score = min(semantic_score, 5.0)
+        # Use a smooth 3-band interpolation to avoid abrupt score cliffs.
+        if similarity <= 0.2:
+            low_ratio = _clamp((similarity + 1.0) / 1.2, 0.0, 1.0)
+            semantic_score = low_ratio * 5.0
+        elif similarity <= 0.5:
+            mid_ratio = (similarity - 0.2) / 0.3
+            semantic_score = 5.0 + (_clamp(mid_ratio, 0.0, 1.0) * 15.0)
+        else:
+            semantic_score = 20.0
 
         notes = [
             (
@@ -202,6 +205,10 @@ def _match_band(score: float) -> Literal["EXCELLENT", "GOOD", "MODERATE", "POOR"
     return "POOR"
 
 
+def _has_engagement_data(avg_views: int, avg_likes: int, avg_comments: int) -> bool:
+    return any(metric > 0 for metric in (avg_views, avg_likes, avg_comments))
+
+
 def score_creator_against_brand(
     account_id: str,
     brand: BrandProfile,
@@ -225,6 +232,7 @@ def score_creator_against_brand(
 
     visual_quality = _clamp(float(visual_quality_score_total or 0.0), 0.0, 50.0)
     brand_safety = _clamp(float(brand_safety_score_total_0_50 or 0.0), 0.0, 50.0)
+    has_engagement_data = _has_engagement_data(avg_views, avg_likes, avg_comments)
     authenticity_score = calculate_authenticity_score(
         follower_count=int(follower_count or 0),
         avg_views=int(avg_views or 0),
@@ -250,9 +258,12 @@ def score_creator_against_brand(
     notes.extend(niche_notes + engagement_notes + safety_notes + content_notes + audience_notes)
 
     disqualified = False
-    notes.append(f"Audience authenticity score={authenticity_score:.1f}/100.")
+    if has_engagement_data:
+        notes.append(f"Audience authenticity score={authenticity_score:.1f}/100.")
+    else:
+        notes.append("Audience authenticity check skipped: no engagement metrics available.")
 
-    if authenticity_score < 40.0:
+    if has_engagement_data and authenticity_score < MIN_AUTHENTICITY_THRESHOLD:
         disqualified = True
         disqualify_reasons.append(
             "Failed Audience Authenticity Check "
