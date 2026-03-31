@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+
+reviews:
+  profile: chill
+  high_level_summary: true
+  review_status: true
+  poem: false
+  path_filters:
+    # Core application surfaces worth reviewing on most PRs.
+    - ".github/workflows/**"
+    - "backend/app/**"
+    - "backend/core/**"
+    - "backend/ml/**"
+    - "backend/main.py"
+    - "backend/__init__.py"
+    - "backend/requirements.txt"
+    - "frontend/src/**"
+    - "frontend/index.html"
+    - "frontend/package.json"
+    - "frontend/vite.config.js"
+    - "services/**"
+    - "requirements.txt"
+    - "pyrightconfig.json"
+    - "test_*.py"
+
+    # Exclude generated, data-heavy, and low-signal paths.
+    - "!**/node_modules/**"
+    - "!**/__pycache__/**"
+    - "!**/.pytest_cache/**"
+    - "!**/.rag_cache/**"
+    - "!frontend/dist/**"
+    - "!backend/data/**"
+    - "!backend/app/demo/**"
+    - "!internal_tools/**"
+    - "!experimental/**"
+    - "!docs/**"
+    - "!**/*.jsonl"
+    - "!**/*.log"
+    - "!**/*.txt"
+    - "!**/*.docx"
