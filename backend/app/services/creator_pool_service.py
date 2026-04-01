@@ -21,6 +21,10 @@ _CACHE_TTL_SECONDS = 300
 _LLM_CLIENT: LLMClient | None = None
 
 
+class LookalikeEmbeddingError(RuntimeError):
+    """Raised when lookalike search cannot compute required embeddings."""
+
+
 def _get_llm_client() -> LLMClient:
     global _LLM_CLIENT
     if _LLM_CLIENT is None:
@@ -199,7 +203,7 @@ def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
 
     target_embedding = _ensure_creator_embedding(target_creator)
     if target_embedding is None:
-        return []
+        raise LookalikeEmbeddingError(f"Failed to compute embedding for creator '{account_id}'.")
 
     scored_matches: list[tuple[float, dict]] = []
     for creator in pool:

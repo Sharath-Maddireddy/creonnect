@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
-from backend.ml.clean_action_dataset import (
+from backend.ml.clean_action_dataset import (  # type: ignore[import]
     ChatExample,
     EnrichedTrainingExample,
     validate_jsonl_entry,
@@ -74,8 +74,8 @@ def main() -> None:
     rng = random.Random(SPLIT_SEED)
     rng.shuffle(chat_rows)
     split_idx = int(len(chat_rows) * TRAIN_FRACTION)
-    chat_train = chat_rows[:split_idx]
-    chat_val = chat_rows[split_idx:]
+    chat_train = chat_rows[:split_idx]  # type: ignore[index]
+    chat_val = chat_rows[split_idx:]  # type: ignore[index]
 
     chat_train_count = _write_jsonl(chat_train, CHAT_TRAIN_PATH)
     chat_val_count = _write_jsonl(chat_val, CHAT_VAL_PATH)

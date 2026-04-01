@@ -1,0 +1,60 @@
+{
+  "ahs_score": 52.45,
+  "ahs_band": "AVERAGE",
+  "pillars": {
+    "content_quality": {
+      "score": 14.87,
+      "band": "NEEDS_WORK",
+      "notes": []
+    },
+    "engagement_quality": {
+      "score": 50.0,
+      "band": "AVERAGE",
+      "notes": [
+        "Missing engagement_rate data; using neutral engagement quality baseline."
+      ]
+    },
+    "niche_fit": {
+      "score": 50.0,
+      "band": "AVERAGE",
+      "notes": [
+        "Follower band context: macro."
+      ]
+    },
+    "consistency": {
+      "score": 82.5,
+      "band": "EXCEPTIONAL",
+      "notes": []
+    },
+    "brand_safety": {
+      "score": 100.0,
+      "band": "EXCEPTIONAL",
+      "notes": []
+    }
+  },
+  "drivers": [
+    {
+      "id": "content_quality_low",
+      "label": "Content clarity/quality needs improvement",
+      "type": "LIMITING",
+      "explanation": "Mean content signals are low (S1=0.0, S2=22.3, S3=0.0)."
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "improve_visual_hook_and_clarity",
+      "text": "Improve opening visual hook and framing to raise S1/S3 on most posts.",
+      "impact_level": "HIGH"
+    },
+    {
+      "id": "strengthen_caption_structures",
+      "text": "Use stronger first-line hooks and clearer caption structures to raise S2.",
+      "impact_level": "HIGH"
+    }
+  ],
+  "metadata": {
+    "post_count_used": 10,
+    "min_history_threshold_met": true,
+    "time_window_days": 27
+  }
+}

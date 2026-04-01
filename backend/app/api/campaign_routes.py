@@ -16,7 +16,11 @@ from backend.app.services.campaign_prompt_service import (
     build_brand_profile_from_parsed,
     parse_campaign_prompt,
 )
-from backend.app.services.creator_pool_service import find_lookalikes, query_creator_pool
+from backend.app.services.creator_pool_service import (
+    LookalikeEmbeddingError,
+    find_lookalikes,
+    query_creator_pool,
+)
 from backend.app.utils.logger import logger
 
 router = APIRouter(prefix="/api/brand/campaign", tags=["Brand Campaign"])
@@ -202,7 +206,12 @@ def get_creator_lookalikes(
     api_key: str = Depends(verify_api_key),
 ):
     """Return semantic lookalikes for a creator account."""
-    lookalikes = find_lookalikes(account_id, k=5)
+    try:
+        lookalikes = find_lookalikes(account_id, k=5)
+    except LookalikeEmbeddingError as exc:
+        logger.warning("[CampaignRoutes] Lookalike lookup failed for %s: %s", account_id, exc)
+        raise HTTPException(status_code=503, detail="Lookalike search is temporarily unavailable.")
+
     if lookalikes is None:
         raise HTTPException(status_code=404, detail="Creator not found.")
 
