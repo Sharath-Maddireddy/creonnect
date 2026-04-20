@@ -1,150 +1,96 @@
-"""Service for managing and querying the creator pool."""
+"""Database-backed service for managing and querying the creator pool."""
 
 from __future__ import annotations
 
-import json
 import math
-import threading
-import time
-from pathlib import Path
+from collections.abc import Iterable
 
-from backend.app.ai.llm_client import LLMClient
+from sqlalchemy import Select, select, text
+from sqlalchemy.exc import SQLAlchemyError
+
+from backend.app.infra.database import get_sync_sessionmaker
+from backend.app.infra.models import CreatorDiscoveryMeta, CreatorVector
 from backend.app.utils.logger import logger
-
-
-_CREATOR_POOL_CACHE: list[dict] | None = None
-_CREATOR_EMBEDDINGS_CACHE = {}
-_CREATOR_POOL_LOADED_AT: float | None = None
-_CREATOR_POOL_LOCK = threading.Lock()
-_CREATOR_EMBEDDINGS_LOCK = threading.Lock()
-_CACHE_TTL_SECONDS = 300
-_LLM_CLIENT: LLMClient | None = None
 
 
 class LookalikeEmbeddingError(RuntimeError):
     """Raised when lookalike search cannot compute required embeddings."""
 
 
-def _get_llm_client() -> LLMClient:
-    global _LLM_CLIENT
-    if _LLM_CLIENT is None:
-        with _CREATOR_POOL_LOCK:
-            if _LLM_CLIENT is None:
-                _LLM_CLIENT = LLMClient()
-    return _LLM_CLIENT
+def _normalize_embedding(value: object) -> list[float] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        try:
+            return [float(item) for item in value]
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
-def _get_creator_text(creator: dict) -> str:
-    """Combine creator fields into a single string for embedding."""
-    dominant_category = str(creator.get("creator_dominant_category") or "").strip()
-    niche_tags = creator.get("niche_tags") or []
-    niche_tags_text = " ".join(str(tag).strip() for tag in niche_tags if str(tag).strip())
-    bio = str(creator.get("bio") or "").strip()
-    return " ".join(part for part in (dominant_category, niche_tags_text, bio) if part)
+def _creator_to_dict(meta: CreatorDiscoveryMeta, vector: CreatorVector | None) -> dict:
+    return {
+        "account_id": meta.account_id,
+        "username": meta.username,
+        "creator_dominant_category": meta.creator_dominant_category,
+        "follower_count": meta.follower_count,
+        "ahs_score": meta.ahs_score,
+        "predicted_engagement_rate": meta.predicted_engagement_rate,
+        "avg_visual_quality_score": meta.avg_visual_quality_score,
+        "avg_brand_safety_score": meta.avg_brand_safety_score,
+        "adult_content_detected": meta.adult_content_detected,
+        "bio": meta.bio,
+        "avg_views": meta.avg_views,
+        "avg_likes": meta.avg_likes,
+        "avg_comments": meta.avg_comments,
+        "posts_per_week": meta.posts_per_week,
+        "niche_tags": meta.niche_tags or [],
+        "embedding": _normalize_embedding(vector.embedding) if vector is not None else None,
+    }
 
 
-def cosine_similarity(vec1, vec2) -> float:
-    """Compute cosine similarity between two vectors."""
-    if not vec1 or not vec2 or len(vec1) != len(vec2):
+def _base_creator_query() -> Select:
+    return select(CreatorDiscoveryMeta, CreatorVector).join(
+        CreatorVector,
+        CreatorVector.account_id == CreatorDiscoveryMeta.account_id,
+        isouter=True,
+    )
+
+
+def _run_creator_query(statement: Select) -> list[dict]:
+    session_factory = get_sync_sessionmaker()
+    try:
+        with session_factory() as session:
+            rows = session.execute(statement).all()
+            return [_creator_to_dict(meta, vector) for meta, vector in rows]
+    except SQLAlchemyError as exc:
+        logger.warning("[CreatorPoolService] Database query failed: %s", exc)
+        return []
+
+
+def _cosine_similarity(vec1: Iterable[float], vec2: Iterable[float]) -> float:
+    values1 = list(vec1)
+    values2 = list(vec2)
+    if not values1 or not values2 or len(values1) != len(values2):
         return 0.0
 
-    dot_product = sum(a * b for a, b in zip(vec1, vec2))
-    magnitude1 = math.sqrt(sum(a * a for a in vec1))
-    magnitude2 = math.sqrt(sum(b * b for b in vec2))
-
-    if magnitude1 == 0 or magnitude2 == 0:
+    dot_product = sum(a * b for a, b in zip(values1, values2))
+    magnitude1 = math.sqrt(sum(a * a for a in values1))
+    magnitude2 = math.sqrt(sum(b * b for b in values2))
+    if magnitude1 == 0.0 or magnitude2 == 0.0:
         return 0.0
-
     return dot_product / (magnitude1 * magnitude2)
 
 
-def _ensure_creator_embedding(creator: dict) -> list[float] | None:
-    """Lazily compute and cache a creator embedding outside the pool-load lock."""
-    account_id = creator.get("account_id")
-    if not account_id:
-        return None
-
-    cached_embedding = _CREATOR_EMBEDDINGS_CACHE.get(account_id)
-    if cached_embedding is not None:
-        creator["embedding"] = cached_embedding
-        return cached_embedding
-
-    creator_text = _get_creator_text(creator)
-    if not creator_text:
-        return None
-
-    with _CREATOR_EMBEDDINGS_LOCK:
-        cached_embedding = _CREATOR_EMBEDDINGS_CACHE.get(account_id)
-        if cached_embedding is not None:
-            creator["embedding"] = cached_embedding
-            return cached_embedding
-
-        embedding = _get_llm_client().embed(creator_text)
-        if embedding is not None:
-            _CREATOR_EMBEDDINGS_CACHE[account_id] = embedding
-            creator["embedding"] = embedding
-        return embedding
-
-
-def _load_creator_pool() -> list[dict]:
-    """Load the creator pool JSON file. Uses a thread-safe module cache."""
-    global _CREATOR_POOL_CACHE, _CREATOR_POOL_LOADED_AT
-    now = time.time()
-
-    if (
-        _CREATOR_POOL_CACHE is not None
-        and _CREATOR_POOL_LOADED_AT is not None
-        and now - _CREATOR_POOL_LOADED_AT <= _CACHE_TTL_SECONDS
-    ):
-        return _CREATOR_POOL_CACHE
-
-    with _CREATOR_POOL_LOCK:
-        # Double-check inside lock
-        now = time.time()
-        if (
-            _CREATOR_POOL_CACHE is not None
-            and _CREATOR_POOL_LOADED_AT is not None
-            and now - _CREATOR_POOL_LOADED_AT <= _CACHE_TTL_SECONDS
-        ):
-            return _CREATOR_POOL_CACHE
-
-        if _CREATOR_POOL_CACHE is not None:
-            _CREATOR_POOL_CACHE = None
-            _CREATOR_POOL_LOADED_AT = None
-
-        try:
-            pool_path = Path(__file__).parent.parent / "demo" / "creator_pool.json"
-            if not pool_path.exists():
-                logger.warning(f"[CreatorPoolService] Pool file not found at {pool_path}")
-                _CREATOR_POOL_CACHE = []
-                _CREATOR_POOL_LOADED_AT = time.time()
-                return _CREATOR_POOL_CACHE
-
-            with open(pool_path, "r", encoding="utf-8") as f:
-                _CREATOR_POOL_CACHE = json.load(f)
-
-            _CREATOR_POOL_LOADED_AT = time.time()
-            logger.info(f"[CreatorPoolService] Loaded {len(_CREATOR_POOL_CACHE)} creators into pool cache.")
-        except Exception as e:
-            logger.exception(f"[CreatorPoolService] Error loading creator pool: {e}")
-            _CREATOR_POOL_CACHE = []
-            _CREATOR_POOL_LOADED_AT = time.time()
-
-        return _CREATOR_POOL_CACHE
-
-
 def reload_creator_pool() -> None:
-    """Force a cache reset so the creator pool reloads on next access."""
-    global _CREATOR_POOL_CACHE, _CREATOR_POOL_LOADED_AT
-    with _CREATOR_POOL_LOCK:
-        _CREATOR_POOL_CACHE = None
-        _CREATOR_POOL_LOADED_AT = None
-        _CREATOR_EMBEDDINGS_CACHE.clear()
+    """No-op retained for backward compatibility."""
+    logger.info("[CreatorPoolService] reload_creator_pool() called; no cache is maintained.")
 
 
 def get_all_creators() -> list[dict]:
-    """Return the full unfiltered creator pool."""
-    return _load_creator_pool()
+    """Return every creator from the discovery tables."""
+    statement = _base_creator_query().order_by(CreatorDiscoveryMeta.username.asc())
+    return _run_creator_query(statement)
 
 
 def query_creator_pool(
@@ -152,71 +98,98 @@ def query_creator_pool(
     min_followers: int | None = None,
     max_followers: int | None = None,
 ) -> list[dict]:
-    """
-    Filter the creator pool based on brand requirements.
-    
-    Args:
-        niche: The target niche (e.g., 'fitness', 'tech'). Checked against dominant category and tags.
-        min_followers: Minimum required follower count.
-        max_followers: Maximum allowed follower count.
-        
-    Returns:
-        List of creator dicts that pass all applied filters.
-    """
-    pool = _load_creator_pool()
-    filtered: list[dict] = []
-    
-    niche_lower = niche.lower().strip() if niche else None
+    """Filter creators via database queries while preserving the legacy return shape."""
+    statement = _base_creator_query()
 
-    for creator in pool:
-        # 1. Check Follower Size
-        followers = creator.get("follower_count", 0)
-        
-        if min_followers is not None and followers < min_followers:
-            continue
-            
-        if max_followers is not None and followers > max_followers:
-            continue
-            
-        # 2. Check Niche Fit
-        if niche_lower:
-            dominant = (creator.get("creator_dominant_category") or "").lower()
-            tags = [t.lower() for t in creator.get("niche_tags", [])]
-            
-            # Simple keyword matching
-            if niche_lower not in dominant and not any(niche_lower in t for t in tags):
-                continue
-                
-        # If we made it here, the creator passes all filters
-        _ensure_creator_embedding(creator)
-        filtered.append(creator)
+    if niche:
+        niche_pattern = f"%{niche.strip()}%"
+        statement = statement.where(CreatorDiscoveryMeta.creator_dominant_category.ilike(niche_pattern))
+    if min_followers is not None:
+        statement = statement.where(CreatorDiscoveryMeta.follower_count >= int(min_followers))
+    if max_followers is not None:
+        statement = statement.where(CreatorDiscoveryMeta.follower_count <= int(max_followers))
 
-    return filtered
+    statement = statement.order_by(CreatorDiscoveryMeta.follower_count.desc())
+    return _run_creator_query(statement)
 
 
-def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
-    """Return top-k lookalikes, or None when the target creator does not exist."""
-    pool = _load_creator_pool()
-    target_creator = next((creator for creator in pool if creator.get("account_id") == account_id), None)
+def _get_creators_by_ids(account_ids: list[str]) -> list[dict]:
+    if not account_ids:
+        return []
+
+    statement = _base_creator_query().where(CreatorDiscoveryMeta.account_id.in_(account_ids))
+    creators = _run_creator_query(statement)
+    creator_by_id = {creator["account_id"]: creator for creator in creators}
+    return [creator_by_id[account_id] for account_id in account_ids if account_id in creator_by_id]
+
+
+def _find_lookalikes_sqlite_fallback(account_id: str, k: int) -> list[dict] | None:
+    creators = get_all_creators()
+    target_creator = next((creator for creator in creators if creator.get("account_id") == account_id), None)
     if target_creator is None:
         return None
 
-    target_embedding = _ensure_creator_embedding(target_creator)
-    if target_embedding is None:
-        raise LookalikeEmbeddingError(f"Failed to compute embedding for creator '{account_id}'.")
+    target_embedding = target_creator.get("embedding")
+    if not target_embedding:
+        raise LookalikeEmbeddingError(f"Missing embedding for creator '{account_id}'.")
 
-    scored_matches: list[tuple[float, dict]] = []
-    for creator in pool:
+    scored_matches: list[tuple[float, str]] = []
+    for creator in creators:
         other_account_id = creator.get("account_id")
         if not other_account_id or other_account_id == account_id:
             continue
 
-        other_embedding = _ensure_creator_embedding(creator)
-        if other_embedding is None:
+        other_embedding = creator.get("embedding")
+        if not other_embedding:
             continue
 
-        similarity = cosine_similarity(target_embedding, other_embedding)
-        scored_matches.append((similarity, creator))
+        distance = 1.0 - _cosine_similarity(target_embedding, other_embedding)
+        scored_matches.append((distance, other_account_id))
 
-    scored_matches.sort(key=lambda item: item[0], reverse=True)
-    return [creator for _, creator in scored_matches[:k]]
+    scored_matches.sort(key=lambda item: item[0])
+    return _get_creators_by_ids([account_id for _, account_id in scored_matches[:k]])
+
+
+def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
+    """Return top-k vector-nearest creators, or None when the target creator does not exist."""
+    session_factory = get_sync_sessionmaker()
+    try:
+        with session_factory() as session:
+            target_exists = session.scalar(
+                select(CreatorVector.account_id).where(CreatorVector.account_id == account_id)
+            )
+            if target_exists is None:
+                return None
+
+            if session.bind is None or session.bind.dialect.name != "postgresql":
+                return _find_lookalikes_sqlite_fallback(account_id, k)
+
+            target_embedding = session.scalar(
+                select(CreatorVector.embedding).where(CreatorVector.account_id == account_id)
+            )
+            if _normalize_embedding(target_embedding) is None:
+                raise LookalikeEmbeddingError(f"Missing embedding for creator '{account_id}'.")
+
+            result = session.execute(
+                text(
+                    """
+                    SELECT account_id,
+                           embedding <=> (
+                               SELECT embedding
+                               FROM creator_vectors
+                               WHERE account_id = :target_id
+                           ) AS distance
+                    FROM creator_vectors
+                    WHERE account_id != :target_id
+                    ORDER BY distance ASC
+                    LIMIT :limit_value
+                    """
+                ),
+                {"target_id": account_id, "limit_value": int(k)},
+            )
+            ordered_ids = [row.account_id for row in result]
+    except SQLAlchemyError as exc:
+        logger.warning("[CreatorPoolService] Lookalike search failed: %s", exc)
+        return []
+
+    return _get_creators_by_ids(ordered_ids)

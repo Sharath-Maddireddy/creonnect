@@ -1,4 +1,4 @@
-"""RQ worker entrypoint for account-analysis queue."""
+"""RQ worker entrypoint for background queues."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from backend.app.infra.redis_client import get_redis
 # Import job module so the worker can resolve callable paths.
 from backend.app.services import account_analysis_jobs as _account_analysis_jobs  # noqa: F401
 from backend.app.services import reel_analysis_jobs as _reel_analysis_jobs  # noqa: F401
+from backend.app.workers import embedding_worker as _embedding_worker  # noqa: F401
 
 load_dotenv(override=False)
 
@@ -22,7 +23,7 @@ def main() -> None:
     connection = get_redis()
     # Windows lacks os.fork(); use SimpleWorker to avoid crash.
     worker_cls = SimpleWorker if platform.system() == "Windows" else Worker
-    worker = worker_cls(["account-analysis"], connection=connection)
+    worker = worker_cls(["account-analysis", "embedding-ingestion"], connection=connection)
     worker.work(with_scheduler=False)
 
 

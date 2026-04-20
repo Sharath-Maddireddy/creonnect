@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+
 from backend.app.analytics.audience_quality import calculate_authenticity_score
-from backend.app.services.creator_pool_service import query_creator_pool
+from backend.app.infra.database import get_sync_sessionmaker
+from backend.app.infra.models import CreatorDiscoveryMeta
 from backend.app.utils.logger import logger
 
 
@@ -16,23 +20,27 @@ def _safe_int(value, default: int = 0) -> int:
 
 
 def run_authenticity_refresh_job() -> None:
-    """Simulate nightly authenticity score pre-computation for all creators."""
-    creators = query_creator_pool()
+    """Refresh persisted authenticity scores for all creators."""
+    session_factory = get_sync_sessionmaker()
 
-    for creator in creators:
-        username = creator.get("username", "unknown")
-        follower_count = _safe_int(creator.get("follower_count"))
-        avg_views = _safe_int(creator.get("avg_views"))
-        avg_likes = _safe_int(creator.get("avg_likes"))
-        avg_comments = _safe_int(creator.get("avg_comments"))
-
-        score = calculate_authenticity_score(
-            follower_count=follower_count,
-            avg_views=avg_views,
-            avg_likes=avg_likes,
-            avg_comments=avg_comments,
-        )
-        logger.info(f"Pre-computing authenticity for {username}: Score {score}")
+    try:
+        with session_factory() as session:
+            creators = session.execute(select(CreatorDiscoveryMeta)).scalars().all()
+            for creator in creators:
+                creator.authenticity_score = calculate_authenticity_score(
+                    follower_count=_safe_int(creator.follower_count),
+                    avg_views=_safe_int(creator.avg_views),
+                    avg_likes=_safe_int(creator.avg_likes),
+                    avg_comments=_safe_int(creator.avg_comments),
+                )
+                logger.info(
+                    "Pre-computing authenticity for %s: Score %s",
+                    creator.username or "unknown",
+                    creator.authenticity_score,
+                )
+            session.commit()
+    except SQLAlchemyError as exc:
+        logger.warning("[NightlyJobs] Authenticity refresh skipped because database query failed: %s", exc)
 
 
 if __name__ == "__main__":

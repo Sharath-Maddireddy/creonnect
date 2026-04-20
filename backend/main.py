@@ -19,6 +19,7 @@ from backend.app.api.post_analysis_routes import router as post_analysis_router
 from backend.app.api.reel_analysis_routes import router as reel_analysis_router
 from backend.app.api.dashboard import router as dashboard_router
 from backend.app.api.instagram_auth_routes import router as instagram_auth_router
+from backend.app.infra.database import init_db
 from backend.app.utils.logger import logger
 
 
@@ -55,6 +56,7 @@ async def _app_lifespan(_app: FastAPI):
     vision_enabled = bool((os.getenv("GEMINI_API_KEY") or "").strip())
     _app.state.vision_enabled = vision_enabled
     logger.info("vision_enabled=%s", vision_enabled)
+    await init_db()
     yield
 
 app = FastAPI(
