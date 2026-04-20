@@ -1,9 +1,15 @@
 import re
+from threading import Lock
 from typing import List
+from typing import TYPE_CHECKING
+
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from backend.app.ai.schemas import CreatorProfileAIInput, CreatorPostAIInput
+from backend.app.utils.logger import logger
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 
 # -----------------------------
@@ -86,11 +92,21 @@ def _has_secondary_niche_evidence(
     return _keyword_hit_count(normalized, keywords) > 0
 
 
-# -----------------------------
-# Load model once
-# -----------------------------
+_model: "SentenceTransformer | None" = None
+_model_lock = Lock()
 
-_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+def _get_model() -> "SentenceTransformer":
+    """Lazy-load the embedding model so test collection doesn't require ML deps."""
+    global _model
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                from sentence_transformers import SentenceTransformer
+
+                logger.info("[Niche] Loading sentence-transformer model all-MiniLM-L6-v2")
+                _model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _model
 
 
 # -----------------------------
@@ -118,12 +134,14 @@ def detect_creator_niche(
             "confidence": 0.0
         }
 
-    text_embedding = _model.encode(
+    model = _get_model()
+
+    text_embedding = model.encode(
         combined_text,
         normalize_embeddings=True
     )
 
-    niche_embeddings = _model.encode(
+    niche_embeddings = model.encode(
         NICHES,
         normalize_embeddings=True
     )

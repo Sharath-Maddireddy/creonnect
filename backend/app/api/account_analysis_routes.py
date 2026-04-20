@@ -24,6 +24,11 @@ class AccountAnalysisRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     account_id: str
+    username: str | None = None
+    bio: str | None = None
+    follower_count: int | None = None
+    creator_dominant_category: str | None = None
+    niche_tags: list[str] | None = None
     post_limit: int = Field(default=30, ge=1, le=30)
     account_avg_engagement_rate: float | None = None
     niche_avg_engagement_rate: float | None = None

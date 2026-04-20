@@ -131,7 +131,7 @@ def _find_lookalikes_sqlite_fallback(account_id: str, k: int) -> list[dict] | No
 
     target_embedding = target_creator.get("embedding")
     if not target_embedding:
-        raise LookalikeEmbeddingError(f"Missing embedding for creator '{account_id}'.")
+        return None
 
     scored_matches: list[tuple[float, str]] = []
     for creator in creators:

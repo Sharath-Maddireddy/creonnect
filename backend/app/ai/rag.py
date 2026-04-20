@@ -8,10 +8,15 @@ Stores vectors in memory for simplicity.
 import os
 import json
 from typing import List
+from typing import TYPE_CHECKING
 from threading import Lock
 from pathlib import Path
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+from backend.app.utils.logger import logger
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 
 # ------------------------------------------------
@@ -77,10 +82,21 @@ class RAGEngine:
     """
 
     def __init__(self):
-        self._model = SentenceTransformer("all-MiniLM-L6-v2")
+        self._model: SentenceTransformer | None = None
         self._chunks: List[str] = []
         self._embeddings: np.ndarray = None
         self._loaded = False
+        self._model_lock = Lock()
+
+    def _get_model(self) -> "SentenceTransformer":
+        if self._model is None:
+            with self._model_lock:
+                if self._model is None:
+                    from sentence_transformers import SentenceTransformer
+
+                    logger.info("[RAG] Loading sentence-transformer model all-MiniLM-L6-v2")
+                    self._model = SentenceTransformer("all-MiniLM-L6-v2")
+        return self._model
 
     def load_knowledge(self):
         """Load and process all markdown files from knowledge directory."""
@@ -122,7 +138,7 @@ class RAGEngine:
 
         if all_chunks:
             # Embed all chunks
-            self._embeddings = self._model.encode(
+            self._embeddings = self._get_model().encode(
                 all_chunks,
                 normalize_embeddings=True,
                 show_progress_bar=False
@@ -160,7 +176,7 @@ class RAGEngine:
             return []
 
         # Embed query
-        query_embedding = self._model.encode(
+        query_embedding = self._get_model().encode(
             query,
             normalize_embeddings=True,
             show_progress_bar=False

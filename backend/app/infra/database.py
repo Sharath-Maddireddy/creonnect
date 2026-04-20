@@ -16,6 +16,7 @@ from backend.app.utils.logger import logger
 
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/creonnect"
+_ASYNC_DRIVERS = {"asyncpg", "aiosqlite", "aiomysql", "asyncmy", "aiopg"}
 
 _ASYNC_ENGINE = None
 _ASYNC_SESSIONMAKER: async_sessionmaker[AsyncSession] | None = None
@@ -40,8 +41,11 @@ def get_sync_database_url() -> str:
 
 
 def _has_async_driver(database_url: str) -> bool:
-    drivername = make_url(database_url).drivername
-    return "+" in drivername
+    """Check whether DATABASE_URL is configured with a known async driver."""
+    url = make_url(database_url)
+    parts = url.drivername.split("+")
+    driver = parts[1] if len(parts) > 1 else None
+    return driver in _ASYNC_DRIVERS
 
 
 def get_async_engine():
@@ -104,8 +108,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def init_db() -> None:
-    """Create database tables if the database is reachable."""
+async def init_db(*, strict: bool = False) -> None:
+    """Create database tables if the database is reachable.
+
+    When ``strict`` is True, initialization errors are re-raised so callers can
+    fail fast on database misconfiguration. The default remains non-fatal to
+    preserve the existing degraded-startup behavior.
+    """
     from backend.app.infra.models import Base
 
     try:
@@ -116,11 +125,30 @@ async def init_db() -> None:
             await connection.run_sync(Base.metadata.create_all)
     except (RuntimeError, SQLAlchemyError, OSError) as exc:
         logger.warning("[Database] Skipping init_db because database setup failed: %s", exc)
+        if strict:
+            raise
 
 
 def reset_database_engines() -> None:
     """Reset cached engines/sessionmakers. Primarily used by tests."""
     global _ASYNC_ENGINE, _ASYNC_SESSIONMAKER, _SYNC_ENGINE, _SYNC_SESSIONMAKER
+    if _ASYNC_ENGINE is not None:
+        _ASYNC_ENGINE.sync_engine.dispose()
+    if _SYNC_ENGINE is not None:
+        _SYNC_ENGINE.dispose()
+    _ASYNC_ENGINE = None
+    _ASYNC_SESSIONMAKER = None
+    _SYNC_ENGINE = None
+    _SYNC_SESSIONMAKER = None
+
+
+async def reset_database_engines_async() -> None:
+    """Reset cached engines/sessionmakers and await async engine disposal."""
+    global _ASYNC_ENGINE, _ASYNC_SESSIONMAKER, _SYNC_ENGINE, _SYNC_SESSIONMAKER
+    if _ASYNC_ENGINE is not None:
+        await _ASYNC_ENGINE.dispose()
+    if _SYNC_ENGINE is not None:
+        _SYNC_ENGINE.dispose()
     _ASYNC_ENGINE = None
     _ASYNC_SESSIONMAKER = None
     _SYNC_ENGINE = None

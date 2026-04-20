@@ -18,7 +18,7 @@ def _zero_embedding() -> list[float]:
 
 def _build_source_text(meta: CreatorDiscoveryMeta) -> str:
     category = (meta.creator_dominant_category or "").strip()
-    niche_tags = " ".join(tag.strip() for tag in (meta.niche_tags or []) if str(tag).strip())
+    niche_tags = " ".join(str(tag).strip() for tag in (meta.niche_tags or []) if str(tag).strip())
     bio = (meta.bio or "").strip()
     return " ".join(part for part in (category, niche_tags, bio) if part)
 

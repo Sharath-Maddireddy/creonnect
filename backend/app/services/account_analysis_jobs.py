@@ -27,6 +27,7 @@ from backend.app.ingestion.instagram_oauth import fetch_instagram_media
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
 from backend.app.utils.logger import logger
+from backend.app.workers.embedding_worker import upsert_creator
 
 
 ACCOUNT_ANALYSIS_JOB_KEY_PREFIX = "account_analysis:job:"
@@ -859,6 +860,28 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             use_cache=True,
         )
         result_payload = result.model_dump(mode="python")
+
+        try:
+            creator_data = {
+                "account_id": account_id,
+                "username": payload.get("username"),
+                "bio": payload.get("bio"),
+                "follower_count": payload.get("follower_count"),
+                "creator_dominant_category": payload.get("creator_dominant_category"),
+                "niche_tags": payload.get("niche_tags") or [],
+                "ahs_score": result.ahs_score,
+                "predicted_engagement_rate": result.pillars["engagement_quality"].score if "engagement_quality" in result.pillars else None,
+                "avg_visual_quality_score": result.pillars["content_quality"].score if "content_quality" in result.pillars else None,
+                "avg_brand_safety_score": result.pillars["brand_safety"].score if "brand_safety" in result.pillars else None,
+                "avg_views": sum((post.core_metrics.reach or 0) for post in processed_posts) / len(processed_posts) if processed_posts else 0,
+                "avg_likes": sum((post.core_metrics.likes or 0) for post in processed_posts) / len(processed_posts) if processed_posts else 0,
+                "avg_comments": sum((post.core_metrics.comments or 0) for post in processed_posts) / len(processed_posts) if processed_posts else 0,
+                "posts_per_week": result.metadata.post_count_used / (result.metadata.time_window_days / 7) if getattr(result.metadata, "time_window_days", None) else 0,
+            }
+            upsert_creator(creator_data)
+        except Exception as embed_exc:
+            logger.warning("[AccountAnalysisJob] Non-fatal: failed to enqueue embedding ingestion for %s: %s", account_id, embed_exc)
+
         if include_posts_summary:
             result_payload["posts_summary"] = _bounded_posts_summary(
                 processed_posts,

@@ -25,8 +25,15 @@ def main() -> None:
         return
 
     pool_path = Path(__file__).resolve().parents[1] / "demo" / "creator_pool.json"
-    with pool_path.open("r", encoding="utf-8") as handle:
-        creators = json.load(handle)
+    try:
+        with pool_path.open("r", encoding="utf-8") as handle:
+            creators = json.load(handle)
+    except FileNotFoundError:
+        print(f"Creator pool file not found: {pool_path}")
+        return
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON in creator pool file: {exc}")
+        return
 
     total = len(creators)
     for index, creator in enumerate(creators, start=1):

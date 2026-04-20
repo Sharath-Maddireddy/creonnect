@@ -113,6 +113,9 @@ def main() -> None:
 
     payload = {
         "account_id": account_id,
+        "username": fixture.get("username"),
+        "bio": fixture.get("biography") or fixture.get("bio"),
+        "follower_count": fixture.get("followers_count") or fixture.get("follower_count"),
         "post_limit": min(len(analyzed_posts), 30),
         "posts": [post.model_dump(mode="python") for post in analyzed_posts],
     }
