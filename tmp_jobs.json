@@ -1,5 +1,15 @@
 [
   {
+    "job_id": "ftjob-JlvN9phmhqrNIgnmRrrhrWMc",
+    "status": "succeeded",
+    "fine_tuned_model": "ft:gpt-4o-mini-2024-07-18:personal:creonnect-v1:DXAvItyH"
+  },
+  {
+    "job_id": "ftjob-qrkjoGlpXRnOL98RVNMk9Eaf",
+    "status": "succeeded",
+    "fine_tuned_model": "ft:gpt-4o-mini-2024-07-18:personal:creonnect-v1:DXAq29yn"
+  },
+  {
     "job_id": "ftjob-wp6sUysA5971hHP2TLpczdo0",
     "status": "succeeded",
     "fine_tuned_model": "ft:gpt-4o-mini-2024-07-18:personal:creonnect-v1:DPYVeka2"

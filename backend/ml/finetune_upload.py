@@ -24,7 +24,7 @@ TRAIN_PATH = ROOT_DIR / "backend" / "data" / "fine_tune_upload.cleaned.jsonl"
 VAL_PATH = ROOT_DIR / "backend" / "data" / "chat_val.jsonl"
 
 BASE_MODEL = "gpt-4o-mini-2024-07-18"
-SUFFIX = "creonnect-v1"
+SUFFIX = "creonnect-v2"
 N_EPOCHS = 3
 
 

@@ -873,9 +873,9 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
                 "predicted_engagement_rate": result.pillars["engagement_quality"].score if "engagement_quality" in result.pillars else None,
                 "avg_visual_quality_score": result.pillars["content_quality"].score if "content_quality" in result.pillars else None,
                 "avg_brand_safety_score": result.pillars["brand_safety"].score if "brand_safety" in result.pillars else None,
-                "avg_views": sum((post.core_metrics.reach or 0) for post in processed_posts) / len(processed_posts) if processed_posts else 0,
-                "avg_likes": sum((post.core_metrics.likes or 0) for post in processed_posts) / len(processed_posts) if processed_posts else 0,
-                "avg_comments": sum((post.core_metrics.comments or 0) for post in processed_posts) / len(processed_posts) if processed_posts else 0,
+                "avg_views": sum((post.core_metrics.reach or 0) if post.core_metrics else 0 for post in processed_posts) / len(processed_posts) if processed_posts else 0,
+                "avg_likes": sum((post.core_metrics.likes or 0) if post.core_metrics else 0 for post in processed_posts) / len(processed_posts) if processed_posts else 0,
+                "avg_comments": sum((post.core_metrics.comments or 0) if post.core_metrics else 0 for post in processed_posts) / len(processed_posts) if processed_posts else 0,
                 "posts_per_week": result.metadata.post_count_used / (result.metadata.time_window_days / 7) if getattr(result.metadata, "time_window_days", None) else 0,
             }
             upsert_creator(creator_data)

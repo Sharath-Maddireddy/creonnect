@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
 
 from backend.app.services.account_analysis_jobs import run_account_analysis_job

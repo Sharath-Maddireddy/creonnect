@@ -23,19 +23,19 @@ Parsed JSON: {
 
 --- TOP LIKELY MATCHES ---
 #1 @mrindiarajeshmonga (fitness | 298,076 followers)
-    Match Band : EXCELLENT (83.29 / 100)
-    Breakdowns : Niche Fit=13.94/20, Audience Size=20.0/20, Safety=19.2/20
+    Match Band : EXCELLENT (89.35 / 100)
+    Breakdowns : Niche Fit=20.0/20, Audience Size=20.0/20, Safety=19.2/20
 
 #2 @lovesweatfitness (fitness | 466,494 followers)
-    Match Band : EXCELLENT (82.36 / 100)
-    Breakdowns : Niche Fit=14.81/20, Audience Size=20.0/20, Safety=18.8/20
+    Match Band : EXCELLENT (87.55 / 100)
+    Breakdowns : Niche Fit=20.0/20, Audience Size=20.0/20, Safety=18.8/20
 
 #3 @heer.naik (fitness | 161,174 followers)
-    Match Band : EXCELLENT (80.94 / 100)
-    Breakdowns : Niche Fit=14.04/20, Audience Size=20.0/20, Safety=17.2/20
+    Match Band : EXCELLENT (86.90 / 100)
+    Breakdowns : Niche Fit=20.0/20, Audience Size=20.0/20, Safety=17.2/20
 
 --- DISQUALIFIED/WEAK MATCHES (Bottom 2) ---
-@jordanswaytour (tech | 10,524 followers) -> Score: 56.00 (Disqualified: False)
+@jordanswaytour (tech | 10,524 followers) -> Score: 54.00 (Disqualified: False)
 @d_chaudhary (tech | 212,026 followers) -> Score: 0.00 (Disqualified: True)
     Reason: Failed Audience Authenticity Check (Score: 30.0). High probability of fake followers or bot engagement.
 
@@ -61,19 +61,19 @@ Parsed JSON: {
 
 --- TOP LIKELY MATCHES ---
 #1 @mrindiarajeshmonga (fitness | 298,076 followers)
-    Match Band : EXCELLENT (81.45 / 100)
-    Breakdowns : Niche Fit=12.1/20, Audience Size=20.0/20, Safety=19.2/20
+    Match Band : GOOD (72.35 / 100)
+    Breakdowns : Niche Fit=3.0/20, Audience Size=20.0/20, Safety=19.2/20
 
 #2 @lovesweatfitness (fitness | 466,494 followers)
-    Match Band : EXCELLENT (80.12 / 100)
-    Breakdowns : Niche Fit=12.57/20, Audience Size=20.0/20, Safety=18.8/20
+    Match Band : GOOD (70.55 / 100)
+    Breakdowns : Niche Fit=3.0/20, Audience Size=20.0/20, Safety=18.8/20
 
 #3 @bajpayee_fitnessjourney (fitness | 291,661 followers)
-    Match Band : GOOD (77.10 / 100)
-    Breakdowns : Niche Fit=12.4/20, Audience Size=20.0/20, Safety=18.4/20
+    Match Band : GOOD (67.70 / 100)
+    Breakdowns : Niche Fit=3.0/20, Audience Size=20.0/20, Safety=18.4/20
 
 --- DISQUALIFIED/WEAK MATCHES (Bottom 2) ---
-@jordanswaytour (tech | 10,524 followers) -> Score: 56.00 (Disqualified: False)
+@jordanswaytour (tech | 10,524 followers) -> Score: 54.00 (Disqualified: False)
 @d_chaudhary (tech | 212,026 followers) -> Score: 0.00 (Disqualified: True)
     Reason: Failed Audience Authenticity Check (Score: 30.0). High probability of fake followers or bot engagement.
 

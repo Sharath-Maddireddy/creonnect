@@ -54,7 +54,7 @@ class LLMClient:
     def __init__(
         self,
         # Base model: "gpt-4o-mini"
-        model_name: str = "ft:gpt-4o-mini-2024-07-18:personal:creonnect-v1:DPYVeka2",
+        model_name: str = "ft:gpt-4o-mini-2024-07-18:personal:creonnect-v1:DXAvItyH",
         temperature: float = 0.4,
         max_tokens: int = 400,
         timeout: int = 30,
