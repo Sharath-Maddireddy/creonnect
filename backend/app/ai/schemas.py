@@ -1,6 +1,11 @@
-from pydantic import BaseModel
-from typing import List, Optional, Dict
+"""Pydantic schemas for creator profile and post AI inputs."""
+
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Dict, List, Literal, Optional
+
+from pydantic import BaseModel, field_validator
 
 
 # -----------------------------
@@ -51,7 +56,9 @@ class CreatorPostAIInput(BaseModel):
     creator_id: str = ""
     platform: str = "instagram"
 
-    post_type: str = "post"  # image | reel | video
+    post_type: Literal["IMAGE", "REEL"] = "IMAGE"
+    media_url: str = ""
+    thumbnail_url: str = ""
 
     caption_text: str = ""
     hashtags: List[str] = []
@@ -59,7 +66,28 @@ class CreatorPostAIInput(BaseModel):
     likes: int = 0
     comments: int = 0
     views: Optional[int] = None
+    reel_duration_sec: Optional[float] = None
+    share_count: Optional[int] = None
+    saves: Optional[int] = None
+    watch_time_pct: Optional[float] = None  # 0.0 - 1.0
 
     audio_name: Optional[str] = None
 
     posted_at: Optional[datetime] = None
+
+    @field_validator("post_type", mode="before")
+    @classmethod
+    def normalize_post_type(cls, value: str | None) -> Literal["IMAGE", "REEL"]:
+        normalized = value.strip().upper() if isinstance(value, str) else ""
+        if normalized in {"REEL", "VIDEO", "CLIPS"}:
+            return "REEL"
+        return "IMAGE"
+
+    @field_validator("media_url", "thumbnail_url", mode="before")
+    @classmethod
+    def normalize_media_urls(cls, value: str | None) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
+
+
