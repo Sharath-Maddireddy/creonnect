@@ -50,3 +50,5 @@ def generate_creator_script_service(creator_id: str) -> dict:
         niche_scores=niche,
         top_post=top_post
     )
+
+
