@@ -36,7 +36,7 @@ def _read_jsonl(path: Path) -> Iterable[Tuple[int, Dict[str, Any]]]:
             try:
                 yield line_num, json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(f"Invalid JSON on line {line_num}: {exc}") from exc
+                print(f"[warn] skipping malformed JSONL line {line_num}: {exc}")
 
 
 def _write_jsonl(rows: Iterable[Dict[str, Any]], path: Path) -> int:
@@ -119,16 +119,23 @@ def main() -> None:
 
     ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    enriched_rows: List[Dict[str, Any]] = []
-    for line_num, row in _read_jsonl(INPUT_PATH):
-        validate_jsonl_entry(row, TrainingExample, row_index=line_num)
-        enriched = _enrich_entry(row)
-        validate_jsonl_entry(enriched, EnrichedTrainingExample, row_index=line_num)
-        enriched_rows.append(enriched)
+    enriched_count = 0
+    chat_rows: List[Dict[str, Any]] = []
+    with ENRICHED_PATH.open("w", encoding="utf-8") as enriched_file:
+        for line_num, row in _read_jsonl(INPUT_PATH):
+            try:
+                validate_jsonl_entry(row, TrainingExample, row_index=line_num)
+                enriched = _enrich_entry(row)
+                validate_jsonl_entry(enriched, EnrichedTrainingExample, row_index=line_num)
+                enriched_file.write(json.dumps(enriched, ensure_ascii=False))
+                enriched_file.write("\n")
+                enriched_count += 1
+                chat_rows.append(_to_chat_example(enriched))
+            except ValueError as exc:
+                print(f"[warn] skipping line {line_num}: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] skipping line {line_num}: {exc}")
 
-    enriched_count = _write_jsonl(enriched_rows, ENRICHED_PATH)
-
-    chat_rows = [_to_chat_example(row) for row in enriched_rows]
     rng = random.Random(SPLIT_SEED)
     rng.shuffle(chat_rows)
     split_idx = int(len(chat_rows) * TRAIN_FRACTION)

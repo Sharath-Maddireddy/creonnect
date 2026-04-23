@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend.app.analytics.audience_quality import calculate_authenticity_score
-from backend.app.infra.database import get_sync_engine, get_sync_sessionmaker, reset_database_engines
+from backend.app.infra.database import get_sync_db, get_sync_engine, get_sync_sessionmaker, reset_database_engines
 from backend.app.infra.models import Base, CreatorDiscoveryMeta, CreatorVector, EMBEDDING_DIMENSION
 from backend.app.services.creator_pool_service import find_lookalikes, get_all_creators, query_creator_pool
 from backend.app.workers import embedding_worker
@@ -160,3 +160,18 @@ def test_get_all_creators_returns_all_rows(db_setup: _DummyQueue) -> None:
 
     assert len(creators) == 3
     assert {creator["account_id"] for creator in creators} == {"creator_a", "creator_b", "creator_c"}
+
+
+def test_get_sync_db_rolls_back_on_consumer_exception(db_setup: _DummyQueue) -> None:
+    generator = get_sync_db()
+    session = next(generator)
+    session.add(CreatorVector(account_id="rollback_case", embedding=_embedding(0.1), source_text="rollback"))
+    session.add(CreatorDiscoveryMeta(account_id="rollback_case", username="rollback", niche_tags=["fitness"]))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        generator.throw(RuntimeError("boom"))
+
+    session_factory = get_sync_sessionmaker()
+    with session_factory() as verification_session:
+        assert verification_session.get(CreatorDiscoveryMeta, "rollback_case") is None
+        assert verification_session.get(CreatorVector, "rollback_case") is None

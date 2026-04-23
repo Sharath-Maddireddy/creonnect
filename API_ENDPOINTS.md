@@ -68,7 +68,7 @@
 ---
 
 ## 2) GET `/api/creator/dashboard`
-- Purpose: Returns complete dashboard payload for charts/summary/action plan.
+- Purpose: Returns complete dashboard payload for summary, posts, charts, authenticity analysis, and action plan.
 - Visibility: Authenticated clients.
 - Auth: `Authorization: Bearer <access_token>` required
 - Required headers: `Authorization: Bearer <access_token>`
@@ -133,6 +133,14 @@
     "engagement_over_time": [{ "date": "string|null", "value": "number|null" }],
     "views_over_time": [{ "date": "string|null", "value": "number|null" }]
   },
+  "authenticity_analysis": {
+    "score": "number",
+    "band": "high|moderate|low",
+    "follower_count": "integer",
+    "avg_views": "integer",
+    "avg_likes": "integer",
+    "avg_comments": "integer"
+  },
   "action_plan": {
     "diagnosis": "string",
     "weekly_plan": ["string"],
@@ -190,6 +198,14 @@ Notes:
   "charts": {
     "engagement_over_time": [{ "date": "2024-01-01T00:00:00+00:00", "value": 0.051 }],
     "views_over_time": [{ "date": "2024-01-01T00:00:00+00:00", "value": 2200 }]
+  },
+  "authenticity_analysis": {
+    "score": 100.0,
+    "band": "high",
+    "follower_count": 125000,
+    "avg_views": 93000,
+    "avg_likes": 4200,
+    "avg_comments": 380
   },
   "action_plan": {
     "diagnosis": "Your account is growing at 80 followers/day. Engagement is healthy. Overall growth score is strong.",

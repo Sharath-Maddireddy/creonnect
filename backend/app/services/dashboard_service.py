@@ -8,6 +8,7 @@ import asyncio
 from datetime import date, timedelta
 
 from backend.app.ai.schemas import CreatorPostAIInput
+from backend.app.analytics.audience_quality import calculate_authenticity_score
 from backend.app.demo.synthetic_loader import load_synthetic
 from backend.app.ingestion.instagram_mapper import map_instagram_to_ai_inputs
 from backend.app.ingestion.instagram_oauth import (
@@ -52,6 +53,14 @@ def _safe_rate(value: object) -> float | None:
         return None
 
 
+def _authenticity_band(score: float) -> str:
+    if score >= 80:
+        return "high"
+    if score >= 50:
+        return "moderate"
+    return "low"
+
+
 def build_creator_dashboard(creator_id: str, access_token: str | None = None) -> dict:
     """
     Build the full creator dashboard response.
@@ -83,7 +92,7 @@ def build_creator_dashboard(creator_id: str, access_token: str | None = None) ->
     engagement_series = []
     views_series = []
 
-    for p, insight in zip(posts, post_insights):
+    for p, insight in zip(posts, post_insights, strict=True):
         media_url = p.media_url or _placeholder_media_url(p.post_id, size=800)
         thumbnail_url = p.thumbnail_url or media_url
         engagement_series.append({
@@ -179,6 +188,21 @@ def build_creator_dashboard(creator_id: str, access_token: str | None = None) ->
         "growth_score": growth.get("growth_score", 0)
     })
 
+    authenticity_score = calculate_authenticity_score(
+        follower_count=int(profile.followers_count or 0),
+        avg_views=int(profile.avg_views or 0),
+        avg_likes=int(profile.avg_likes or 0),
+        avg_comments=int(profile.avg_comments or 0),
+    )
+    authenticity_analysis = {
+        "score": authenticity_score,
+        "band": _authenticity_band(authenticity_score),
+        "follower_count": int(profile.followers_count or 0),
+        "avg_views": int(profile.avg_views or 0),
+        "avg_likes": int(profile.avg_likes or 0),
+        "avg_comments": int(profile.avg_comments or 0),
+    }
+
     return {
         "summary": {
             "username": profile.username,
@@ -199,6 +223,8 @@ def build_creator_dashboard(creator_id: str, access_token: str | None = None) ->
             "engagement_over_time": engagement_series,
             "views_over_time": views_series
         },
+
+        "authenticity_analysis": authenticity_analysis,
 
         "action_plan": action_plan
     }

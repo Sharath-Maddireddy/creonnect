@@ -27,6 +27,13 @@ class BrandProfile(BaseModel):
             return ""
         return (value or "").strip()[:120]
 
+    @field_validator("brand_name", "niche", mode="after")
+    @classmethod
+    def _require_non_empty_text(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("value must be a non-empty string.")
+        return value
+
     @field_validator("min_engagement_rate", mode="before")
     @classmethod
     def _clamp_min_engagement_rate(cls, value: float | int | str | None) -> float | None:
@@ -72,6 +79,13 @@ class CreatorMatchScore(BaseModel):
         if not isinstance(value, str):
             return ""
         return (value or "").strip()[:120]
+
+    @field_validator("account_id", mode="after")
+    @classmethod
+    def _require_account_id(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("account_id must be a non-empty string.")
+        return value
 
     @field_validator(
         "total_match_score",

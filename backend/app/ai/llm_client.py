@@ -2,6 +2,7 @@ from typing import Any, Dict, Optional
 import os
 import time
 
+from backend.app.infra.models import CREATOR_EMBEDDING_MODEL_NAME, EMBEDDING_DIMENSION
 from backend.app.utils.logger import logger
 
 
@@ -152,7 +153,7 @@ class LLMClient:
         raise LLMClientError(f"LLM request failed after {self.max_retries + 1} attempts: {last_error}")
 
     def embed(self, text: str) -> list[float] | None:
-        """Generate an embedding vector for the given text."""
+        """Generate a creator-pool embedding vector for the given text."""
         if self._client is None:
             logger.error("[LLM] Embedding request failed: client not initialized")
             return None
@@ -162,11 +163,20 @@ class LLMClient:
             logger.info("[LLM] Embedding request start")
             response = self._client.embeddings.create(
                 input=text,
-                model="text-embedding-3-small",
+                model=CREATOR_EMBEDDING_MODEL_NAME,
             )
             duration = time.time() - start_time
             logger.info(f"[LLM] Embedding request completed in {duration:.2f}s")
-            return response.data[0].embedding
+            embedding = response.data[0].embedding
+            if len(embedding) != EMBEDDING_DIMENSION:
+                logger.error(
+                    "[LLM] Embedding dimension mismatch: expected %s values from %s, received %s",
+                    EMBEDDING_DIMENSION,
+                    CREATOR_EMBEDDING_MODEL_NAME,
+                    len(embedding),
+                )
+                return None
+            return embedding
         except Exception as e:
             duration = time.time() - start_time
             logger.warning(f"[LLM] Embedding request failed after {duration:.2f}s: {e}")

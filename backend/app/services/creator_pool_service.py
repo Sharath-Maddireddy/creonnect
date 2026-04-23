@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Iterable
 
 from sqlalchemy import Select, select, text
@@ -15,6 +16,17 @@ from backend.app.utils.logger import logger
 
 class LookalikeEmbeddingError(RuntimeError):
     """Raised when lookalike search cannot compute required embeddings."""
+
+
+def _get_hnsw_ef_search() -> int:
+    raw_value = (os.getenv("PGVECTOR_HNSW_EF_SEARCH") or "").strip()
+    if not raw_value:
+        return 100
+    try:
+        return int(raw_value)
+    except ValueError:
+        logger.warning("Invalid PGVECTOR_HNSW_EF_SEARCH=%r; falling back to 100", raw_value)
+        return 100
 
 
 def _normalize_embedding(value: object) -> list[float] | None:
@@ -169,6 +181,9 @@ def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
             )
             if _normalize_embedding(target_embedding) is None:
                 raise LookalikeEmbeddingError(f"Missing embedding for creator '{account_id}'.")
+
+            ef_search = _get_hnsw_ef_search()
+            session.execute(text(f"SET LOCAL hnsw.ef_search = {ef_search}"))
 
             result = session.execute(
                 text(

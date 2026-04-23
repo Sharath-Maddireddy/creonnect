@@ -41,12 +41,12 @@ def calculate_momentum(snapshots: List[Dict]) -> Dict:
         if latest_date and previous_date:
             # Parse dates (handle both string and date objects)
             if isinstance(latest_date, str):
-                latest_dt = datetime.fromisoformat(latest_date)
+                latest_dt = datetime.fromisoformat(latest_date.replace("Z", "+00:00"))
             else:
                 latest_dt = latest_date
                 
             if isinstance(previous_date, str):
-                previous_dt = datetime.fromisoformat(previous_date)
+                previous_dt = datetime.fromisoformat(previous_date.replace("Z", "+00:00"))
             else:
                 previous_dt = previous_date
             

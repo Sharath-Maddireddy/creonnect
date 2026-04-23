@@ -1,8 +1,15 @@
-"""SQLAlchemy models for creator discovery."""
+"""SQLAlchemy models for creator discovery.
+
+The creator-pool vectors stored here are OpenAI embeddings used for pgvector-
+backed similarity search. They intentionally live in a different vector space
+from the in-memory RAG engine in ``backend.app.ai.rag``, which uses a local
+sentence-transformer model for document retrieval.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from typing import Any
 
@@ -11,13 +18,29 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON, TypeDecorator
 
+from backend.app.utils.logger import logger
+
 try:
     from pgvector.sqlalchemy import Vector
 except ImportError:  # pragma: no cover - exercised when dependency is absent locally
     Vector = None
 
 
+def _get_int_env(name: str, default: int) -> int:
+    raw_value = (os.getenv(name) or "").strip()
+    if not raw_value:
+        return default
+    try:
+        return int(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s=%r; falling back to %s", name, raw_value, default)
+        return default
+
+
+CREATOR_EMBEDDING_MODEL_NAME = "text-embedding-3-small"
 EMBEDDING_DIMENSION = 1536
+HNSW_M = _get_int_env("PGVECTOR_HNSW_M", 32)
+HNSW_EF_CONSTRUCTION = _get_int_env("PGVECTOR_HNSW_EF_CONSTRUCTION", 128)
 
 
 class Base(DeclarativeBase):
@@ -67,7 +90,11 @@ class JsonListType(TypeDecorator):
 
 
 class CreatorVector(Base):
-    """Stores creator embeddings for similarity search."""
+    """Stores creator embeddings for creator-pool similarity search.
+
+    These vectors use ``text-embedding-3-small`` and are not interchangeable
+    with the 384-d sentence-transformer embeddings used by the RAG engine.
+    """
 
     __tablename__ = "creator_vectors"
     __table_args__ = (
@@ -75,9 +102,10 @@ class CreatorVector(Base):
             "ix_creator_vectors_embedding_hnsw",
             "embedding",
             postgresql_using="hnsw",
-            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_with={"m": HNSW_M, "ef_construction": HNSW_EF_CONSTRUCTION},
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
+        Index("ix_creator_vectors_updated_at", "updated_at"),
     )
 
     account_id: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -99,6 +127,7 @@ class CreatorDiscoveryMeta(Base):
     __table_args__ = (
         Index("ix_creator_discovery_meta_category", "creator_dominant_category"),
         Index("ix_creator_discovery_meta_followers", "follower_count"),
+        Index("ix_creator_discovery_meta_updated_at", "updated_at"),
     )
 
     account_id: Mapped[str] = mapped_column(
