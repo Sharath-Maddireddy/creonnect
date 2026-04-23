@@ -40,12 +40,12 @@ NICHES = [
 ]
 
 _SECONDARY_EVIDENCE_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "fitness": ("fitness", "workout", "gym", "training", "exercise", "leg day", "ab routine"),
+    "fitness": ("fitness", "workout", "gym", "training", "exercise", "leg day", "ab routine", "goals", "mindset"),
     "nutrition": ("nutrition", "meal prep", "protein", "diet", "healthy meal", "shake recipe", "macro"),
     "fashion": ("fashion", "style", "outfit", "wardrobe", "ootd", "capsule", "thrift"),
     "beauty": ("beauty", "makeup", "cosmetic", "glam", "grwm", "get ready with me"),
     "skincare": ("skincare", "skin care", "serum", "moisturizer", "spf", "acne"),
-    "technology": ("technology", "tech", "gadget", "app", "software", "coding", "iphone", "android"),
+    "technology": ("technology", "tech", "gadget", "app", "software", "coding", "iphone", "android", "ai", "unboxing", "tool"),
     "finance": ("finance", "investing", "budget", "savings", "money", "stocks"),
     "crypto": ("crypto", "bitcoin", "ethereum", "web3", "blockchain", "token"),
     "education": ("education", "tutorial", "lesson", "learn", "study", "teaching"),
@@ -54,7 +54,7 @@ _SECONDARY_EVIDENCE_KEYWORDS: dict[str, tuple[str, ...]] = {
     "marketing": ("marketing", "brand strategy", "seo", "content strategy", "funnel"),
     "travel": ("travel", "trip", "itinerary", "destination", "flight", "hotel"),
     "food": ("food", "recipe", "cook", "cooking", "meal", "dessert", "chef"),
-    "lifestyle": ("lifestyle", "daily routine", "morning routine", "self care", "wellness", "mindset", "gratitude"),
+    "lifestyle": ("lifestyle", "daily routine", "morning routine", "self care", "wellness", "gratitude", "routine", "vibes", "slow morning"),
     "parenting": ("parenting", "mom life", "dad life", "kids", "toddler", "newborn"),
     "gaming": ("gaming", "gameplay", "stream", "esports", "fps", "rpg"),
     "music": ("music", "song", "singing", "beat", "producer", "guitar"),
@@ -73,7 +73,7 @@ def _keyword_hit_count(text: str, keywords: tuple[str, ...]) -> int:
     hits = 0
     for keyword in keywords:
         escaped = re.escape(keyword.strip().lower()).replace(r"\ ", r"\s+")
-        pattern = re.compile(rf"\b{escaped}\b")
+        pattern = re.compile(rf"\b{escaped}(?:s|es)?\b")
         if pattern.search(text):
             hits += 1
     return hits
@@ -147,6 +147,14 @@ def detect_creator_niche(
     )
 
     similarities = np.dot(niche_embeddings, text_embedding)
+
+    # Primary Keyword Boost
+    normalized_combined = _normalize_text(combined_text)
+    for i, niche_name in enumerate(NICHES):
+        keywords = _SECONDARY_EVIDENCE_KEYWORDS.get(niche_name, (niche_name,))
+        hits = _keyword_hit_count(normalized_combined, keywords)
+        if hits > 0:
+            similarities[i] += (0.20 * hits)
 
     ranked_indices = similarities.argsort()[::-1]
 

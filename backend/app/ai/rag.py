@@ -3,6 +3,12 @@ Simple RAG (Retrieval Augmented Generation) Engine
 
 Uses sentence-transformers for embeddings (already used in niche.py).
 Stores vectors in memory for simplicity.
+
+Important: this engine intentionally uses a separate local embedding model and
+vector space from the pgvector-backed creator pool. Do not persist these RAG
+embeddings into ``creator_vectors`` without a full migration, because the
+creator pool stores 1536-d OpenAI embeddings while this engine uses 384-d
+sentence-transformer embeddings.
 """
 
 import os
@@ -26,6 +32,8 @@ if TYPE_CHECKING:
 KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
 CHUNK_SIZE = 400  # Target characters per chunk
 CHUNK_OVERLAP = 50  # Overlap between chunks
+RAG_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+RAG_EMBEDDING_DIMENSION = 384
 
 # Cache file paths
 CACHE_DIR = Path(os.getenv("RAG_CACHE_DIR", ".rag_cache"))
@@ -94,8 +102,8 @@ class RAGEngine:
                 if self._model is None:
                     from sentence_transformers import SentenceTransformer
 
-                    logger.info("[RAG] Loading sentence-transformer model all-MiniLM-L6-v2")
-                    self._model = SentenceTransformer("all-MiniLM-L6-v2")
+                    logger.info("[RAG] Loading sentence-transformer model %s", RAG_EMBEDDING_MODEL_NAME)
+                    self._model = SentenceTransformer(RAG_EMBEDDING_MODEL_NAME)
         return self._model
 
     def load_knowledge(self):
@@ -143,6 +151,13 @@ class RAGEngine:
                 normalize_embeddings=True,
                 show_progress_bar=False
             )
+            if self._embeddings.ndim == 2 and self._embeddings.shape[1] != RAG_EMBEDDING_DIMENSION:
+                logger.warning(
+                    "[RAG] Unexpected embedding width for %s: expected %s, got %s",
+                    RAG_EMBEDDING_MODEL_NAME,
+                    RAG_EMBEDDING_DIMENSION,
+                    self._embeddings.shape[1],
+                )
             # Save to cache
             try:
                 np.save(EMBEDDINGS_CACHE, self._embeddings)
