@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -86,3 +87,25 @@ def test_generate_fails_fast_for_missing_prompt_key_without_retry() -> None:
 
     assert "Missing required prompt key: 'user'" in str(exc_info.value)
     assert create_mock.call_count == 0
+
+
+def test_init_uses_env_model_name_when_model_not_provided(monkeypatch: pytest.MonkeyPatch) -> None:
+    openai_stub = SimpleNamespace(OpenAI=lambda **kwargs: SimpleNamespace(kwargs=kwargs))
+    monkeypatch.setitem(sys.modules, "openai", openai_stub)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL_NAME", "ft:test-model")
+
+    client = LLMClient()
+
+    assert client.model_name == "ft:test-model"
+
+
+def test_init_falls_back_to_default_model_when_env_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    openai_stub = SimpleNamespace(OpenAI=lambda **kwargs: SimpleNamespace(kwargs=kwargs))
+    monkeypatch.setitem(sys.modules, "openai", openai_stub)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("LLM_MODEL_NAME", raising=False)
+
+    client = LLMClient()
+
+    assert client.model_name == LLMClient.DEFAULT_MODEL

@@ -103,6 +103,31 @@ def _extract_competitor_keywords(extra_flags: dict[str, Any]) -> set[str]:
     return keywords
 
 
+def _tokenize_brand_name(value: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", value)
+
+
+def _is_brand_match(mention: str, competitor: str) -> bool:
+    """Check whether two normalized brand strings match on token boundaries."""
+    if mention == competitor:
+        return True
+
+    mention_tokens = _tokenize_brand_name(mention)
+    competitor_tokens = _tokenize_brand_name(competitor)
+    if not mention_tokens or not competitor_tokens:
+        return False
+
+    shorter_tokens, longer_tokens = sorted(
+        (mention_tokens, competitor_tokens),
+        key=len,
+    )
+    window_size = len(shorter_tokens)
+    return any(
+        longer_tokens[index : index + window_size] == shorter_tokens
+        for index in range(len(longer_tokens) - window_size + 1)
+    )
+
+
 def _has_competitor_mention(
     extracted_brand_mentions: list[str] | None,
     extra_flags: dict[str, Any],
@@ -118,7 +143,7 @@ def _has_competitor_mention(
     if not competitor_keywords:
         return False
     return any(
-        mention == competitor or competitor in mention or mention in competitor
+        _is_brand_match(mention, competitor)
         for mention in normalized_mentions
         for competitor in competitor_keywords
     )

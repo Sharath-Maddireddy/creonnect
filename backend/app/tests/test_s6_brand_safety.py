@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from backend.app.analytics import s6_brand_safety_engine
-from backend.app.analytics.s6_brand_safety_engine import compute_s6_brand_safety
+from backend.app.analytics.s6_brand_safety_engine import _is_brand_match, compute_s6_brand_safety
 
 
 def test_profanity_caption_penalty() -> None:
@@ -77,6 +77,25 @@ def test_determinism() -> None:
     first = compute_s6_brand_safety(**payload).model_dump(mode="python")
     second = compute_s6_brand_safety(**payload).model_dump(mode="python")
     assert first == second
+
+
+def test_brand_match_requires_token_boundary_not_substring() -> None:
+    assert _is_brand_match("nike", "nike inc") is True
+    assert _is_brand_match("meta", "metamorphosis") is False
+    assert _is_brand_match("star", "starbucks") is False
+    assert _is_brand_match("apple", "pineapple") is False
+
+
+def test_competitor_brand_penalty_uses_token_aware_matching() -> None:
+    score = compute_s6_brand_safety(
+        caption_text="Clean caption",
+        vision=None,
+        s1_total_0_50=30.0,
+        extracted_brand_mentions=["pineapple"],
+        extra_flags={"competitor_brands": ["apple"]},
+    )
+    assert score.flags["competitor_brand_mention"] is False
+    assert score.s6_raw_0_100 == 100
 
 
 def test_float_cringe_score_from_helper_applies_penalty(monkeypatch) -> None:

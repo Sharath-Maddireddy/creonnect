@@ -190,6 +190,7 @@ def compute_visual_quality_score(vision_payload: dict[str, Any] | None) -> Visua
     aesthetic_quality = _clamp(aesthetic_quality, 0.0, 10.0)
 
     total = (composition * 0.30 + lighting * 0.20 + subject_clarity * 0.30 + aesthetic_quality * 0.20) * 5.0
+    total = _clamp(total, 0.0, 50.0)
 
     if not signal:
         notes.append("Vision signal missing; using safe deterministic defaults.")

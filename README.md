@@ -26,7 +26,9 @@ pip install -r backend/requirements.txt
 
 # Set environment variables
 set OPENAI_API_KEY=your_key_here  # Windows
+set LLM_MODEL_NAME=gpt-4o-mini  # Optional: override model per environment
 export OPENAI_API_KEY=your_key_here  # Mac/Linux
+export LLM_MODEL_NAME=gpt-4o-mini  # Optional: override model per environment
 
 # Run demo
 python -m backend.app.demo

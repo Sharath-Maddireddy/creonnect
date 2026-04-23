@@ -52,16 +52,17 @@ class LLMClient:
     Includes timeout and retry logic for production reliability.
     """
 
+    DEFAULT_MODEL = "gpt-4o-mini"
+
     def __init__(
         self,
-        # Base model: "gpt-4o-mini"
-        model_name: str = "ft:gpt-4o-mini-2024-07-18:personal:creonnect-v1:DXAvItyH",
+        model_name: str | None = None,
         temperature: float = 0.4,
         max_tokens: int = 400,
         timeout: int = 30,
         max_retries: int = 1
     ):
-        self.model_name = model_name
+        self.model_name = model_name or os.getenv("LLM_MODEL_NAME", self.DEFAULT_MODEL)
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
