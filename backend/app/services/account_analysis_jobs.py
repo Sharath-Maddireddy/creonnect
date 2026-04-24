@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import os
-import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,7 +14,7 @@ from uuid import uuid4
 from rq import Retry, get_current_job
 
 from backend.app.domain.post_models import SinglePostInsights
-from backend.app.infra.redis_client import get_json, get_text, incr_with_expire, set_json, set_text
+from backend.app.infra.redis_client import get_json, get_redis, get_text, incr_with_expire, set_json, set_text
 from backend.app.infra.rq_queue import (
     DEFAULT_FAILURE_TTL_SECONDS,
     DEFAULT_JOB_TIMEOUT_SECONDS,
@@ -310,6 +309,14 @@ def _write_dedupe_job_id(account_id: str, post_limit: int, job_id: str) -> None:
     )
 
 
+def _delete_dedupe_job_id(account_id: str, post_limit: int, job_id: str) -> None:
+    key = _dedupe_key(account_id, post_limit)
+    redis_client = get_redis()
+    payload = get_json(key)
+    if isinstance(payload, dict) and payload.get("job_id") == job_id:
+        redis_client.delete(key)
+
+
 def _compute_posts_payload_hash(payload: dict[str, Any]) -> str | None:
     posts = payload.get("posts")
     if not isinstance(posts, list):
@@ -333,6 +340,15 @@ def _write_inputhash_job_id(account_id: str, payload_hash: str | None, job_id: s
         job_id,
         ttl_seconds=ACCOUNT_ANALYSIS_INPUTHASH_TTL_SECONDS,
     )
+
+
+def _delete_inputhash_job_id(account_id: str, payload_hash: str | None, job_id: str) -> None:
+    if not payload_hash:
+        return
+    key = _inputhash_key(account_id, payload_hash)
+    existing_job_id = get_text(key)
+    if existing_job_id == job_id:
+        get_redis().delete(key)
 
 
 def _resolve_reusable_job(
@@ -370,31 +386,51 @@ def _enforce_rate_limit(account_id: str, running_job_id: str | None) -> None:
     )
 
 
+def _restore_rate_limit_counter(account_id: str) -> None:
+    rate_key = _rate_key(account_id)
+    redis_client = get_redis()
+    value = redis_client.decr(rate_key)
+    if int(value) <= 0:
+        redis_client.delete(rate_key)
+
+
 def _run_coroutine_sync(coro):
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
 
-    result: dict[str, Any] = {}
-    error: dict[str, BaseException] = {}
+    coro.close()
+    raise RuntimeError(
+        "_run_coroutine_sync cannot be used from a running event loop. "
+        "Await the async enqueue/materialization path or offload the sync path to a worker thread."
+    )
 
-    def _runner() -> None:
-        try:
-            result["value"] = asyncio.run(coro)
-        except BaseException as exc:  # pragma: no cover - re-raised synchronously below
-            error["value"] = exc
 
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
+async def _materialize_posts_for_enqueue_async(
+    payload: dict[str, Any],
+    post_limit: int,
+) -> dict[str, Any]:
+    sanitized_payload = dict(payload)
+    access_token = sanitized_payload.pop("access_token", None)
 
-    if "value" in error:
-        raise error["value"]
-    return result.get("value")
+    if isinstance(sanitized_payload.get("posts"), list):
+        return sanitized_payload
+
+    if not isinstance(access_token, str) or not access_token.strip():
+        return sanitized_payload
+
+    try:
+        raw_media = await fetch_instagram_media(access_token.strip(), limit=post_limit)
+        creator_posts = map_instagram_posts(raw_media)
+        sanitized_payload["posts"] = [post.model_dump(mode="python") for post in creator_posts[:post_limit]]
+    except Exception as exc:
+        raise ValueError(f"Failed to fetch Instagram media: {exc}") from exc
+    return sanitized_payload
 
 
 def _materialize_posts_for_enqueue(payload: dict[str, Any], post_limit: int) -> dict[str, Any]:
+    """Sync-only helper. Callers in async contexts must use `_materialize_posts_for_enqueue_async`."""
     sanitized_payload = dict(payload)
     access_token = sanitized_payload.pop("access_token", None)
 
@@ -413,9 +449,11 @@ def _materialize_posts_for_enqueue(payload: dict[str, Any], post_limit: int) -> 
     return sanitized_payload
 
 
-def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
-    """Enqueue account analysis background job and persist queued status."""
-    payload = payload if isinstance(payload, dict) else {}
+def _enqueue_account_analysis_job_impl(
+    payload: dict[str, Any],
+    *,
+    sanitized_payload: dict[str, Any],
+) -> dict[str, str]:
     account_id = _normalize_account_id(payload.get("account_id"))
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
     include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
@@ -431,7 +469,6 @@ def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         return {"job_id": reusable_job_id, "status": reusable_status}
     _enforce_rate_limit(account_id, running_job_id=None)
 
-    sanitized_payload = _materialize_posts_for_enqueue(payload, post_limit=post_limit)
     queue = get_queue()
     raw_job_id = _normalize_job_id(sanitized_payload.get("job_id"))
     job_id = raw_job_id or str(uuid4())
@@ -442,19 +479,41 @@ def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
     full_payload["include_posts_summary"] = include_posts_summary
     full_payload["include_posts_summary_max"] = include_posts_summary_max
 
-    initialize_job_status(job_id)
-    _write_dedupe_job_id(account_id, post_limit, job_id)
-    _write_inputhash_job_id(account_id, payload_hash, job_id)
-    queue.enqueue(
-        run_account_analysis_job,
-        full_payload,
-        job_id=job_id,
-        job_timeout=DEFAULT_JOB_TIMEOUT_SECONDS,
-        result_ttl=DEFAULT_RESULT_TTL_SECONDS,
-        failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
-        retry=Retry(max=2, interval=[10, 30]),
-    )
+    try:
+        queue.enqueue(
+            run_account_analysis_job,
+            full_payload,
+            job_id=job_id,
+            job_timeout=DEFAULT_JOB_TIMEOUT_SECONDS,
+            result_ttl=DEFAULT_RESULT_TTL_SECONDS,
+            failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
+            retry=Retry(max=2, interval=[10, 30]),
+        )
+        initialize_job_status(job_id)
+        _write_dedupe_job_id(account_id, post_limit, job_id)
+        _write_inputhash_job_id(account_id, payload_hash, job_id)
+    except Exception:
+        _delete_dedupe_job_id(account_id, post_limit, job_id)
+        _delete_inputhash_job_id(account_id, payload_hash, job_id)
+        _restore_rate_limit_counter(account_id)
+        raise
     return {"job_id": job_id, "status": "queued"}
+
+
+def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
+    """Enqueue account analysis background job and persist queued status."""
+    payload = payload if isinstance(payload, dict) else {}
+    post_limit = _normalize_post_limit(payload.get("post_limit", 30))
+    sanitized_payload = _materialize_posts_for_enqueue(payload, post_limit=post_limit)
+    return _enqueue_account_analysis_job_impl(payload, sanitized_payload=sanitized_payload)
+
+
+async def enqueue_account_analysis_job_async(payload: dict[str, Any]) -> dict[str, str]:
+    """Async enqueue path that materializes Instagram media without blocking the event loop."""
+    payload = payload if isinstance(payload, dict) else {}
+    post_limit = _normalize_post_limit(payload.get("post_limit", 30))
+    sanitized_payload = await _materialize_posts_for_enqueue_async(payload, post_limit=post_limit)
+    return _enqueue_account_analysis_job_impl(payload, sanitized_payload=sanitized_payload)
 
 
 def _coerce_single_post(item: Any) -> SinglePostInsights:

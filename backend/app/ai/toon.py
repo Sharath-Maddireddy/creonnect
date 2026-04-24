@@ -18,8 +18,22 @@ def _strip_quotes(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         inner = value[1:-1]
         if value[0] == '"':
-            return inner.replace('\\"', '"')
-        return inner.replace("\\'", "'")
+            return (
+                inner
+                .replace("\\\\", "\\")
+                .replace("\\n", "\n")
+                .replace("\\r", "\r")
+                .replace("\\t", "\t")
+                .replace('\\"', '"')
+            )
+        return (
+            inner
+            .replace("\\\\", "\\")
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+            .replace("\\'", "'")
+        )
     return value
 
 
@@ -47,6 +61,10 @@ def _parse_scalar(value: str) -> Any:
 def _needs_quoting(text: str) -> bool:
     if text == "" or " " in text or text.startswith("-") or text.startswith("#"):
         return True
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return True
+    if any(char in text for char in "\n\r\t"):
+        return True
 
     lowered = text.lower()
     if lowered in {"null", "none", "true", "false"}:
@@ -70,7 +88,14 @@ def _format_scalar(value: Any) -> str:
         return str(value)
     text = str(value)
     if _needs_quoting(text):
-        escaped = text.replace('"', '\\"')
+        escaped = (
+            text
+            .replace("\\", "\\\\")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+            .replace('"', '\\"')
+        )
         return f"\"{escaped}\""
     return text
 

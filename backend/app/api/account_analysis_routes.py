@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.utils.logger import logger
 from backend.app.services.account_analysis_jobs import (
     AccountAnalysisRateLimitError,
-    enqueue_account_analysis_job,
+    enqueue_account_analysis_job_async,
     get_account_analysis_job_status,
 )
 
@@ -40,16 +40,16 @@ class AccountAnalysisRequest(BaseModel):
 
 
 @router.post("/account-analysis")
-def enqueue_account_analysis(request: AccountAnalysisRequest) -> dict[str, str]:
+async def enqueue_account_analysis(request: AccountAnalysisRequest) -> dict[str, str]:
     """Enqueue account analysis background job and return job_id."""
     payload = request.model_dump(mode="python")
     try:
-        return enqueue_account_analysis_job(payload)
+        return await enqueue_account_analysis_job_async(payload)
     except AccountAnalysisRateLimitError as exc:
         detail: dict[str, Any] = {"message": exc.message}
         if exc.job_id is not None:
             detail["job_id"] = exc.job_id
-        raise HTTPException(status_code=429, detail=detail)
+        raise HTTPException(status_code=429, detail=detail) from exc
     except Exception as exc:
         logger.exception("[AccountAnalysis] Failed to enqueue account analysis job")
         raise HTTPException(status_code=500, detail="Failed to enqueue account analysis job") from exc

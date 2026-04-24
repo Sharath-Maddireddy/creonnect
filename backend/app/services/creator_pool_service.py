@@ -114,8 +114,11 @@ def query_creator_pool(
     statement = _base_creator_query()
 
     if niche:
-        niche_pattern = f"%{niche.strip()}%"
-        statement = statement.where(CreatorDiscoveryMeta.creator_dominant_category.ilike(niche_pattern))
+        escaped_niche = niche.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        niche_pattern = f"%{escaped_niche.strip()}%"
+        statement = statement.where(
+            CreatorDiscoveryMeta.creator_dominant_category.ilike(niche_pattern, escape="\\")
+        )
     if min_followers is not None:
         statement = statement.where(CreatorDiscoveryMeta.follower_count >= int(min_followers))
     if max_followers is not None:

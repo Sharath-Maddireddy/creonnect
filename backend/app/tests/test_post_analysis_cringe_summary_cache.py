@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend.app.api import post_analysis_routes
-from backend.app.domain.post_models import CoreMetrics, SinglePostInsights
+from backend.app.domain.post_models import CoreMetrics, SinglePostInsights, VisionAnalysis
 from backend.app.services import post_snapshot_store
 
 
@@ -53,6 +53,46 @@ def test_cringe_summary_falls_back_to_process_cache_on_redis_failure(monkeypatch
     post_analysis_routes._write_cringe_summary("post_fallback", payload)
     loaded = post_analysis_routes._read_cringe_summary("post_fallback")
     assert loaded == payload
+
+
+def test_cringe_summary_process_cache_expires_stale_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_now = 10_000.0
+    monkeypatch.setattr(post_analysis_routes.time, "monotonic", lambda: fake_now)
+    monkeypatch.setattr(post_analysis_routes, "set_json", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("redis-down")))
+    monkeypatch.setattr(post_analysis_routes, "get_json", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("redis-down")))
+
+    with post_analysis_routes._CRINGE_SUMMARY_CACHE_LOCK:
+        post_analysis_routes._CRINGE_SUMMARY_CACHE.clear()
+
+    payload = {"cringe_score": 42, "cringe_label": "watch"}
+    post_analysis_routes._write_cringe_summary("post_expiring", payload)
+
+    fake_now += post_analysis_routes.CRINGE_SUMMARY_CACHE_TTL_SECONDS + 1
+    loaded = post_analysis_routes._read_cringe_summary("post_expiring")
+
+    assert loaded is None
+    with post_analysis_routes._CRINGE_SUMMARY_CACHE_LOCK:
+        assert "post_expiring" not in post_analysis_routes._CRINGE_SUMMARY_CACHE
+
+
+def test_cringe_summary_process_cache_evicts_oldest_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(post_analysis_routes.time, "monotonic", lambda: 5_000.0)
+    monkeypatch.setattr(post_analysis_routes, "set_json", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("redis-down")))
+
+    with post_analysis_routes._CRINGE_SUMMARY_CACHE_LOCK:
+        post_analysis_routes._CRINGE_SUMMARY_CACHE.clear()
+
+    original_max_entries = post_analysis_routes.CRINGE_SUMMARY_CACHE_MAX_ENTRIES
+    monkeypatch.setattr(post_analysis_routes, "CRINGE_SUMMARY_CACHE_MAX_ENTRIES", 2)
+
+    post_analysis_routes._write_cringe_summary("post_1", {"cringe_score": 1})
+    post_analysis_routes._write_cringe_summary("post_2", {"cringe_score": 2})
+    post_analysis_routes._write_cringe_summary("post_3", {"cringe_score": 3})
+
+    with post_analysis_routes._CRINGE_SUMMARY_CACHE_LOCK:
+        assert list(post_analysis_routes._CRINGE_SUMMARY_CACHE.keys()) == ["post_2", "post_3"]
+        assert len(post_analysis_routes._CRINGE_SUMMARY_CACHE) == 2
+    assert original_max_entries != 2
 
 
 def test_stable_post_id_avoids_delimiter_collisions() -> None:
@@ -157,4 +197,52 @@ def test_get_post_insights_404_when_missing(monkeypatch: pytest.MonkeyPatch) -> 
         post_analysis_routes.get_post_insights("missing_post")
 
     assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == "Post insights not found for post_id. Run /api/post-analysis for this post first."
+    assert exc_info.value.detail == "Post insights not found for post_id. Run /api/v1/post-analysis for this post first."
+
+
+def test_vision_payload_preserves_unexpected_post_status_and_logs_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        post_analysis_routes.logger,
+        "warning",
+        lambda message, *args: warnings.append(message % args),
+    )
+    post = SinglePostInsights(
+        account_id="acct_1",
+        media_id="post_vision_1",
+        vision_analysis=VisionAnalysis(provider="gemini", status="unknown", signals=[]),
+    )
+
+    payload = post_analysis_routes._vision_payload(post, ai_analysis={"vision_status": "ok"})
+
+    assert payload["status"] == "unknown"
+    assert warnings
+    assert "Unexpected post vision status 'unknown'" in warnings[0]
+    assert "post_vision_1" in warnings[0]
+
+
+def test_vision_payload_uses_valid_ai_status_for_cached_payload() -> None:
+    post = SinglePostInsights(account_id="acct_1", media_id="post_vision_2")
+
+    payload = post_analysis_routes._vision_payload(
+        post,
+        ai_analysis={
+            "vision_status": "disabled",
+            "vision_analysis": {"provider": "gemini", "status": "ok", "signals": []},
+        },
+    )
+
+    assert payload["status"] == "disabled"
+
+
+def test_vision_payload_falls_back_to_error_for_invalid_ai_status() -> None:
+    post = SinglePostInsights(account_id="acct_1", media_id="post_vision_3")
+
+    payload = post_analysis_routes._vision_payload(
+        post,
+        ai_analysis={"vision_status": "unexpected", "vision_analysis": {"provider": "gemini", "status": "ok", "signals": []}},
+    )
+
+    assert payload["status"] == "error"

@@ -122,6 +122,18 @@ def test_query_creator_pool_filters_by_niche(db_setup: _DummyQueue) -> None:
     assert {creator["account_id"] for creator in creators} == {"fitness_1", "fitness_2"}
 
 
+def test_query_creator_pool_escapes_like_wildcards_in_niche_filter(db_setup: _DummyQueue) -> None:
+    embedding_worker.upsert_creator(_creator("literal_pct", "pct_user", "fit%ness", 120000))
+    embedding_worker.upsert_creator(_creator("literal_under", "under_user", "fit_ness", 110000))
+    embedding_worker.upsert_creator(_creator("plain_fitness", "plain_user", "fitness", 100000))
+
+    creators_with_percent = query_creator_pool(niche="fit%")
+    creators_with_underscore = query_creator_pool(niche="fit_")
+
+    assert [creator["account_id"] for creator in creators_with_percent] == ["literal_pct"]
+    assert [creator["account_id"] for creator in creators_with_underscore] == ["literal_under"]
+
+
 def test_query_creator_pool_filters_by_min_followers(db_setup: _DummyQueue) -> None:
     embedding_worker.upsert_creator(_creator("micro_1", "micro", "fitness", 50000))
     embedding_worker.upsert_creator(_creator("macro_1", "macro", "fitness", 150000))

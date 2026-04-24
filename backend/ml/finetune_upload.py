@@ -26,6 +26,7 @@ VAL_PATH = ROOT_DIR / "backend" / "data" / "chat_val.jsonl"
 BASE_MODEL = "gpt-4o-mini-2024-07-18"
 SUFFIX = "creonnect-v2"
 N_EPOCHS = 3
+MAX_WAIT_SECONDS = 60 * 60 * 4
 
 
 def _check_prerequisites() -> None:
@@ -61,6 +62,7 @@ def _wait_for_job(client, job_id: str, poll_interval: int = 30) -> dict:
     print(f"  (polling every {poll_interval}s — you can also check at https://platform.openai.com/finetune)\n")
 
     seen_events = set()
+    start = time.time()
     while True:
         job = client.fine_tuning.jobs.retrieve(job_id)
 
@@ -79,6 +81,13 @@ def _wait_for_job(client, job_id: str, poll_interval: int = 30) -> dict:
 
         if job.status in ("succeeded", "failed", "cancelled"):
             return job
+
+        elapsed = time.time() - start
+        if elapsed >= MAX_WAIT_SECONDS:
+            raise RuntimeError(
+                f"Timed out waiting for fine-tuning job {job_id} after "
+                f"{int(elapsed)}s (last status: {job.status})."
+            )
 
         time.sleep(poll_interval)
 

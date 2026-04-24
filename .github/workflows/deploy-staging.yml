@@ -1,0 +1,177 @@
+# =============================================================================
+# Creonnect — Deploy to Staging
+# =============================================================================
+# Trigger: Push to `main` branch (after PR is merged)
+#
+# Pipeline steps:
+#   1. Run test suite (antigravity gate)
+#   2. Build Docker image
+#   3. Push image to AWS ECR
+#   4. Deploy new image to AWS ECS Fargate (staging)
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   AWS_ACCESS_KEY_ID         — IAM user access key
+#   AWS_SECRET_ACCESS_KEY     — IAM user secret key
+#   AWS_REGION                — e.g. ap-south-1
+#   ECR_REPOSITORY            — ECR repo name e.g. creonnect-ai-backend
+#   ECS_CLUSTER               — ECS cluster name e.g. creonnect-staging
+#   ECS_SERVICE               — ECS service name e.g. creonnect-backend-service
+#   ECS_TASK_DEFINITION       — ECS task definition family name e.g. creonnect-backend
+#   CONTAINER_NAME            — Container name inside the task definition e.g. creonnect-backend
+# =============================================================================
+
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - main
+
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+
+# Cancel any in-progress run for the same branch to avoid stale deployments
+concurrency:
+  group: deploy-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Job 1: Run Tests ────────────────────────────────────────────────────────
+  test:
+    name: Run Test Suite
+    runs-on: ubuntu-latest
+    env:
+      PYTHONWARNINGS: ignore::DeprecationWarning
+      # Provide safe stub values so tests that import env-dependent modules
+      # can initialise without crashing. Real secrets are NOT needed here
+      # because the antigravity suite mocks all external calls.
+      ENV: test
+      DATABASE_URL: sqlite+aiosqlite:///./test.db
+      REDIS_URL: redis://localhost:6379/0
+      OPENAI_API_KEY: sk-test-placeholder
+      GEMINI_API_KEY: test-placeholder
+      BRAND_API_KEY: test-placeholder
+      CREONNECT_SESSION_SECRET: test-placeholder-secret-for-ci
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          if [ -f backend/requirements.txt ]; then
+            pip install -r backend/requirements.txt
+          fi
+
+      - name: Run antigravity gate (unit + integration)
+        run: |
+          python -m pytest backend/app/tests/test_api_antigravity_runner.py -v --tb=short
+          python -m pytest backend/app/tests/test_system_antigravity_suite.py -v --tb=short
+
+  # ── Job 2: Build & Push Docker Image ────────────────────────────────────────
+  build-and-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: test          # Only runs if tests pass
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Docker image to ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          # Tag with short SHA for traceability + always update 'staging' tag
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Build the image
+          docker build \
+            --file Dockerfile \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:staging \
+            --cache-from $ECR_REGISTRY/$ECR_REPOSITORY:staging \
+            .
+
+          # Push both tags
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:staging
+
+          # Output the full image URI for the deploy job
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  # ── Job 3: Deploy to ECS Fargate ────────────────────────────────────────────
+  deploy:
+    name: Deploy to ECS Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push   # Only runs if image was built and pushed successfully
+    environment: staging    # Links to GitHub environment for approval (optional)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Download current ECS task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ secrets.ECS_TASK_DEFINITION }} \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update task definition with new image URI
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ secrets.CONTAINER_NAME }}
+          image: ${{ needs.build-and-push.outputs.image }}
+
+      - name: Deploy updated task definition to ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ secrets.ECS_SERVICE }}
+          cluster: ${{ secrets.ECS_CLUSTER }}
+          # Wait until the new deployment is stable before marking success
+          wait-for-service-stability: true
+
+      - name: Deployment complete — notify
+        if: success()
+        run: |
+          echo "✅ Deployment to staging succeeded."
+          echo "Image: ${{ needs.build-and-push.outputs.image }}"
+          echo "Cluster: ${{ secrets.ECS_CLUSTER }}"
+          echo "Service: ${{ secrets.ECS_SERVICE }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Triggered by: ${{ github.actor }}"

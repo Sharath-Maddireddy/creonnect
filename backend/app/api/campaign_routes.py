@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.analytics.brand_match_engine import score_creator_against_brand
@@ -25,6 +25,13 @@ from backend.app.utils.logger import logger
 
 router = APIRouter(prefix="/api/brand/campaign", tags=["Brand Campaign"])
 rate_limiter = InMemoryRateLimiter(max_requests=10, window_seconds=60)
+
+
+def _rate_limit_by_api_key(api_key: str = Depends(verify_api_key)) -> str:
+    """Apply campaign route rate limiting using the caller API key as the bucket."""
+    if rate_limiter.check(api_key):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+    return api_key
 
 
 class CampaignMatchRequest(BaseModel):
@@ -105,7 +112,7 @@ def _process_pool_matching(
 @router.post("/match", response_model=CampaignMatchResponse)
 def manual_campaign_match(
     request: CampaignMatchRequest,
-    api_key: str = Depends(verify_api_key),
+    api_key: str = Depends(_rate_limit_by_api_key),
 ):
     """
     Score the creator pool against a structured brand profile (manual form submission).
@@ -129,23 +136,18 @@ def manual_campaign_match(
 
     except Exception as e:
         logger.exception("[CampaignRoutes] Error during manual campaign match.")
-        raise HTTPException(status_code=500, detail="Internal server error matching creators.")
+        raise HTTPException(status_code=500, detail="Internal server error matching creators.") from e
 
 
 @router.post("/discover", response_model=CampaignDiscoverResponse)
 def ai_campaign_discover(
-    request: Request,
     campaign_request: CampaignDiscoverRequest,
-    api_key: str = Depends(verify_api_key),
+    api_key: str = Depends(_rate_limit_by_api_key),
 ):
     """
     Use AI to parse a natural language prompt, build a brand profile, and find matches.
     """
     try:
-        client_ip = request.client.host if request.client else "unknown"
-        if rate_limiter.check(client_ip):
-            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
-
         # 1. Parse prompt
         parsed_brief = parse_campaign_prompt(
             prompt=campaign_request.prompt,
@@ -197,13 +199,16 @@ def ai_campaign_discover(
         raise
     except Exception as e:
         logger.exception("[CampaignRoutes] Error during AI campaign discovery.")
-        raise HTTPException(status_code=500, detail="Internal server error extracting brief and matching creators.")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error extracting brief and matching creators.",
+        ) from e
 
 
 @router.get("/lookalikes/{account_id}", response_model=LookalikeResponse)
 def get_creator_lookalikes(
     account_id: str,
-    api_key: str = Depends(verify_api_key),
+    api_key: str = Depends(_rate_limit_by_api_key),
 ):
     """Return semantic lookalikes for a creator account."""
     try:

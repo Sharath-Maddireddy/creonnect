@@ -76,6 +76,8 @@ def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
                 config=genai_types.UploadFileConfig(mime_type="video/mp4"),
             )
         uploaded_file_name = getattr(uploaded, "name", None)
+        if not uploaded_file_name:
+            raise RuntimeError("Gemini upload did not return a file name.")
 
         # Poll until ACTIVE
         for attempt in range(GEMINI_FILE_POLL_MAX_ATTEMPTS):

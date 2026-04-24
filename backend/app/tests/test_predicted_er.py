@@ -142,3 +142,24 @@ def test_predicted_er_integration_result_and_cache(monkeypatch) -> None:
     cache_key = ai_analysis_service._cache_key(target_post)
     assert cache_key in ai_analysis_service._ANALYSIS_CACHE
     assert "predicted_engagement_rate" in ai_analysis_service._ANALYSIS_CACHE[cache_key].result
+
+
+def test_young_post_placeholder_is_not_cached(monkeypatch) -> None:
+    ai_analysis_service._ANALYSIS_CACHE.clear()
+
+    target_post = _build_post("m_pred_young")
+    target_post.published_at = datetime.now(timezone.utc)
+
+    async def _unexpected_call(*_args, **_kwargs):
+        raise AssertionError("Young-post fallback should return before heavy AI analysis runs")
+
+    monkeypatch.setattr(ai_analysis_service, "run_vision_analysis", _unexpected_call)
+    monkeypatch.setattr(ai_analysis_service, "_call_llm_async", _unexpected_call)
+
+    result = asyncio.run(ai_analysis_service.analyze_single_post_ai(target_post))
+
+    assert result["fallback_used"] is True
+    assert result["summary"] == "AI analysis unavailable. Post is still accumulating data."
+    cache_key = ai_analysis_service._cache_key(target_post)
+    assert cache_key is not None
+    assert cache_key not in ai_analysis_service._ANALYSIS_CACHE

@@ -37,10 +37,10 @@ def _mock_oauth_url_builder(monkeypatch) -> None:
 def test_instagram_logout_requires_authenticated_session(monkeypatch) -> None:
     deleted_user_ids: list[str] = []
 
-    def fake_delete_token(user_id: str) -> None:
+    async def fake_delete_token_async(user_id: str) -> None:
         deleted_user_ids.append(user_id)
 
-    monkeypatch.setattr("backend.app.api.instagram_auth_routes.delete_token", fake_delete_token)
+    monkeypatch.setattr("backend.app.api.instagram_auth_routes.delete_token_async", fake_delete_token_async)
 
     client = _build_test_client()
     response = client.post("/api/auth/logout?user_id=attacker-target")
@@ -65,11 +65,11 @@ def test_instagram_logout_uses_session_user_instead_of_request_parameter(monkeyp
         assert access_token == "long-token"
         return {"id": "session-user", "username": "creator"}
 
-    def fake_save_token(user_id: str, token_data: dict[str, object]) -> None:
+    async def fake_save_token_async(user_id: str, token_data: dict[str, object]) -> None:
         assert user_id == "session-user"
         assert token_data["access_token"] == "long-token"
 
-    def fake_delete_token(user_id: str) -> None:
+    async def fake_delete_token_async(user_id: str) -> None:
         deleted_user_ids.append(user_id)
 
     monkeypatch.setattr("backend.app.api.instagram_auth_routes.exchange_code_for_token", fake_exchange_code_for_token)
@@ -78,8 +78,8 @@ def test_instagram_logout_uses_session_user_instead_of_request_parameter(monkeyp
         fake_exchange_short_for_long_lived_token,
     )
     monkeypatch.setattr("backend.app.api.instagram_auth_routes.fetch_instagram_profile", fake_fetch_instagram_profile)
-    monkeypatch.setattr("backend.app.api.instagram_auth_routes.save_token", fake_save_token)
-    monkeypatch.setattr("backend.app.api.instagram_auth_routes.delete_token", fake_delete_token)
+    monkeypatch.setattr("backend.app.api.instagram_auth_routes.save_token_async", fake_save_token_async)
+    monkeypatch.setattr("backend.app.api.instagram_auth_routes.delete_token_async", fake_delete_token_async)
 
     client = _build_test_client()
     state = _start_oauth_session(client)
@@ -113,11 +113,11 @@ def test_instagram_me_uses_session_user_instead_of_request_parameter(monkeypatch
             return {"id": "session-user", "username": "creator"}
         raise AssertionError(f"Unexpected access token: {access_token}")
 
-    def fake_save_token(user_id: str, token_data: dict[str, object]) -> None:
+    async def fake_save_token_async(user_id: str, token_data: dict[str, object]) -> None:
         assert user_id == "session-user"
         assert token_data["access_token"] == "long-token"
 
-    def fake_get_token(user_id: str) -> dict[str, str] | None:
+    async def fake_get_token_async(user_id: str) -> dict[str, str] | None:
         token_lookups.append(user_id)
         if user_id == "session-user":
             return {"access_token": "stored-access-token"}
@@ -129,8 +129,8 @@ def test_instagram_me_uses_session_user_instead_of_request_parameter(monkeypatch
         fake_exchange_short_for_long_lived_token,
     )
     monkeypatch.setattr("backend.app.api.instagram_auth_routes.fetch_instagram_profile", fake_fetch_instagram_profile)
-    monkeypatch.setattr("backend.app.api.instagram_auth_routes.save_token", fake_save_token)
-    monkeypatch.setattr("backend.app.api.instagram_auth_routes.get_token", fake_get_token)
+    monkeypatch.setattr("backend.app.api.instagram_auth_routes.save_token_async", fake_save_token_async)
+    monkeypatch.setattr("backend.app.api.instagram_auth_routes.get_token_async", fake_get_token_async)
 
     client = _build_test_client()
     state = _start_oauth_session(client)

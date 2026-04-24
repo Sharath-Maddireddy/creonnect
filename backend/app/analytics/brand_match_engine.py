@@ -109,7 +109,7 @@ def _engagement_quality(ahs_score: float | None, predicted_er: float | None) -> 
     base = ahs * 0.15
 
     er_bonus = 0.0
-    if isinstance(predicted_er, float):
+    if isinstance(predicted_er, (int, float)):
         if predicted_er >= 0.05:
             er_bonus = 5.0
             notes.append(f"High engagement rate {predicted_er:.1%} -> +5 bonus.")
@@ -274,8 +274,7 @@ def score_creator_against_brand(
         disqualified = True
         disqualify_reasons.append("Adult content detected on creator posts.")
     elif adult_content_detected is None:
-        disqualified = True
-        disqualify_reasons.append("Adult content status unknown.")
+        notes.append("Adult content status unknown; defaulting to non-disqualifying treatment.")
 
     safety_score_0_100 = _clamp(brand_safety * 2.0, 0.0, 100.0)
     if safety_score_0_100 < brand.required_brand_safety_min:

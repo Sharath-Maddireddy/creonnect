@@ -15,7 +15,7 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
-from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_RELEVANCE_PROMPT
+from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_RELEVANCE_PROMPT, format_user_text_block
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.ai.llm_client import LLMClient
 from backend.app.analytics.caption_s2_engine import analyze_caption_via_llm
@@ -828,7 +828,7 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
             "Return only valid TOON format (Token-Oriented Object Notation). "
             "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
         ),
-        "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", caption_text),
+        "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", format_user_text_block(caption_text)),
     }
     raw_text = await _call_llm_async(prompt, llm_client)
     if not isinstance(raw_text, str) or not raw_text.strip():
@@ -1397,14 +1397,6 @@ async def analyze_single_post_ai(
                 "vision_status": vision_status,
                 "fallback_used": fallback_used,
             }
-            if key is not None:
-                with _ANALYSIS_CACHE_LOCK:
-                    _ANALYSIS_CACHE[key] = _CacheEntry(
-                        result=result,
-                        cached_at=now_ts,
-                        last_regen_attempt_at=now_ts,
-                    )
-                    _prune_analysis_cache(now_ts)
             return result
 
     if not vision_enabled:

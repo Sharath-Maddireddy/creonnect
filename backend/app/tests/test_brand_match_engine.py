@@ -41,15 +41,15 @@ def test_adult_content_disqualifies() -> None:
     assert result.match_band == "POOR"
 
 
-def test_unknown_adult_content_disqualifies_fail_safe() -> None:
+def test_unknown_adult_content_is_not_auto_disqualifying() -> None:
     result = score_creator_against_brand(
         "c1",
         _brand(),
         creator_dominant_category="fitness",
         adult_content_detected=None,
     )
-    assert result.disqualified is True
-    assert "Adult content status unknown." in result.disqualify_reasons
+    assert result.disqualified is False
+    assert "Adult content status unknown; defaulting to non-disqualifying treatment." in result.notes
 
 
 def test_low_brand_safety_disqualifies() -> None:

@@ -10,6 +10,7 @@ redis
 rq
 fakeredis
 python-dotenv
+cryptography
 sqlalchemy>=2.0
 asyncpg
 psycopg2-binary

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from typing import Any
 
 from backend.app.ai.llm_client import LLMClient, LLMClientError
-from backend.app.ai.prompts import S3_CLARITY_EVALUATION_PROMPT
+from backend.app.ai.prompts import S3_CLARITY_EVALUATION_PROMPT, format_user_json_block, format_user_text_block
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.post_models import ContentClarityScore, VisionSignal
 from backend.app.utils.logger import logger
@@ -166,12 +165,12 @@ def _extract_signal(vision: VisionSignal | dict[str, Any] | None) -> dict[str, A
 def _serialize_vision_signals(vision: VisionSignal | dict[str, Any] | None) -> str:
     signal = _extract_signal(vision)
     if not signal:
-        return "{}"
+        return format_user_json_block({})
     try:
-        return json.dumps(signal, ensure_ascii=True, sort_keys=True, default=str)
+        return format_user_json_block(signal)
     except TypeError:
         sanitized = {str(key): str(value) for key, value in signal.items()}
-        return json.dumps(sanitized, ensure_ascii=True, sort_keys=True)
+        return format_user_json_block(sanitized)
 
 
 def get_dominant_focus(signal: dict[str, Any]) -> str | None:
@@ -243,7 +242,7 @@ async def analyze_content_clarity_via_llm(
             "Return only valid TOON format (Token-Oriented Object Notation). "
             "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
         ),
-        "user": S3_CLARITY_EVALUATION_PROMPT.replace("{caption_text}", caption).replace(
+        "user": S3_CLARITY_EVALUATION_PROMPT.replace("{caption_text}", format_user_text_block(caption)).replace(
             "{vision_signals}", _serialize_vision_signals(vision)
         ),
     }

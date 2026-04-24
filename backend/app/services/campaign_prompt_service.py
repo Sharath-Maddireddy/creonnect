@@ -59,6 +59,13 @@ def parse_campaign_prompt(prompt: str, brand_name: str | None = None) -> dict:
         })
         
         parsed = parse_toon(response_text)
+        if not isinstance(parsed, dict):
+            logger.warning(
+                "[CampaignPromptService] parse_toon returned non-dict payload %r for response_text=%r; using fallback extraction.",
+                type(parsed).__name__,
+                response_text,
+            )
+            parsed = _fallback_keyword_extraction(prompt)
         logger.info(f"[CampaignPromptService] AI extraction successful: {parsed}")
         
     except Exception as e:

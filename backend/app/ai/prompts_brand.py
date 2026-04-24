@@ -23,12 +23,14 @@ Return exactly the TOON representation of the parsed brand profile, following th
 - min_engagement_rate: decimal (0.0 to 1.0) or null
 - campaign_goal: string or null
 - content_type_preference: string or null (e.g. REEL, IMAGE, STORY)
-- additional_requirements: list of strings (if empty, omit array elements)
+- additional_requirements: list of strings
+  - If there are no additional requirements, include the key line exactly as `additional_requirements:` and do not add any `- item` lines below it.
+  - Do not omit the key entirely.
 
 # Follower Range Meaning
-- "nano creators" = min_followers: 1000, max_followers: 10000
-- "micro creators" = min_followers: 10000, max_followers: 100000
-- "mid-tier" = min_followers: 100000, max_followers: 500000
+- "nano creators" = min_followers: 1000, max_followers: 9999
+- "micro creators" = min_followers: 10000, max_followers: 99999
+- "mid-tier" = min_followers: 100000, max_followers: 499999
 - "macro" = min_followers: 500000, max_followers: 1000000
 - "50k+" = min_followers: 50000
 - "100k followers" = min_followers: 100000, max_followers: 100000
@@ -44,6 +46,16 @@ content_type_preference: REEL
 additional_requirements:
   - Must have energetic presentation style
   - Preferably based in USA
+
+--- OUTPUT EXAMPLE (EMPTY additional_requirements) ---
+brand_name: FitLife Athletics
+niche: fitness
+min_followers: 50000
+max_followers: null
+min_engagement_rate: 0.05
+campaign_goal: product launch for new pre-workout
+content_type_preference: REEL
+additional_requirements:
 
 --- TARGET INPUT TO PARSE ---
 {user_prompt}

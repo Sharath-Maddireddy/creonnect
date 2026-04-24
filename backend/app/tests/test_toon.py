@@ -39,3 +39,22 @@ def test_toon_loads_preserves_explicitly_quoted_strings() -> None:
         "nullish": "null",
         "float_like": "3.14",
     }
+
+
+def test_toon_round_trip_preserves_quote_like_strings() -> None:
+    payload = {
+        "double_quoted_like": '"hello"',
+        "single_quoted_like": "'hello'",
+    }
+
+    assert loads(dumps(payload)) == payload
+
+
+def test_toon_round_trip_preserves_control_characters() -> None:
+    payload = {
+        "multiline": "line one\nline two",
+        "carriage_return": "line one\rline two",
+        "tabbed": "col1\tcol2",
+    }
+
+    assert loads(dumps(payload)) == payload

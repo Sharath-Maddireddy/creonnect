@@ -1,16 +1,16 @@
 ﻿# API Endpoints
 
 ## Summary
-- Total endpoints discovered: **11**
-- Product/API endpoints (frontend-relevant): **7**
+- Total endpoints discovered: **14**
+- Product/API endpoints (frontend-relevant): **10**
 - Internal documentation endpoints: **4**
 
 | Feature Area | Count | Endpoints |
 |---|---:|---|
 | System | 1 | `GET /health` |
-| Dashboard | 3 | `GET /api/creator/dashboard`, `GET /api/creators/{creator_id}/snapshot`, `POST /api/creators/{creator_id}/generate-script` |
+| Dashboard | 4 | `GET /api/creator/dashboard`, `GET /api/creator/analytics`, `GET /api/creators/{creator_id}/snapshot`, `POST /api/creators/{creator_id}/generate-script` |
 | Account Analysis | 2 | `POST /api/account-analysis`, `GET /api/account-analysis/{job_id}` |
-| Post Analysis | 1 | `POST /api/post-analysis` |
+| Post Analysis | 3 | `POST /api/v1/post-analysis`, `GET /api/v1/posts/{post_id}/cringe-summary`, `GET /api/v1/posts/{post_id}/insights` |
 | Internal Docs | 4 | `GET /openapi.json`, `GET /docs`, `GET /docs/oauth2-redirect`, `GET /redoc` |
 
 ## Base URL and Versioning
@@ -74,7 +74,9 @@
 - Required headers: `Authorization: Bearer <access_token>`
 
 ### Query Params
-- None.
+| Name | Type | Required | Notes |
+|---|---|---:|---|
+| `user_id` | `string|null` | no | When present, the route loads OAuth-backed Instagram data; otherwise it returns demo data. |
 
 ### Request Body
 - None.
@@ -134,12 +136,14 @@
     "views_over_time": [{ "date": "string|null", "value": "number|null" }]
   },
   "authenticity_analysis": {
-    "score": "number",
-    "band": "high|moderate|low",
-    "follower_count": "integer",
-    "avg_views": "integer",
-    "avg_likes": "integer",
-    "avg_comments": "integer"
+    "available": "boolean",
+    "score": "number|null",
+    "band": "high|moderate|low|unavailable",
+    "note": "string|null",
+    "follower_count": "integer|null",
+    "avg_views": "integer|null",
+    "avg_likes": "integer|null",
+    "avg_comments": "integer|null"
   },
   "action_plan": {
     "diagnosis": "string",
@@ -153,6 +157,15 @@
 Notes:
 - `posts[].comparison_to_previous` appears from 2nd post onward.
 - `posts[].error` appears only when per-post analysis fails.
+- `authenticity_analysis.available=false` is expected for demo dashboards because `build_creator_dashboard()` uses synthetic profile/posts data plus simulated snapshot history in that path.
+
+### Backend Lifecycle
+Current implementation path:
+1. `backend/app/api/dashboard.py::creator_dashboard()` resolves optional OAuth token state and calls `build_creator_dashboard(...)`.
+2. `backend/app/services/dashboard_service.py::build_creator_dashboard()` loads either OAuth-backed Instagram data (`fetch_instagram_profile`, `fetch_instagram_media`, `map_instagram_to_ai_inputs`) or demo data (`load_synthetic`).
+3. The service computes niche (`detect_creator_niche`), growth (`compute_growth_score`), per-post insights (`analyze_posts`), momentum (`calculate_momentum` over simulated snapshots), best posting time (`get_best_posting_hours`), and action guidance (`retrieve` + `generate_action_plan`).
+4. The response returns `summary`, `posts`, `charts`, `authenticity_analysis`, and `action_plan`.
+5. `authenticity_analysis` is computed with `calculate_authenticity_score(...)` only for OAuth-backed data; demo mode returns `available: false` with an explanatory note instead of production-like authenticity scoring.
 
 ### Example Response
 ```json
@@ -200,12 +213,10 @@ Notes:
     "views_over_time": [{ "date": "2024-01-01T00:00:00+00:00", "value": 2200 }]
   },
   "authenticity_analysis": {
-    "score": 100.0,
-    "band": "high",
-    "follower_count": 125000,
-    "avg_views": 93000,
-    "avg_likes": 4200,
-    "avg_comments": 380
+    "available": false,
+    "score": null,
+    "band": "unavailable",
+    "note": "Authenticity analysis is unavailable for demo dashboards because they use synthetic profile/posts data and simulated snapshot history."
   },
   "action_plan": {
     "diagnosis": "Your account is growing at 80 followers/day. Engagement is healthy. Overall growth score is strong.",
@@ -228,7 +239,63 @@ Notes:
 
 ---
 
-## 3) GET `/api/creators/{creator_id}/snapshot`
+## 3) GET `/api/creator/analytics`
+- Purpose: Returns the dashboard payload plus account-health analytics and content-type breakdown.
+- Visibility: Authenticated clients.
+- Auth: `Authorization: Bearer <access_token>` required
+- Required headers: `Authorization: Bearer <access_token>`
+
+### Query Params
+| Name | Type | Required | Notes |
+|---|---|---:|---|
+| `user_id` | `string|null` | no | When present, the route loads OAuth-backed Instagram data; otherwise it returns demo data. |
+
+### Request Body
+- None.
+
+### Response Schema
+```json
+{
+  "...dashboard_fields": "Same shape as GET /api/creator/dashboard",
+  "account_health": {
+    "ahs_score": "number",
+    "ahs_band": "NEEDS_WORK|AVERAGE|STRONG|EXCEPTIONAL",
+    "pillars": {
+      "<pillar>": {
+        "score": "number",
+        "band": "string",
+        "notes": ["string"]
+      }
+    },
+    "drivers": ["object"],
+    "recommendations": ["object"],
+    "metadata": "object"
+  },
+  "content_type_breakdown": {
+    "REEL": {
+      "count": "integer",
+      "avg_engagement_rate": "number|null"
+    },
+    "IMAGE": {
+      "count": "integer",
+      "avg_engagement_rate": "number|null"
+    }
+  }
+}
+```
+
+### Possible Errors
+- `401`: Missing, malformed, expired, or invalid bearer token.
+- `403`: Authenticated caller is not allowed to access this resource.
+- `404`: Creator not found.
+- `500`: Unhandled internal errors.
+
+### Pagination / Sorting / Filtering
+- None.
+
+---
+
+## 4) GET `/api/creators/{creator_id}/snapshot`
 - Purpose: Returns a daily creator snapshot.
 - Visibility: Authenticated clients.
 - Auth: `Authorization: Bearer <access_token>` required
@@ -287,7 +354,7 @@ Notes:
 
 ---
 
-## 4) POST `/api/creators/{creator_id}/generate-script`
+## 5) POST `/api/creators/{creator_id}/generate-script`
 - Purpose: Generates a reel script for a creator profile.
 - Visibility: Authenticated clients.
 - Auth: `Authorization: Bearer <access_token>` required
@@ -338,7 +405,7 @@ Notes:
 
 ---
 
-## 5) POST `/api/account-analysis`
+## 6) POST `/api/account-analysis`
 - Purpose: Enqueue account-level analysis job; dedupes/rate-limits by account.
 - Visibility: Authenticated clients.
 - Auth: `Authorization: Bearer <access_token>` required
@@ -418,7 +485,7 @@ Notes:
 
 ---
 
-## 6) GET `/api/account-analysis/{job_id}`
+## 7) GET `/api/account-analysis/{job_id}`
 - Purpose: Poll account-analysis job status/result.
 - Visibility: Authenticated clients.
 - Auth: `Authorization: Bearer <access_token>` required
@@ -553,7 +620,7 @@ Notes:
 
 ---
 
-## 7) POST `/api/post-analysis`
+## 8) POST `/api/v1/post-analysis`
 - Purpose: Runs single-post analysis and returns normalized deterministic payload.
 - Visibility: Authenticated clients.
 - Auth: `Authorization: Bearer <access_token>` required
@@ -753,6 +820,82 @@ Example `ai.recommendations[]` item:
 
 ---
 
+## 9) GET `/api/v1/posts/{post_id}/cringe-summary`
+- Purpose: Returns the cached concise cringe summary for a previously analyzed post.
+- Visibility: Authenticated clients.
+- Auth: `Authorization: Bearer <access_token>` required
+- Required headers: `Authorization: Bearer <access_token>`
+
+### Path Params
+| Name | Type | Required |
+|---|---|---|
+| `post_id` | `string` | yes |
+
+### Query Params
+- None.
+
+### Request Body
+- None.
+
+### Response Schema
+```json
+{
+  "cringe_score": "number|null",
+  "cringe_label": "string|null",
+  "is_cringe": "boolean",
+  "cringe_signals": ["string"],
+  "cringe_fixes": ["string"],
+  "production_level": "string|null",
+  "adult_content_detected": "boolean",
+  "vision_status": "ok|error|disabled|no_media"
+}
+```
+
+### Possible Errors
+- `400`: Empty `post_id`.
+- `404`: Cringe summary not found; caller must run `POST /api/v1/post-analysis` for that post first.
+
+### Pagination / Sorting / Filtering
+- None.
+
+---
+
+## 10) GET `/api/v1/posts/{post_id}/insights`
+- Purpose: Returns the cached `SinglePostInsights`-derived payload for a previously analyzed post.
+- Visibility: Authenticated clients.
+- Auth: `Authorization: Bearer <access_token>` required
+- Required headers: `Authorization: Bearer <access_token>`
+
+### Path Params
+| Name | Type | Required |
+|---|---|---|
+| `post_id` | `string` | yes |
+
+### Query Params
+- None.
+
+### Request Body
+- None.
+
+### Response Schema
+```json
+{
+  "status": "succeeded",
+  "post": "object",
+  "ai_analysis": "object|null"
+}
+```
+
+### Possible Errors
+- `400`: Empty `post_id`.
+- `404`: Insights not found; caller must run `POST /api/v1/post-analysis` for that post first.
+- `500`: Cached insights payload is invalid.
+
+### Pagination / Sorting / Filtering
+- None.
+
+---
+
 ## 8) GET `/openapi.json` (Internal)
 - Purpose: Returns generated OpenAPI spec.
 - Visibility: Internal tooling/docs.
@@ -778,7 +921,7 @@ Example `ai.recommendations[]` item:
     "version": "1.0.0"
   },
   "paths": {
-    "/api/post-analysis": {}
+    "/api/v1/post-analysis": {}
   }
 }
 ```
@@ -870,6 +1013,6 @@ Example `ai.recommendations[]` item:
 ---
 
 ## Source Trace Notes (for unclear/loose schemas)
-- `POST /api/post-analysis` documents a stable minimum contract for `ai.drivers[]` and `ai.recommendations[]` based on the AI service output schema (`backend/app/services/ai_analysis_service.py`).
+- `POST /api/v1/post-analysis` documents a stable minimum contract for `ai.drivers[]` and `ai.recommendations[]` based on the AI service output schema (`backend/app/services/ai_analysis_service.py`).
 - FastAPI docs/OpenAPI route response payloads are framework-generated and not explicitly modeled in this repository (`backend/main.py` app initialization; routes confirmed by runtime route introspection).
 

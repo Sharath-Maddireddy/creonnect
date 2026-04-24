@@ -29,12 +29,16 @@ load_dotenv(override=False)
 _DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 
+def _is_production_environment() -> bool:
+    return os.getenv("ENV", "dev").lower() not in {"dev", "development", "test"}
+
+
 def _resolve_session_secret() -> str:
     configured_secret = (os.getenv("CREONNECT_SESSION_SECRET") or "").strip()
     if configured_secret:
         return configured_secret
 
-    if os.getenv("ENV", "dev").lower() not in {"dev", "development", "test"}:
+    if _is_production_environment():
         raise RuntimeError("CREONNECT_SESSION_SECRET must be set in production environments")
 
     logger.warning("CREONNECT_SESSION_SECRET is not set; using ephemeral secret (dev only).")
@@ -51,8 +55,25 @@ def _get_cors_origins() -> list[str]:
 SESSION_SECRET = _resolve_session_secret()
 
 
+def _validate_brand_api_key_configuration() -> bool:
+    brand_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
+    if brand_api_key:
+        return True
+
+    message = (
+        "BRAND_API_KEY is not set. Brand-protected endpoints will reject requests until this "
+        "environment variable is configured."
+    )
+    if _is_production_environment():
+        raise RuntimeError(message)
+
+    logger.error(message)
+    return False
+
+
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
+    _app.state.brand_api_key_configured = _validate_brand_api_key_configuration()
     vision_enabled = bool((os.getenv("GEMINI_API_KEY") or "").strip())
     _app.state.vision_enabled = vision_enabled
     logger.info("vision_enabled=%s", vision_enabled)
@@ -79,7 +100,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
     same_site="lax",
-    https_only=(os.getenv("ENV", "dev").lower() not in {"dev", "development", "test"}),
+    https_only=_is_production_environment(),
 )
 
 # Register routers

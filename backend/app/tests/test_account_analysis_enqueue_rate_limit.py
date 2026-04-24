@@ -102,6 +102,52 @@ def test_new_job_enforces_rate_limit_before_enqueue(monkeypatch) -> None:
     assert len(queue.calls) == 1
 
 
+def test_enqueue_failure_rolls_back_rate_counter_and_mappings(monkeypatch) -> None:
+    calls = {
+        "initialize": 0,
+        "dedupe_writes": 0,
+        "inputhash_writes": 0,
+        "dedupe_deletes": 0,
+        "inputhash_deletes": 0,
+        "rate_restores": 0,
+    }
+
+    class _FailingQueue:
+        def enqueue(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("rq unavailable")
+
+    monkeypatch.setattr(account_analysis_jobs, "_resolve_reusable_job", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(account_analysis_jobs, "_enforce_rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _FailingQueue())
+    monkeypatch.setattr(account_analysis_jobs, "initialize_job_status", lambda _job_id: calls.__setitem__("initialize", calls["initialize"] + 1))
+    monkeypatch.setattr(account_analysis_jobs, "_write_dedupe_job_id", lambda *args, **kwargs: calls.__setitem__("dedupe_writes", calls["dedupe_writes"] + 1))
+    monkeypatch.setattr(account_analysis_jobs, "_write_inputhash_job_id", lambda *args, **kwargs: calls.__setitem__("inputhash_writes", calls["inputhash_writes"] + 1))
+    monkeypatch.setattr(account_analysis_jobs, "_delete_dedupe_job_id", lambda *args, **kwargs: calls.__setitem__("dedupe_deletes", calls["dedupe_deletes"] + 1))
+    monkeypatch.setattr(
+        account_analysis_jobs,
+        "_delete_inputhash_job_id",
+        lambda _account_id, payload_hash, _job_id: calls.__setitem__(
+            "inputhash_deletes",
+            calls["inputhash_deletes"] + (1 if payload_hash else 0),
+        ),
+    )
+    monkeypatch.setattr(account_analysis_jobs, "_restore_rate_limit_counter", lambda *args, **kwargs: calls.__setitem__("rate_restores", calls["rate_restores"] + 1))
+
+    try:
+        account_analysis_jobs.enqueue_account_analysis_job({"account_id": "acct_new", "post_limit": 5})
+    except RuntimeError as exc:
+        assert str(exc) == "rq unavailable"
+    else:
+        raise AssertionError("Expected enqueue failure to be re-raised")
+
+    assert calls["initialize"] == 0
+    assert calls["dedupe_writes"] == 0
+    assert calls["inputhash_writes"] == 0
+    assert calls["dedupe_deletes"] == 1
+    assert calls["inputhash_deletes"] == 0
+    assert calls["rate_restores"] == 1
+
+
 def test_access_token_is_not_enqueued_in_job_payload(monkeypatch) -> None:
     def _assert_ready() -> None:
         return None
@@ -139,7 +185,7 @@ def test_access_token_is_not_enqueued_in_job_payload(monkeypatch) -> None:
     assert len(queued_payload["posts"]) == 1
 
 
-def test_access_token_materialization_works_inside_running_event_loop(monkeypatch) -> None:
+def test_access_token_materialization_requires_async_helper_inside_running_event_loop(monkeypatch) -> None:
     async def _fake_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
         assert access_token == "secret-token"
         assert limit == 5
@@ -152,17 +198,66 @@ def test_access_token_materialization_works_inside_running_event_loop(monkeypatc
     monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _fake_fetch_instagram_media)
     monkeypatch.setattr(account_analysis_jobs, "map_instagram_posts", _fake_map_instagram_posts)
 
-    async def _run_inside_loop() -> dict[str, Any]:
-        return account_analysis_jobs._materialize_posts_for_enqueue(
+    async def _run_sync_inside_loop() -> None:
+        account_analysis_jobs._materialize_posts_for_enqueue(
             {"account_id": "acct_secure", "access_token": "secret-token"},
             post_limit=5,
         )
 
-    result = asyncio.run(_run_inside_loop())
+    async def _run_async_inside_loop() -> dict[str, Any]:
+        return await account_analysis_jobs._materialize_posts_for_enqueue_async(
+            {"account_id": "acct_secure", "access_token": "secret-token"},
+            post_limit=5,
+        )
 
+    try:
+        asyncio.run(_run_sync_inside_loop())
+    except ValueError as exc:
+        assert "cannot be used from a running event loop" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError when sync materialization runs inside an event loop")
+
+    result = asyncio.run(_run_async_inside_loop())
     assert "access_token" not in result
     assert isinstance(result.get("posts"), list)
     assert len(result["posts"]) == 1
+
+
+def test_async_enqueue_materializes_access_token_without_enqueuing_it(monkeypatch) -> None:
+    def _assert_ready() -> None:
+        return None
+
+    async def _fake_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
+        assert access_token == "secret-token"
+        assert limit == 5
+        return [{"id": "m_1"}]
+
+    def _fake_map_instagram_posts(raw_media: list[dict[str, str]]) -> list[SinglePostInsights]:
+        assert raw_media == [{"id": "m_1"}]
+        return [_build_post(1)]
+
+    queue = _QueueStub(assert_ready=_assert_ready)
+    monkeypatch.setattr(account_analysis_jobs, "_resolve_reusable_job", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(account_analysis_jobs, "_enforce_rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: queue)
+    monkeypatch.setattr(account_analysis_jobs, "initialize_job_status", lambda _job_id: {"job_id": _job_id})
+    monkeypatch.setattr(account_analysis_jobs, "_write_dedupe_job_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "_write_inputhash_job_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _fake_fetch_instagram_media)
+    monkeypatch.setattr(account_analysis_jobs, "map_instagram_posts", _fake_map_instagram_posts)
+
+    payload = {"account_id": "acct_secure", "post_limit": 5, "access_token": "secret-token"}
+    result = asyncio.run(account_analysis_jobs.enqueue_account_analysis_job_async(payload))
+
+    assert result["status"] == "queued"
+    assert len(queue.calls) == 1
+    enqueue_args, _enqueue_kwargs = queue.calls[0]
+    queued_payload = enqueue_args[1]
+    assert "access_token" not in queued_payload
+    assert queued_payload["account_id"] == "acct_secure"
+    assert queued_payload["post_limit"] == 5
+    assert isinstance(queued_payload.get("posts"), list)
+    assert len(queued_payload["posts"]) == 1
 
 
 def test_access_token_materialization_wraps_fetch_failures(monkeypatch) -> None:

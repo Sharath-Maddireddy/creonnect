@@ -2,16 +2,19 @@
 Test the fine-tuned model vs base model side by side.
 Sends the same creator profile to both and compares outputs.
 """
+
+from __future__ import annotations
+
 import json
-import os
 import sys
 import time
 from pathlib import Path
 
+from openai import OpenAI
+
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
-
-from openai import OpenAI
 
 FINE_TUNED_MODEL = "ft:gpt-4o-mini-2024-07-18:personal:creonnect-v1:DPYVeka2"
 BASE_MODEL = "gpt-4o-mini"
@@ -27,14 +30,14 @@ TEST_PROFILE = {
             "avg_views": 8900,
             "posts_per_week": 2.1,
             "snapshot_date": "2026-03-31",
-            "niche": "fitness"
+            "niche": "fitness",
         },
         "posts": [
-            {"caption": "Morning run in the rain - no excuses 🌧️💪", "likes": 580, "comments": 92, "views": 12400},
+            {"caption": "Morning run in the rain - no excuses", "likes": 580, "comments": 92, "views": 12400},
             {"caption": "Meal prep Sunday - chicken & rice bowls", "likes": 310, "comments": 45, "views": 6200},
-            {"caption": "New PR on deadlift! 315lbs 🏋️", "likes": 890, "comments": 134, "views": 18500},
+            {"caption": "New PR on deadlift! 315lbs", "likes": 890, "comments": 134, "views": 18500},
             {"caption": "Recovery day stretching routine", "likes": 210, "comments": 28, "views": 4100},
-        ]
+        ],
     }
 }
 
@@ -58,53 +61,63 @@ def call_model(client: OpenAI, model: str, profile: dict) -> tuple[str, float]:
 
 
 def try_parse_json(text: str) -> dict | None:
-    """Attempt to parse response as JSON."""
+    """Attempt to parse response as a JSON object."""
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
         return None
+    return parsed if isinstance(parsed, dict) else None
 
 
-def print_section(title: str, width: int = 60):
+def _coerce_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def print_section(title: str, width: int = 60) -> None:
     print(f"\n{'=' * width}")
     print(f"  {title}")
     print(f"{'=' * width}")
 
 
-def print_action_plan(parsed: dict):
+def print_action_plan(parsed: dict) -> None:
     """Pretty-print the action plan."""
     ap = parsed.get("action_plan", parsed)
+    if not isinstance(ap, dict):
+        print("\n  Action plan payload is not an object.")
+        return
 
     diagnosis = ap.get("diagnosis", "N/A")
     print(f"\n  Diagnosis: {diagnosis}")
 
-    weekly = ap.get("weekly_plan", [])
+    weekly = _coerce_string_list(ap.get("weekly_plan"))
     if weekly:
         print("\n  Weekly Plan:")
         for item in weekly:
-            print(f"    • {item}")
+            print(f"    - {item}")
 
-    content = ap.get("content_suggestions", [])
+    content = _coerce_string_list(ap.get("content_suggestions"))
     if content:
         print("\n  Content Suggestions:")
         for item in content:
-            print(f"    • {item}")
+            print(f"    - {item}")
 
-    schedule = ap.get("posting_schedule", [])
+    schedule = _coerce_string_list(ap.get("posting_schedule"))
     if schedule:
         print("\n  Posting Schedule:")
         for item in schedule:
-            print(f"    • {item}")
+            print(f"    - {item}")
 
-    cta = ap.get("cta_tips", [])
+    cta = _coerce_string_list(ap.get("cta_tips"))
     if cta:
         print("\n  CTA Tips:")
         for item in cta:
-            print(f"    • {item}")
+            print(f"    - {item}")
 
 
-def main():
-    print_section("Creonnect Fine-Tune Test — Side-by-Side Comparison")
+def main() -> None:
+    print_section("Creonnect Fine-Tune Test - Side-by-Side Comparison")
 
     print("\n  Test Profile:")
     p = TEST_PROFILE["input"]["profile"]
@@ -117,7 +130,6 @@ def main():
 
     client = OpenAI()
 
-    # --- Base Model ---
     print_section(f"BASE MODEL: {BASE_MODEL}")
     print("  Calling...")
     base_response, base_time = call_model(client, BASE_MODEL, TEST_PROFILE)
@@ -125,13 +137,12 @@ def main():
 
     base_parsed = try_parse_json(base_response)
     if base_parsed:
-        print("  Format: ✅ Valid JSON")
+        print("  Format: valid JSON object")
         print_action_plan(base_parsed)
     else:
-        print("  Format: ❌ Not valid JSON")
+        print("  Format: not a valid JSON object")
         print(f"\n  Raw output:\n{base_response[:800]}")
 
-    # --- Fine-Tuned Model ---
     print_section(f"FINE-TUNED: {FINE_TUNED_MODEL}")
     print("  Calling...")
     ft_response, ft_time = call_model(client, FINE_TUNED_MODEL, TEST_PROFILE)
@@ -139,32 +150,42 @@ def main():
 
     ft_parsed = try_parse_json(ft_response)
     if ft_parsed:
-        print("  Format: ✅ Valid JSON")
+        print("  Format: valid JSON object")
         print_action_plan(ft_parsed)
     else:
-        print("  Format: ❌ Not valid JSON")
+        print("  Format: not a valid JSON object")
         print(f"\n  Raw output:\n{ft_response[:800]}")
 
-    # --- Comparison ---
     print_section("COMPARISON")
     print(f"  {'Metric':<25} {'Base':<15} {'Fine-Tuned':<15}")
-    print(f"  {'-'*55}")
+    print(f"  {'-' * 55}")
     print(f"  {'Response time':<25} {base_time:.2f}s{'':<10} {ft_time:.2f}s")
-    print(f"  {'Valid JSON':<25} {'✅' if base_parsed else '❌':<15} {'✅' if ft_parsed else '❌'}")
+    print(
+        f"  {'Valid JSON object':<25} "
+        f"{'yes' if base_parsed else 'no':<15} "
+        f"{'yes' if ft_parsed else 'no'}"
+    )
 
     if base_parsed and ft_parsed:
         base_ap = base_parsed.get("action_plan", base_parsed)
         ft_ap = ft_parsed.get("action_plan", ft_parsed)
-        base_keys = set(base_ap.keys())
-        ft_keys = set(ft_ap.keys())
-        expected = {"diagnosis", "weekly_plan", "content_suggestions", "posting_schedule", "cta_tips"}
+        if isinstance(base_ap, dict) and isinstance(ft_ap, dict):
+            base_keys = set(base_ap.keys())
+            ft_keys = set(ft_ap.keys())
+            expected = {"diagnosis", "weekly_plan", "content_suggestions", "posting_schedule", "cta_tips"}
 
-        base_has = len(expected & base_keys)
-        ft_has = len(expected & ft_keys)
-        print(f"  {'Schema completeness':<25} {base_has}/5 keys{'':<7} {ft_has}/5 keys")
-        print(f"  {'Has diagnosis':<25} {'✅' if 'diagnosis' in base_ap else '❌':<15} {'✅' if 'diagnosis' in ft_ap else '❌'}")
-        print(f"  {'Has weekly_plan':<25} {'✅' if 'weekly_plan' in base_ap else '❌':<15} {'✅' if 'weekly_plan' in ft_ap else '❌'}")
-        print(f"  {'Has content_suggestions':<25} {'✅' if 'content_suggestions' in base_ap else '❌':<15} {'✅' if 'content_suggestions' in ft_ap else '❌'}")
+            base_has = len(expected & base_keys)
+            ft_has = len(expected & ft_keys)
+            print(f"  {'Schema completeness':<25} {base_has}/5 keys{'':<7} {ft_has}/5 keys")
+            print(f"  {'Has diagnosis':<25} {'yes' if 'diagnosis' in base_ap else 'no':<15} {'yes' if 'diagnosis' in ft_ap else 'no'}")
+            print(f"  {'Has weekly_plan':<25} {'yes' if 'weekly_plan' in base_ap else 'no':<15} {'yes' if 'weekly_plan' in ft_ap else 'no'}")
+            print(
+                f"  {'Has content_suggestions':<25} "
+                f"{'yes' if 'content_suggestions' in base_ap else 'no':<15} "
+                f"{'yes' if 'content_suggestions' in ft_ap else 'no'}"
+            )
+        else:
+            print("  Schema completeness: skipped because action_plan was not an object")
 
     print(f"\n{'=' * 60}")
     print("  Test complete!")

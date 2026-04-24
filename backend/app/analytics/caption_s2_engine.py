@@ -6,7 +6,7 @@ import asyncio
 import re
 
 from backend.app.ai.llm_client import LLMClient, LLMClientError
-from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT
+from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, format_user_text_block
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.post_models import CaptionEffectivenessScore
 from backend.app.utils.logger import logger
@@ -59,7 +59,7 @@ async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScor
             "Return only valid TOON format (Token-Oriented Object Notation). "
             "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
         ),
-        "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", caption_text),
+        "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", format_user_text_block(caption_text)),
     }
 
     try:

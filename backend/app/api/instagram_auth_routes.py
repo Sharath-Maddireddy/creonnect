@@ -6,6 +6,7 @@ Provides endpoints for initiating and completing the Instagram OAuth flow.
 
 from __future__ import annotations
 
+import hmac
 import secrets
 from dataclasses import dataclass
 
@@ -17,7 +18,11 @@ from backend.app.ingestion.instagram_oauth import (
     fetch_instagram_profile,
     get_oauth_url,
 )
-from backend.app.infra.token_store import delete_token, get_token, save_token
+from backend.app.infra.token_store import (
+    delete_token_async,
+    get_token_async,
+    save_token_async,
+)
 from backend.app.utils.logger import logger
 
 
@@ -55,7 +60,7 @@ def instagram_login(request: Request):
 @router.get("/instagram/callback")
 async def instagram_callback(request: Request, code: str, state: str):
     expected_state = request.session.pop(OAUTH_STATE_KEY, None)
-    if not expected_state or state != expected_state:
+    if not expected_state or not hmac.compare_digest(expected_state, state):
         raise HTTPException(status_code=400, detail="Invalid state parameter")
     try:
         short_response = await exchange_code_for_token(code)
@@ -82,7 +87,7 @@ async def instagram_callback(request: Request, code: str, state: str):
         }
         request.session[SESSION_USER_ID_KEY] = str(instagram_user_id)
         request.session[SESSION_USERNAME_KEY] = username
-        save_token(user_id=str(instagram_user_id), token_data=token_data)
+        await save_token_async(user_id=str(instagram_user_id), token_data=token_data)
         return {"user_id": instagram_user_id, "username": username, "status": "connected"}
     except RuntimeError as exc:
         logger.exception("Instagram OAuth callback failed")
@@ -91,7 +96,7 @@ async def instagram_callback(request: Request, code: str, state: str):
 
 @router.get("/me")
 async def instagram_me(current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user)):
-    token = get_token(current_user.id)
+    token = await get_token_async(current_user.id)
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     access_token = token.get("access_token")
@@ -105,11 +110,11 @@ async def instagram_me(current_user: AuthenticatedInstagramUser = Depends(get_cu
 
 
 @router.post("/logout")
-def instagram_logout(
+async def instagram_logout(
     request: Request,
     current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user),
 ):
-    delete_token(current_user.id)
+    await delete_token_async(current_user.id)
     request.session.pop(SESSION_USER_ID_KEY, None)
     request.session.pop(SESSION_USERNAME_KEY, None)
     return {"status": "logged_out"}

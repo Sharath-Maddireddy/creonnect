@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.app.ai.prompts_brand import CAMPAIGN_BRIEF_EXTRACTION_PROMPT
 from backend.app.services.campaign_prompt_service import (
     _fallback_keyword_extraction,
     build_brand_profile_from_parsed,
@@ -83,3 +84,31 @@ def test_parse_campaign_prompt_success(monkeypatch) -> None:
     assert parsed["niche"] == "fitness"
     assert parsed["min_followers"] == 10000
     assert parsed["min_engagement_rate"] == 0.03
+
+
+def test_parse_campaign_prompt_falls_back_when_toon_returns_non_dict(monkeypatch) -> None:
+    def mock_generate(*args, **kwargs):  # noqa: ANN002, ANN003
+        return "- not-a-dict"
+
+    warnings: list[str] = []
+
+    monkeypatch.setattr("backend.app.ai.llm_client.LLMClient.generate", mock_generate)
+    monkeypatch.setattr("backend.app.services.campaign_prompt_service.parse_toon", lambda _text: ["not", "a", "dict"])
+    monkeypatch.setattr(
+        "backend.app.services.campaign_prompt_service.logger.warning",
+        lambda message, *args: warnings.append(message % args),
+    )
+
+    parsed = parse_campaign_prompt("fitness creators 50k followers", brand_name="FitCo")
+
+    assert parsed["brand_name"] == "FitCo"
+    assert parsed["niche"] == "fitness"
+    assert parsed["min_followers"] == 50000
+    assert warnings
+    assert "parse_toon returned non-dict payload" in warnings[0]
+
+
+def test_campaign_prompt_documents_empty_additional_requirements_shape() -> None:
+    assert "Do not omit the key entirely." in CAMPAIGN_BRIEF_EXTRACTION_PROMPT
+    assert "include the key line exactly as `additional_requirements:`" in CAMPAIGN_BRIEF_EXTRACTION_PROMPT
+    assert "--- OUTPUT EXAMPLE (EMPTY additional_requirements) ---" in CAMPAIGN_BRIEF_EXTRACTION_PROMPT

@@ -28,6 +28,13 @@ def test_llm_s3_analysis_uses_weighted_total(monkeypatch) -> None:
     def fake_generate(self, prompt):  # noqa: ANN001
         assert "Vision Signals JSON:" in prompt["user"]
         assert '"dominant_focus": "product"' in prompt["user"]
+        assert "The vision_signals block below is also caller-provided data." in prompt["user"]
+        assert "VISION_SIGNALS_JSON_START" in prompt["user"]
+        assert "VISION_SIGNALS_JSON_END" in prompt["user"]
+        assert "Expected structure:" in prompt["user"]
+        assert "USER_CAPTION_DATA_START" in prompt["user"]
+        assert "USER_CAPTION_DATA_END" in prompt["user"]
+        assert '"New drop is live now."' in prompt["user"]
         return """
 message_singularity_0_10 8
 context_clarity_0_10 7

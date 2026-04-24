@@ -264,11 +264,15 @@ def generate_action_plan(
         momentum: Dict with momentum_value, momentum_label
         best_time: Dict with best_posting_hours, hourly_engagement
         recent_posts: List of last 3 posts with engagement data
-        knowledge_chunks: Retrieved RAG chunks for context
+        knowledge_chunks: Retrieved RAG chunks reserved for future LLM-backed planning.
         
     Returns:
         Structured action plan dict
     """
+    # TODO: Fold knowledge_chunks into an LLM-backed planner once action plans
+    # move beyond the current deterministic rule-based implementation.
+    _ = knowledge_chunks
+
     # Extract key metrics with defensive access
     followers = creator_metrics.get("followers", 0) or 0
     growth_score = creator_metrics.get("growth_score", 0) or 0

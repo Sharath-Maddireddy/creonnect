@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import threading
+import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Literal
 
@@ -21,11 +23,14 @@ from backend.app.services.post_snapshot_store import read_post_insights_snapshot
 from backend.app.utils.logger import logger
 
 
-router = APIRouter(prefix="/api", tags=["Post Analysis"])
+router = APIRouter(tags=["Post Analysis"])
+v1_router = APIRouter(prefix="/api/v1", tags=["Post Analysis"])
+legacy_router = APIRouter(prefix="/api", tags=["Post Analysis"])
 CRINGE_SUMMARY_CACHE_KEY_PREFIX = "post:cringe_summary:"
 CRINGE_SUMMARY_CACHE_TTL_SECONDS = 86400
+CRINGE_SUMMARY_CACHE_MAX_ENTRIES = 512
 # Best-effort process-local fallback for single-process/dev when Redis is unavailable.
-_CRINGE_SUMMARY_CACHE: dict[str, dict[str, Any]] = {}
+_CRINGE_SUMMARY_CACHE: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
 _CRINGE_SUMMARY_CACHE_LOCK = threading.Lock()
 
 
@@ -88,6 +93,29 @@ def _cringe_summary_key(post_id: str) -> str:
     return f"{CRINGE_SUMMARY_CACHE_KEY_PREFIX}{post_id}"
 
 
+def _set_local_cringe_summary_cache(post_id: str, payload: dict[str, Any]) -> None:
+    expires_at = time.monotonic() + CRINGE_SUMMARY_CACHE_TTL_SECONDS
+    _CRINGE_SUMMARY_CACHE.pop(post_id, None)
+    _CRINGE_SUMMARY_CACHE[post_id] = (expires_at, dict(payload))
+
+    while len(_CRINGE_SUMMARY_CACHE) > CRINGE_SUMMARY_CACHE_MAX_ENTRIES:
+        _CRINGE_SUMMARY_CACHE.popitem(last=False)
+
+
+def _get_local_cringe_summary_cache(post_id: str) -> dict[str, Any] | None:
+    cached_entry = _CRINGE_SUMMARY_CACHE.get(post_id)
+    if cached_entry is None:
+        return None
+
+    expires_at, payload = cached_entry
+    if expires_at <= time.monotonic():
+        _CRINGE_SUMMARY_CACHE.pop(post_id, None)
+        return None
+
+    _CRINGE_SUMMARY_CACHE.move_to_end(post_id)
+    return dict(payload)
+
+
 def _write_cringe_summary(post_id: str, payload: dict[str, Any]) -> None:
     normalized_post_id = post_id.strip()
     if not normalized_post_id:
@@ -105,7 +133,7 @@ def _write_cringe_summary(post_id: str, payload: dict[str, Any]) -> None:
             exc,
         )
     with _CRINGE_SUMMARY_CACHE_LOCK:
-        _CRINGE_SUMMARY_CACHE[normalized_post_id] = payload
+        _set_local_cringe_summary_cache(normalized_post_id, payload)
 
 
 def _read_cringe_summary(post_id: str) -> dict[str, Any] | None:
@@ -124,12 +152,11 @@ def _read_cringe_summary(post_id: str) -> dict[str, Any] | None:
 
     if isinstance(payload, dict):
         with _CRINGE_SUMMARY_CACHE_LOCK:
-            _CRINGE_SUMMARY_CACHE[normalized_post_id] = payload
+            _set_local_cringe_summary_cache(normalized_post_id, payload)
         return payload
 
     with _CRINGE_SUMMARY_CACHE_LOCK:
-        cached_payload = _CRINGE_SUMMARY_CACHE.get(normalized_post_id)
-    return cached_payload if isinstance(cached_payload, dict) else None
+        return _get_local_cringe_summary_cache(normalized_post_id)
 
 
 def _safe_float(value: Any) -> float | None:
@@ -151,13 +178,27 @@ def _post_payload(post: SinglePostInsights, fallback_post_id: str, fallback_medi
 
 
 def _vision_payload(post: SinglePostInsights, ai_analysis: dict[str, Any]) -> dict[str, Any]:
-    vision_status = None
-    if post.vision_analysis is not None and isinstance(post.vision_analysis.status, str):
-        vision_status = post.vision_analysis.status
-    if vision_status is None:
-        vision_status = ai_analysis.get("vision_status")
-    if vision_status not in {"ok", "error", "disabled", "no_media"}:
+    valid_statuses = {"ok", "error", "disabled", "no_media"}
+    vision_status: str | None = None
+    post_status = post.vision_analysis.status if post.vision_analysis is not None and isinstance(post.vision_analysis.status, str) else None
+    ai_status = ai_analysis.get("vision_status")
+    post_identifier = post.media_id or "unknown"
+
+    if post_status is not None:
+        if post_status in valid_statuses:
+            vision_status = post_status
+        else:
+            vision_status = post_status
+            logger.warning(
+                "[PostAnalysis] Unexpected post vision status '%s' for post_id=%s; preserving original status.",
+                post_status,
+                post_identifier,
+            )
+    elif isinstance(ai_status, str) and ai_status in valid_statuses:
+        vision_status = ai_status
+    else:
         vision_status = "error"
+
     if post.vision_analysis is not None:
         payload = post.vision_analysis.model_dump(mode="python")
         payload["status"] = str(vision_status)
@@ -266,7 +307,8 @@ def _ai_payload(ai_analysis: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@router.post("/post-analysis")
+@v1_router.post("/post-analysis")
+@legacy_router.post("/post-analysis", include_in_schema=False)
 async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
     """Run single-post analysis and return deterministic normalized API payload."""
     post_id = request.post_id or _stable_post_id(
@@ -336,7 +378,7 @@ async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
     }
 
 
-@router.get("/v1/posts/{post_id}/cringe-summary")
+@v1_router.get("/posts/{post_id}/cringe-summary")
 def post_cringe_summary(post_id: str) -> dict[str, Any]:
     """Return concise cringe summary for a previously analyzed post."""
     normalized_post_id = post_id.strip()
@@ -348,12 +390,12 @@ def post_cringe_summary(post_id: str) -> dict[str, Any]:
     if payload is None:
         raise HTTPException(
             status_code=404,
-            detail="Cringe summary not found for post_id. Run /api/post-analysis for this post first.",
+            detail="Cringe summary not found for post_id. Run /api/v1/post-analysis for this post first.",
         )
     return payload
 
 
-@router.get("/v1/posts/{post_id}/insights")
+@v1_router.get("/posts/{post_id}/insights")
 def get_post_insights(post_id: str) -> dict[str, Any]:
     """Return cached SinglePostInsights + ai_analysis payload for a previously analyzed post."""
     normalized_post_id = post_id.strip()
@@ -364,7 +406,7 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(
             status_code=404,
-            detail="Post insights not found for post_id. Run /api/post-analysis for this post first.",
+            detail="Post insights not found for post_id. Run /api/v1/post-analysis for this post first.",
         )
 
     raw_post = payload.get("post")
@@ -376,3 +418,7 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
         "post": raw_post,
         "ai_analysis": payload.get("ai_analysis") if isinstance(payload.get("ai_analysis"), dict) else None,
     }
+
+
+router.include_router(v1_router)
+router.include_router(legacy_router)

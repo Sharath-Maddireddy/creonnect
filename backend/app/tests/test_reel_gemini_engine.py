@@ -87,3 +87,46 @@ adult_content_detected false
     assert captured_contents[0] == sentinel_prompt
     assert payload["hook_strength_score"] == 0.78
     assert payload["audio_visual_sync"] == 0.74
+
+
+def test_upload_and_analyse_fails_fast_when_upload_returns_no_name(monkeypatch) -> None:
+    class FakeUploadFileConfig:
+        def __init__(self, mime_type: str) -> None:
+            self.mime_type = mime_type
+
+    class FakeFilesApi:
+        def upload(self, file, config):  # noqa: ANN001
+            return types.SimpleNamespace()
+
+        def get(self, name: str):  # pragma: no cover - should never be called
+            raise AssertionError(f"files.get should not be called when upload has no name: {name!r}")
+
+        def delete(self, name: str) -> None:  # pragma: no cover - should never be called
+            raise AssertionError(f"files.delete should not be called when upload has no name: {name!r}")
+
+    class FakeModelsApi:
+        def generate_content(self, model: str, contents: list[object]):  # pragma: no cover - should never be called
+            raise AssertionError("generate_content should not run when upload has no file name")
+
+    class FakeClient:
+        def __init__(self, api_key: str) -> None:  # noqa: ARG002
+            self.files = FakeFilesApi()
+            self.models = FakeModelsApi()
+
+    fake_genai_module = types.ModuleType("google.genai")
+    fake_genai_module.Client = FakeClient
+    fake_genai_types = types.SimpleNamespace(UploadFileConfig=FakeUploadFileConfig)
+    fake_genai_module.types = fake_genai_types
+
+    fake_google_module = types.ModuleType("google")
+    fake_google_module.genai = fake_genai_module
+
+    monkeypatch.setitem(sys.modules, "google", fake_google_module)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai_module)
+
+    try:
+        reel_gemini_engine._upload_and_analyse(api_key="test-key", video_bytes=b"fake-video")
+    except RuntimeError as exc:
+        assert str(exc) == "Gemini upload did not return a file name."
+    else:
+        raise AssertionError("Expected RuntimeError when Gemini upload returns no file name")

@@ -68,6 +68,7 @@ def build_creator_dashboard(creator_id: str, access_token: str | None = None) ->
     Raises:
         ValueError: if creator not found
     """
+    uses_demo_data = not access_token
     if access_token:
         async def _fetch_instagram_data():
             api_profile, api_media = await asyncio.gather(
@@ -188,20 +189,32 @@ def build_creator_dashboard(creator_id: str, access_token: str | None = None) ->
         "growth_score": growth.get("growth_score", 0)
     })
 
-    authenticity_score = calculate_authenticity_score(
-        follower_count=int(profile.followers_count or 0),
-        avg_views=int(profile.avg_views or 0),
-        avg_likes=int(profile.avg_likes or 0),
-        avg_comments=int(profile.avg_comments or 0),
-    )
-    authenticity_analysis = {
-        "score": authenticity_score,
-        "band": _authenticity_band(authenticity_score),
-        "follower_count": int(profile.followers_count or 0),
-        "avg_views": int(profile.avg_views or 0),
-        "avg_likes": int(profile.avg_likes or 0),
-        "avg_comments": int(profile.avg_comments or 0),
-    }
+    if uses_demo_data:
+        authenticity_analysis = {
+            "available": False,
+            "score": None,
+            "band": "unavailable",
+            "note": (
+                "Authenticity analysis is unavailable for demo dashboards because they use "
+                "synthetic profile/posts data and simulated snapshot history."
+            ),
+        }
+    else:
+        authenticity_score = calculate_authenticity_score(
+            follower_count=int(profile.followers_count or 0),
+            avg_views=int(profile.avg_views or 0),
+            avg_likes=int(profile.avg_likes or 0),
+            avg_comments=int(profile.avg_comments or 0),
+        )
+        authenticity_analysis = {
+            "available": True,
+            "score": authenticity_score,
+            "band": _authenticity_band(authenticity_score),
+            "follower_count": int(profile.followers_count or 0),
+            "avg_views": int(profile.avg_views or 0),
+            "avg_likes": int(profile.avg_likes or 0),
+            "avg_comments": int(profile.avg_comments or 0),
+        }
 
     return {
         "summary": {
