@@ -15,7 +15,30 @@ from backend.app.ingestion.instagram_oauth import (
     fetch_instagram_media,
     fetch_instagram_profile,
 )
-from backend.app.analytics.account_health_engine import compute_account_health_score
+"""
+Dashboard Service
+
+Orchestrates creator dashboard data assembly.
+"""
+
+import asyncio
+from datetime import date, timedelta
+
+from backend.app.ai.schemas import CreatorPostAIInput
+from backend.app.analytics.audience_quality import calculate_authenticity_score
+from backend.app.demo.synthetic_loader import load_synthetic
+from backend.app.ingestion.instagram_mapper import map_instagram_to_ai_inputs
+from backend.app.ingestion.instagram_oauth import (
+    fetch_instagram_media,
+    fetch_instagram_profile,
+)
+from backend.app.analytics.account_health_engine import (
+    compute_account_health_score,
+    compute_account_engagement_signals,
+    compute_account_vision_summary,
+    compute_content_quality_breakdown,
+)
+from backend.app.services.account_ai_intelligence import generate_creator_intelligence
 from backend.app.ai.niche import detect_creator_niche
 from backend.app.ai.growth_score import compute_growth_score
 from backend.app.ai.post_insights import analyze_posts
@@ -296,6 +319,29 @@ def build_creator_analytics(creator_id: str, access_token: str | None = None) ->
         follower_band=follower_band,
     )
 
+    # Deterministic signals
+    engagement_signals = compute_account_engagement_signals(single_post_models)
+    vision_summary = compute_account_vision_summary(single_post_models)
+    content_quality_breakdown = compute_content_quality_breakdown(single_post_models)
+
+    # AI creator intelligence (uses asyncio.run — safe here since we are in a sync FastAPI endpoint thread)
+    try:
+        niche = payload.get("summary", {}).get("niche") or {}
+        creator_intelligence = asyncio.run(
+            generate_creator_intelligence(
+                posts=single_post_models,
+                account_id=creator_id,
+                username=summary.get("username"),
+                bio=None,
+                niche_tags=list(niche.get("hashtags", [])) if isinstance(niche.get("hashtags"), list) else [],
+                creator_dominant_category=niche.get("primary_niche"),
+                follower_count=followers_count,
+            )
+        )
+    except Exception:
+        from backend.app.domain.account_models import CreatorIntelligence
+        creator_intelligence = CreatorIntelligence()
+
     content_type_breakdown: dict[str, dict[str, float | int | None]] = {}
     for post_type in ("REEL", "IMAGE"):
         matching_posts = [
@@ -333,7 +379,9 @@ def build_creator_analytics(creator_id: str, access_token: str | None = None) ->
         "recommendations": [recommendation.model_dump(mode="python") for recommendation in account_health.recommendations],
         "metadata": account_health.metadata.model_dump(mode="python"),
     }
+    enriched_payload["engagement_signals"] = engagement_signals.model_dump(mode="python")
+    enriched_payload["vision_summary"] = vision_summary.model_dump(mode="python")
+    enriched_payload["content_quality_breakdown"] = content_quality_breakdown
+    enriched_payload["creator_intelligence"] = creator_intelligence.model_dump(mode="python")
     enriched_payload["content_type_breakdown"] = content_type_breakdown
     return enriched_payload
-
-

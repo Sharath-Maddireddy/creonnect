@@ -23,6 +23,11 @@ from backend.app.infra.rq_queue import (
 )
 from backend.app.ingestion.instagram_mapper import map_instagram_posts
 from backend.app.ingestion.instagram_oauth import fetch_instagram_media
+from backend.app.analytics.account_health_engine import (
+    compute_account_engagement_signals,
+    compute_account_vision_summary,
+)
+from backend.app.services.account_ai_intelligence import generate_creator_intelligence
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
 from backend.app.utils.logger import logger
@@ -479,6 +484,7 @@ def _enqueue_account_analysis_job_impl(
     full_payload["include_posts_summary"] = include_posts_summary
     full_payload["include_posts_summary_max"] = include_posts_summary_max
 
+    initialize_job_status(job_id)
     try:
         queue.enqueue(
             run_account_analysis_job,
@@ -489,7 +495,6 @@ def _enqueue_account_analysis_job_impl(
             failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
             retry=Retry(max=2, interval=[10, 30]),
         )
-        initialize_job_status(job_id)
         _write_dedupe_job_id(account_id, post_limit, job_id)
         _write_inputhash_job_id(account_id, payload_hash, job_id)
     except Exception:
@@ -534,6 +539,28 @@ def _fetch_posts_from_source(payload: dict[str, Any], post_limit: int) -> list[S
     raise ValueError(
         "No post source configured. Provide precomputed posts in payload['posts'] via enqueue_account_analysis_job."
     )
+
+
+def _posts_payload_has_precomputed_scores(payload: dict[str, Any]) -> bool:
+    raw_posts = payload.get("posts")
+    if not isinstance(raw_posts, list) or not raw_posts:
+        return False
+
+    required_keys = {
+        "visual_quality_score",
+        "content_clarity_score",
+        "caption_effectiveness_score",
+        "engagement_potential_score",
+        "brand_safety_score",
+        "weighted_post_score",
+    }
+
+    for item in raw_posts:
+        if isinstance(item, SinglePostInsights):
+            return True
+        if isinstance(item, dict) and required_keys.issubset(item.keys()):
+            return True
+    return False
 
 
 def _build_warning(
@@ -621,6 +648,12 @@ def _build_post_summary(
     note_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     note_overrides = note_overrides or {}
+    first_signal = None
+    try:
+        vision_signals = post.vision_analysis.signals if post.vision_analysis is not None else []
+        first_signal = vision_signals[0] if vision_signals else None
+    except Exception:
+        first_signal = None
     vision_status = note_overrides.get("vision_status")
     if vision_status not in {"ok", "error", "disabled"}:
         vision_analysis = post.vision_analysis
@@ -635,12 +668,18 @@ def _build_post_summary(
             vision_status = "disabled" if not vision_enabled else "ok"
 
     fallback_used = bool(note_overrides.get("fallback_used", False))
+    ai_summary = note_overrides.get("ai_summary")
+    if not isinstance(ai_summary, str) or not ai_summary.strip():
+        ai_summary = getattr(first_signal, "scene_description", None) if first_signal is not None else None
+    if isinstance(ai_summary, str):
+        ai_summary = ai_summary.strip() or None
     summary = {
         "post_id": post.media_id,
         "shortcode": None,
         "post_type": _normalize_summary_post_type(post.media_type),
         "media_url": _bounded_media_url(post.media_url),
         "caption_preview": _caption_preview(post.caption_text, max_len=120),
+        "ai_summary": ai_summary,
         "scores": {
             "S1": _safe_float(post.visual_quality_score.total if post.visual_quality_score is not None else None),
             "S2": _safe_float(
@@ -658,6 +697,11 @@ def _build_post_summary(
         "notes": {
             "vision_status": vision_status,
             "fallback_used": fallback_used,
+            "cringe_score": _safe_float(getattr(first_signal, "cringe_score", None)) if first_signal is not None else None,
+            "cringe_label": getattr(first_signal, "cringe_label", None) if first_signal is not None else None,
+            "production_level": getattr(first_signal, "production_level", None) if first_signal is not None else None,
+            "hook_strength_score": _safe_float(getattr(first_signal, "hook_strength_score", None)) if first_signal is not None else None,
+            "technical_flaws": list(getattr(first_signal, "technical_flaws", []) or [])[:],
         },
     }
     return summary
@@ -722,6 +766,7 @@ def _extract_ai_notes(ai_analysis: dict[str, Any] | None, *, vision_enabled: boo
     notes: dict[str, Any] = {
         "vision_status": "disabled" if not vision_enabled else "ok",
         "fallback_used": False,
+        "ai_summary": None,
     }
     if not isinstance(ai_analysis, dict):
         return notes
@@ -729,6 +774,9 @@ def _extract_ai_notes(ai_analysis: dict[str, Any] | None, *, vision_enabled: boo
     if vision_status in {"ok", "error", "disabled"}:
         notes["vision_status"] = vision_status
     notes["fallback_used"] = bool(ai_analysis.get("fallback_used", False))
+    summary = ai_analysis.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        notes["ai_summary"] = summary.strip()
     return notes
 
 
@@ -848,7 +896,6 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
     job_id = current_job_id or raw_job_id or str(uuid4())
     account_id = _normalize_account_id(payload.get("account_id"))
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
-    include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
     include_posts_summary_max = _normalize_include_posts_summary_max(payload.get("include_posts_summary_max", 30))
     vision_enabled = bool((os.getenv("GEMINI_API_KEY") or "").strip())
     warnings_global: list[dict[str, Any]] = []
@@ -887,7 +934,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
 
         posts = _fetch_posts_from_source(payload, post_limit=post_limit)
         _write_dedupe_job_id(account_id, post_limit, job_id)
-        run_single_post_pipeline = _normalize_bool(payload.get("run_single_post_pipeline", False), default=False)
+        run_single_post_pipeline = not _posts_payload_has_precomputed_scores(payload)
         pipeline_run = asyncio.run(
             _run_single_post_pipeline_if_needed(
                 posts=posts,
@@ -905,11 +952,6 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         quality["vision_error_count"] = int(pipeline_run["vision_error_count"])
         quality["ai_fallback_count"] = int(pipeline_run["ai_fallback_count"])
 
-        if not run_single_post_pipeline and not vision_enabled:
-            for post in processed_posts:
-                post_id = post.media_id if isinstance(post.media_id, str) else ""
-                notes_by_post_id[post_id] = {"vision_status": "disabled", "fallback_used": True}
-
         _progress(stage="aggregate", done=len(processed_posts), total=max(1, len(posts)))
         result = analyze_account_health(
             posts=processed_posts,
@@ -918,6 +960,60 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             follower_band=payload.get("follower_band"),
             use_cache=True,
         )
+
+        try:
+            engagement_signals = compute_account_engagement_signals(processed_posts)
+        except Exception as signals_exc:
+            logger.warning(
+                "[AccountAnalysisJob] Non-fatal: engagement signals failed for %s: %s",
+                account_id,
+                signals_exc,
+            )
+            engagement_signals = None
+
+        try:
+            vision_summary = compute_account_vision_summary(processed_posts)
+        except Exception as vision_exc:
+            logger.warning(
+                "[AccountAnalysisJob] Non-fatal: vision summary failed for %s: %s",
+                account_id,
+                vision_exc,
+            )
+            vision_summary = None
+
+        try:
+            creator_intelligence = asyncio.run(
+                generate_creator_intelligence(
+                    posts=processed_posts,
+                    account_id=account_id,
+                    username=payload.get("username"),
+                    bio=payload.get("bio"),
+                    niche_tags=payload.get("niche_tags"),
+                    creator_dominant_category=payload.get("creator_dominant_category"),
+                    follower_count=payload.get("follower_count"),
+                )
+            )
+        except Exception as intel_exc:
+            logger.warning(
+                "[AccountAnalysisJob] Non-fatal: creator intelligence failed for %s: %s",
+                account_id,
+                intel_exc,
+            )
+            from backend.app.domain.account_models import CreatorIntelligence
+
+            creator_intelligence = CreatorIntelligence()
+
+        try:
+            result.creator_intelligence = creator_intelligence
+            result.vision_summary = vision_summary
+            result.engagement_signals = engagement_signals
+        except Exception as attach_exc:
+            logger.warning(
+                "[AccountAnalysisJob] Non-fatal: failed attaching account signals for %s: %s",
+                account_id,
+                attach_exc,
+            )
+
         result_payload = result.model_dump(mode="python")
 
         try:
@@ -941,12 +1037,18 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         except Exception as embed_exc:
             logger.warning("[AccountAnalysisJob] Non-fatal: failed to enqueue embedding ingestion for %s: %s", account_id, embed_exc)
 
-        if include_posts_summary:
+        try:
             result_payload["posts_summary"] = _bounded_posts_summary(
                 processed_posts,
                 include_posts_summary_max=include_posts_summary_max,
                 vision_enabled=vision_enabled,
                 notes_by_post_id=notes_by_post_id,
+            )
+        except Exception as summary_exc:
+            logger.warning(
+                "[AccountAnalysisJob] Non-fatal: failed to build posts_summary for %s: %s",
+                account_id,
+                summary_exc,
             )
 
         _update_status(

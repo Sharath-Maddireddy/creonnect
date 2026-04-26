@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     LineChart,
@@ -74,6 +74,27 @@ function formatPercentFromRatio(value) {
         return 'N/A'
     }
     return `${(value * 100).toFixed(1)}%`
+}
+
+function formatPercentPreciseFromRatio(value) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+        return 'N/A'
+    }
+    return `${(value * 100).toFixed(2)}%`
+}
+
+function formatScoreOutOfHundred(value) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+        return 'N/A'
+    }
+    return `${value.toFixed(1)}/100`
+}
+
+function formatBarScore(value, scale = 10) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+        return '—'
+    }
+    return scale === 100 ? `${value.toFixed(1)}` : `${value.toFixed(1)}/${scale}`
 }
 
 function formatPillarName(value) {
@@ -280,6 +301,10 @@ function Dashboard() {
 
     const { summary, posts, charts } = data
     const accountHealth = data?.account_health || {}
+    const engagementSignals = data?.engagement_signals || {}
+    const visionSummary = data?.vision_summary || {}
+    const contentQualityBreakdown = data?.content_quality_breakdown || {}
+    const creatorIntelligence = data?.creator_intelligence || {}
     const contentTypeBreakdown = data?.content_type_breakdown || {}
     const actionPlanItems = useMemo(() => ActionPlanItems(data?.action_plan), [data?.action_plan])
 
@@ -315,6 +340,60 @@ function Dashboard() {
 
     const accountHealthDrivers = Array.isArray(accountHealth?.drivers) ? accountHealth.drivers : []
     const accountHealthRecommendations = Array.isArray(accountHealth?.recommendations) ? accountHealth.recommendations : []
+    const deepEngagementMetrics = useMemo(() => ([
+        { key: 'avg_save_rate', label: 'Avg Save Rate', value: engagementSignals?.avg_save_rate },
+        { key: 'avg_share_rate', label: 'Avg Share Rate', value: engagementSignals?.avg_share_rate },
+        { key: 'avg_watch_through_rate', label: 'Watch-Through Rate', value: engagementSignals?.avg_watch_through_rate },
+        { key: 'avg_profile_visit_rate', label: 'Profile Visit Rate', value: engagementSignals?.avg_profile_visit_rate }
+    ]), [engagementSignals])
+
+    const intelligenceSignalMetrics = useMemo(() => ([
+        {
+            key: 'audience_trust_index',
+            label: 'Audience Trust',
+            value: engagementSignals?.audience_trust_index,
+            fillClass: 'dashboard-progress-fill-blue'
+        },
+        {
+            key: 'virality_potential',
+            label: 'Virality Potential',
+            value: engagementSignals?.virality_potential,
+            fillClass: 'dashboard-progress-fill-purple'
+        },
+        {
+            key: 'consistency_score',
+            label: 'Consistency Score',
+            value: engagementSignals?.consistency_score,
+            fillClass: 'dashboard-progress-fill-green'
+        }
+    ]), [engagementSignals])
+
+    const visualQualityMetrics = useMemo(() => ([
+        { key: 'composition', label: 'Composition', value: contentQualityBreakdown?.visual_quality?.composition },
+        { key: 'lighting', label: 'Lighting', value: contentQualityBreakdown?.visual_quality?.lighting },
+        { key: 'subject_clarity', label: 'Subject Clarity', value: contentQualityBreakdown?.visual_quality?.subject_clarity },
+        { key: 'aesthetic_quality', label: 'Aesthetic Quality', value: contentQualityBreakdown?.visual_quality?.aesthetic_quality }
+    ]), [contentQualityBreakdown])
+
+    const engagementPotentialMetrics = useMemo(() => ([
+        { key: 'emotional_resonance', label: 'Emotional Resonance', value: contentQualityBreakdown?.engagement_potential?.emotional_resonance },
+        { key: 'shareability', label: 'Shareability', value: contentQualityBreakdown?.engagement_potential?.shareability },
+        { key: 'save_worthiness', label: 'Save-Worthiness', value: contentQualityBreakdown?.engagement_potential?.save_worthiness },
+        { key: 'comment_potential', label: 'Comment Potential', value: contentQualityBreakdown?.engagement_potential?.comment_potential },
+        { key: 'novelty_or_value', label: 'Novelty / Value', value: contentQualityBreakdown?.engagement_potential?.novelty_or_value }
+    ]), [contentQualityBreakdown])
+
+    const captionMetrics = useMemo(() => ([
+        { key: 'hook_score', label: 'Hook Strength', value: contentQualityBreakdown?.caption?.hook_score },
+        { key: 'hashtag_score', label: 'Hashtag Strategy', value: contentQualityBreakdown?.caption?.hashtag_score },
+        { key: 'cta_score', label: 'Call-to-Action', value: contentQualityBreakdown?.caption?.cta_score },
+        { key: 'length_score', label: 'Caption Length', value: contentQualityBreakdown?.caption?.length_score }
+    ]), [contentQualityBreakdown])
+
+    const topThemes = Array.isArray(creatorIntelligence?.top_performing_themes) ? creatorIntelligence.top_performing_themes : []
+    const brandFitCategories = Array.isArray(creatorIntelligence?.brand_fit?.fit_categories) ? creatorIntelligence.brand_fit.fit_categories : []
+    const brandFitRedFlags = Array.isArray(creatorIntelligence?.brand_fit?.red_flags) ? creatorIntelligence.brand_fit.red_flags : []
+    const technicalFlaws = Array.isArray(visionSummary?.common_technical_flaws) ? visionSummary.common_technical_flaws : []
 
     const contentTypeChartData = useMemo(() => {
         return ['REEL', 'IMAGE'].map((type) => ({
@@ -575,6 +654,231 @@ function Dashboard() {
                                 </article>
                             )) : (
                                 <p className="ai-empty-state">No account recommendations available yet.</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="dashboard-section-stack">
+                <div className="posts-section">
+                    <div className="posts-feed-header">
+                        <div>
+                            <h3>Deep Engagement Rates</h3>
+                            <p className="posts-feed-subtitle">Save, share, watch-through, and profile-visit behavior across recent content.</p>
+                        </div>
+                    </div>
+                    <div className="metric-grid dashboard-deep-engagement-grid">
+                        {deepEngagementMetrics.map((metric) => (
+                            <div key={metric.key} className="metric-tile">
+                                <span className="metric-label">{metric.label}</span>
+                                <strong className="metric-value">{formatPercentPreciseFromRatio(metric.value)}</strong>
+                                <span className="metric-benchmark metric-benchmark-neutral">
+                                    {formatPercentFromRatio(metric.value)}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="posts-section">
+                    <div className="posts-feed-header">
+                        <div>
+                            <h3>Intelligence Signals</h3>
+                            <p className="posts-feed-subtitle">Composite trust, virality, and consistency scores from deterministic engagement behavior.</p>
+                        </div>
+                    </div>
+                    <div className="metric-grid dashboard-intelligence-grid">
+                        {intelligenceSignalMetrics.map((metric) => (
+                            <div key={metric.key} className="metric-tile dashboard-progress-tile">
+                                <span className="metric-label">{metric.label}</span>
+                                <strong className="metric-value">{formatScoreOutOfHundred(metric.value)}</strong>
+                                <div className="dashboard-progress-track">
+                                    <div
+                                        className={`dashboard-progress-fill ${metric.fillClass}`}
+                                        style={{ width: `${clampValue(metric.value, 0, 100)}%` }}
+                                    />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="dashboard-dual-card-grid">
+                    <div className="ai-detail-card">
+                        <span className="post-section-kicker">Content Quality Breakdown</span>
+                        <div className="section-heading compact">
+                            <h2>Visual Quality</h2>
+                        </div>
+                        <div className="dashboard-bar-list">
+                            {visualQualityMetrics.map((metric) => (
+                                <div key={metric.key} className="dashboard-bar-row">
+                                    <div className="dashboard-bar-copy">
+                                        <span>{metric.label}</span>
+                                        <strong>{formatBarScore(metric.value, 10)}</strong>
+                                    </div>
+                                    <div className="dashboard-progress-track">
+                                        <div
+                                            className="dashboard-progress-fill dashboard-progress-fill-blue"
+                                            style={{ width: `${clampValue((metric.value ?? 0) * 10, 0, 100)}%` }}
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="ai-detail-card">
+                        <span className="post-section-kicker">Content Quality Breakdown</span>
+                        <div className="section-heading compact">
+                            <h2>Engagement Potential</h2>
+                        </div>
+                        <div className="dashboard-bar-list">
+                            {engagementPotentialMetrics.map((metric) => (
+                                <div key={metric.key} className="dashboard-bar-row">
+                                    <div className="dashboard-bar-copy">
+                                        <span>{metric.label}</span>
+                                        <strong>{formatBarScore(metric.value, 10)}</strong>
+                                    </div>
+                                    <div className="dashboard-progress-track">
+                                        <div
+                                            className="dashboard-progress-fill dashboard-progress-fill-purple"
+                                            style={{ width: `${clampValue((metric.value ?? 0) * 10, 0, 100)}%` }}
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="ai-detail-card">
+                    <span className="post-section-kicker">Caption Analysis</span>
+                    <div className="section-heading compact">
+                        <h2>Caption Analysis</h2>
+                    </div>
+                    <div className="dashboard-bar-list">
+                        {captionMetrics.map((metric) => (
+                            <div key={metric.key} className="dashboard-bar-row">
+                                <div className="dashboard-bar-copy">
+                                    <span>{metric.label}</span>
+                                    <strong>{formatBarScore(metric.value, 100)}</strong>
+                                </div>
+                                <div className="dashboard-progress-track">
+                                    <div
+                                        className="dashboard-progress-fill dashboard-progress-fill-green"
+                                        style={{ width: `${clampValue(metric.value, 0, 100)}%` }}
+                                    />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="ai-detail-card">
+                    <span className="post-section-kicker">Creator Intelligence</span>
+                    <div className="section-heading compact">
+                        <h2>Creator Intelligence</h2>
+                    </div>
+                    <div className="dashboard-intelligence-shell">
+                        <div className="dashboard-intelligence-block">
+                            <h4>Who You Are</h4>
+                            <p>{creatorIntelligence?.creator_persona || 'Analysis pending...'}</p>
+                        </div>
+                        <div className="dashboard-intelligence-block">
+                            <h4>Content Style</h4>
+                            <p>{creatorIntelligence?.content_style_summary || 'Analysis pending...'}</p>
+                        </div>
+                        <div className="dashboard-intelligence-block">
+                            <h4>Top Themes</h4>
+                            <div className="dashboard-pill-row">
+                                {topThemes.length ? topThemes.map((theme) => (
+                                    <span key={theme} className="dashboard-pill dashboard-pill-theme">{theme}</span>
+                                )) : (
+                                    <span className="ai-empty-state">No themes identified yet.</span>
+                                )}
+                            </div>
+                        </div>
+                        <div className="dashboard-intelligence-block">
+                            <h4>Brand Fit</h4>
+                            <div className="dashboard-pill-row">
+                                {brandFitCategories.length ? brandFitCategories.map((category) => (
+                                    <span key={category} className="dashboard-pill dashboard-pill-fit">{category}</span>
+                                )) : (
+                                    <span className="ai-empty-state">No fit categories available.</span>
+                                )}
+                            </div>
+                            {brandFitRedFlags.length ? (
+                                <div className="dashboard-watchout-row">
+                                    <span className="dashboard-watchout-label">Watch Out</span>
+                                    <div className="dashboard-pill-row">
+                                        {brandFitRedFlags.map((flag) => (
+                                            <span key={flag} className="dashboard-pill dashboard-pill-flag">{flag}</span>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="ai-detail-card">
+                    <span className="post-section-kicker">Vision &amp; Production</span>
+                    <div className="section-heading compact">
+                        <h2>Vision &amp; Production</h2>
+                    </div>
+                    <div className="dashboard-vision-grid">
+                        <div className="dashboard-bar-row">
+                            <div className="dashboard-bar-copy">
+                                <span>Hook Strength</span>
+                                <strong>{formatPercentFromRatio(visionSummary?.avg_hook_strength)}</strong>
+                            </div>
+                            <div className="dashboard-progress-track">
+                                <div
+                                    className="dashboard-progress-fill dashboard-progress-fill-blue"
+                                    style={{ width: `${clampValue((visionSummary?.avg_hook_strength ?? 0) * 100, 0, 100)}%` }}
+                                />
+                            </div>
+                        </div>
+                        <div className="dashboard-bar-row">
+                            <div className="dashboard-bar-copy">
+                                <span>Cringe Score</span>
+                                <strong>
+                                    {typeof visionSummary?.avg_cringe_score === 'number'
+                                        ? `${visionSummary.avg_cringe_score.toFixed(1)}/100`
+                                        : 'N/A'}
+                                </strong>
+                            </div>
+                            <div className="dashboard-progress-track">
+                                <div
+                                    className="dashboard-progress-fill dashboard-progress-fill-red"
+                                    style={{ width: `${clampValue(visionSummary?.avg_cringe_score, 0, 100)}%` }}
+                                />
+                            </div>
+                            <span className="metric-benchmark metric-benchmark-neutral">Lower is better</span>
+                        </div>
+                        <div className="dashboard-vision-meta">
+                            <div className="dashboard-vision-stat">
+                                <span className="metric-label">Production Level</span>
+                                <span className={`dashboard-production-badge dashboard-production-${visionSummary?.avg_production_level || 'neutral'}`}>
+                                    {visionSummary?.avg_production_level || 'N/A'}
+                                </span>
+                            </div>
+                            <div className="dashboard-vision-stat">
+                                <span className="metric-label">Flagged Posts</span>
+                                <strong className="metric-value">{typeof visionSummary?.flagged_posts_count === 'number' ? visionSummary.flagged_posts_count : 'N/A'}</strong>
+                            </div>
+                        </div>
+                        <div className="dashboard-intelligence-block">
+                            <h4>Technical Issues</h4>
+                            {technicalFlaws.length ? (
+                                <ul className="dashboard-issues-list">
+                                    {technicalFlaws.map((issue) => (
+                                        <li key={issue}>⚠️ {issue}</li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <p>No flaws detected.</p>
                             )}
                         </div>
                     </div>

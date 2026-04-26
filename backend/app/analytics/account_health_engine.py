@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from statistics import mean, median, pstdev
 
 from backend.app.domain.account_models import (
+    AccountEngagementSignals,
     AccountHealthMetadata,
     AccountHealthScore,
+    AccountVisionSummary,
     DeterministicDriver,
     DeterministicRecommendation,
     PillarScore,
@@ -646,3 +649,330 @@ def compute_account_health_score(
         recommendations=recommendations,
         metadata=metadata,
     )
+
+
+def compute_account_engagement_signals(
+    posts: list[SinglePostInsights],
+) -> AccountEngagementSignals:
+    """Compute deterministic account-level engagement signals from processed posts."""
+
+    def _round4(value: float | None) -> float | None:
+        return round(value, 4) if isinstance(value, float) else None
+
+    def _collect_metric(attribute: str) -> list[float]:
+        values: list[float] = []
+        for post in posts:
+            numeric = _safe_float(getattr(post.derived_metrics, attribute, None))
+            if numeric is not None:
+                values.append(max(0.0, numeric))
+        return values
+
+    def _collect_hook_strengths() -> list[float]:
+        values: list[float] = []
+        for post in posts:
+            signals = post.vision_analysis.signals if post.vision_analysis else []
+            first_signal = signals[0] if signals else None
+            numeric = _safe_float(getattr(first_signal, "hook_strength_score", None))
+            if numeric is not None:
+                values.append(_clamp(numeric, 0.0, 1.0))
+        return values
+
+    def _collect_shareability() -> list[float]:
+        values: list[float] = []
+        for post in posts:
+            numeric = _safe_float(getattr(post.engagement_potential_score, "shareability", None))
+            if numeric is not None:
+                values.append(_clamp(numeric, 0.0, 10.0))
+        return values
+
+    def _normalized_weighted_score(components: list[tuple[float | None, float]]) -> float | None:
+        available = [(value, weight) for value, weight in components if value is not None]
+        if not available:
+            return None
+        total_weight = sum(weight for _, weight in available)
+        if total_weight <= 0:
+            return None
+        score = sum(value * weight for value, weight in available) / total_weight
+        return _clamp(score, 0.0, 100.0)
+
+    try:
+        save_rates = _collect_metric("save_rate")
+        share_rates = _collect_metric("share_rate")
+        watch_through_rates = _collect_metric("watch_through_rate")
+        profile_visit_rates = _collect_metric("profile_visit_rate")
+        comment_rates = _collect_metric("comment_rate")
+        hook_strengths = _collect_hook_strengths()
+        shareability_scores = _collect_shareability()
+        engagement_rates = _collect_metric("engagement_rate")
+
+        avg_save_rate = _mean_or_none(save_rates)
+        avg_share_rate = _mean_or_none(share_rates)
+        avg_watch_through_rate = _mean_or_none(watch_through_rates)
+        avg_profile_visit_rate = _mean_or_none(profile_visit_rates)
+        comment_rate_avg = _mean_or_none(comment_rates)
+        avg_hook_strength = _mean_or_none(hook_strengths)
+        avg_shareability = _mean_or_none(shareability_scores)
+
+        audience_trust_index = _normalized_weighted_score(
+            [
+                (
+                    _clamp((avg_save_rate / 0.15) * 100.0, 0.0, 100.0)
+                    if avg_save_rate is not None
+                    else None,
+                    40.0,
+                ),
+                (
+                    _clamp((avg_profile_visit_rate / 0.05) * 100.0, 0.0, 100.0)
+                    if avg_profile_visit_rate is not None
+                    else None,
+                    35.0,
+                ),
+                (
+                    _clamp((comment_rate_avg / 0.03) * 100.0, 0.0, 100.0)
+                    if comment_rate_avg is not None
+                    else None,
+                    25.0,
+                ),
+            ]
+        )
+
+        virality_potential = _normalized_weighted_score(
+            [
+                (
+                    _clamp((avg_share_rate / 0.10) * 100.0, 0.0, 100.0)
+                    if avg_share_rate is not None
+                    else None,
+                    40.0,
+                ),
+                (
+                    _clamp(avg_hook_strength * 100.0, 0.0, 100.0)
+                    if avg_hook_strength is not None
+                    else None,
+                    35.0,
+                ),
+                (
+                    _clamp((avg_shareability / 10.0) * 100.0, 0.0, 100.0)
+                    if avg_shareability is not None
+                    else None,
+                    25.0,
+                ),
+            ]
+        )
+
+        consistency_score: float | None = None
+        if len(engagement_rates) >= 2:
+            engagement_rate_mean = _mean_or_none(engagement_rates)
+            if engagement_rate_mean is not None and engagement_rate_mean > 0:
+                cv = pstdev(engagement_rates) / engagement_rate_mean
+                consistency_score = _clamp(100.0 - (cv * 100.0), 0.0, 100.0)
+
+        return AccountEngagementSignals(
+            avg_save_rate=_round4(avg_save_rate),
+            avg_share_rate=_round4(avg_share_rate),
+            avg_watch_through_rate=_round4(avg_watch_through_rate),
+            avg_profile_visit_rate=_round4(avg_profile_visit_rate),
+            audience_trust_index=_round4(audience_trust_index),
+            virality_potential=_round4(virality_potential),
+            consistency_score=_round4(consistency_score),
+        )
+    except Exception:
+        return AccountEngagementSignals()
+
+
+def compute_account_vision_summary(
+    posts: list[SinglePostInsights],
+) -> AccountVisionSummary:
+    """Compute deterministic account-level vision summary signals from processed posts."""
+
+    try:
+        cringe_scores: list[float] = []
+        hook_strengths: list[float] = []
+        production_levels: list[str] = []
+        flagged_posts_count = 0
+        technical_flaw_counts: dict[str, int] = {}
+
+        for post in posts:
+            signals = post.vision_analysis.signals if post.vision_analysis else []
+            first_signal = signals[0] if signals else None
+            if first_signal is None:
+                continue
+
+            cringe_score = _safe_float(getattr(first_signal, "cringe_score", None))
+            if cringe_score is not None:
+                cringe_scores.append(_clamp(cringe_score, 0.0, 100.0))
+
+            hook_strength = _safe_float(getattr(first_signal, "hook_strength_score", None))
+            if hook_strength is not None:
+                hook_strengths.append(_clamp(hook_strength, 0.0, 1.0))
+
+            production_level = getattr(first_signal, "production_level", None)
+            if isinstance(production_level, str) and production_level in {"low", "medium", "high"}:
+                production_levels.append(production_level)
+
+            is_cringe = getattr(first_signal, "is_cringe", None) is True
+            adult_content_detected = getattr(first_signal, "adult_content_detected", None) is True
+            if is_cringe or adult_content_detected:
+                flagged_posts_count += 1
+
+            technical_flaws = getattr(first_signal, "technical_flaws", [])
+            if isinstance(technical_flaws, list):
+                for flaw in technical_flaws:
+                    if not isinstance(flaw, str):
+                        continue
+                    text = " ".join(flaw.strip().split())
+                    if not text:
+                        continue
+                    truncated = text[:160]
+                    technical_flaw_counts[truncated] = technical_flaw_counts.get(truncated, 0) + 1
+
+        avg_cringe_score = round(mean(cringe_scores), 1) if cringe_scores else None
+        avg_hook_strength = round(mean(hook_strengths), 3) if hook_strengths else None
+        avg_production_level = (
+            max(
+                Counter(production_levels).items(),
+                key=lambda item: (item[1], item[0]),
+            )[0]
+            if production_levels
+            else None
+        )
+        common_technical_flaws = [
+            flaw
+            for flaw, _ in sorted(
+                technical_flaw_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            )[:5]
+        ]
+
+        return AccountVisionSummary(
+            avg_cringe_score=avg_cringe_score,
+            avg_hook_strength=avg_hook_strength,
+            avg_production_level=avg_production_level,
+            flagged_posts_count=flagged_posts_count,
+            common_technical_flaws=common_technical_flaws,
+        )
+    except Exception:
+        return AccountVisionSummary()
+
+
+def compute_content_quality_breakdown(
+    posts: list[SinglePostInsights],
+) -> dict[str, dict[str, float | None]]:
+    """Average all S1/S2/S3/S5 sub-scores across posts for a radar-chart breakdown.
+
+    Returns a dict with keys: visual_quality, caption, content_clarity, engagement_potential.
+    Each key maps to a dict of sub-score-name -> averaged value (or None if no data).
+    """
+
+    def _avg(values: list[float]) -> float | None:
+        return round(mean(values), 2) if values else None
+
+    def _collect(posts: list[SinglePostInsights], attr: str, sub: str) -> list[float]:
+        results: list[float] = []
+        for post in posts:
+            obj = getattr(post, attr, None)
+            val = _safe_float(getattr(obj, sub, None)) if obj is not None else None
+            if val is not None:
+                results.append(val)
+        return results
+
+    try:
+        # S1 — Visual Quality (each sub-score 0-10)
+        visual_quality = {
+            "composition": _avg(_collect(posts, "visual_quality_score", "composition")),
+            "lighting": _avg(_collect(posts, "visual_quality_score", "lighting")),
+            "subject_clarity": _avg(_collect(posts, "visual_quality_score", "subject_clarity")),
+            "aesthetic_quality": _avg(_collect(posts, "visual_quality_score", "aesthetic_quality")),
+        }
+
+        # S2 — Caption Effectiveness (sub-scores 0-100)
+        caption = {
+            "hook_score": _avg(_collect(posts, "caption_effectiveness_score", "hook_score_0_100")),
+            "hashtag_score": _avg(_collect(posts, "caption_effectiveness_score", "hashtag_score_0_100")),
+            "cta_score": _avg(_collect(posts, "caption_effectiveness_score", "cta_score_0_100")),
+            "length_score": _avg(_collect(posts, "caption_effectiveness_score", "length_score_0_100")),
+        }
+
+        # S3 — Content Clarity (each sub-score 0-10)
+        content_clarity = {
+            "message_singularity": _avg(_collect(posts, "content_clarity_score", "message_singularity")),
+            "context_clarity": _avg(_collect(posts, "content_clarity_score", "context_clarity")),
+            "caption_alignment": _avg(_collect(posts, "content_clarity_score", "caption_alignment")),
+            "visual_message_support": _avg(_collect(posts, "content_clarity_score", "visual_message_support")),
+            "cognitive_load": _avg(_collect(posts, "content_clarity_score", "cognitive_load")),
+        }
+
+        # S5 — Engagement Potential (each sub-score 0-10)
+        engagement_potential = {
+            "emotional_resonance": _avg(_collect(posts, "engagement_potential_score", "emotional_resonance")),
+            "shareability": _avg(_collect(posts, "engagement_potential_score", "shareability")),
+            "save_worthiness": _avg(_collect(posts, "engagement_potential_score", "save_worthiness")),
+            "comment_potential": _avg(_collect(posts, "engagement_potential_score", "comment_potential")),
+            "novelty_or_value": _avg(_collect(posts, "engagement_potential_score", "novelty_or_value")),
+        }
+
+        return {
+            "visual_quality": visual_quality,
+            "caption": caption,
+            "content_clarity": content_clarity,
+            "engagement_potential": engagement_potential,
+        }
+    except Exception:
+        return {
+            "visual_quality": {},
+            "caption": {},
+            "content_clarity": {},
+            "engagement_potential": {},
+        }
+
+
+def compute_content_quality_breakdown(
+    posts: list[SinglePostInsights],
+) -> dict[str, dict[str, float | None]]:
+    def _avg(values: list[float]) -> float | None:
+        return round(mean(values), 2) if values else None
+
+    def _collect(values: list[SinglePostInsights], attr: str, sub_attr: str) -> list[float]:
+        results: list[float] = []
+        for post in values:
+            obj = getattr(post, attr, None)
+            numeric = _safe_float(getattr(obj, sub_attr, None)) if obj is not None else None
+            if numeric is not None:
+                results.append(numeric)
+        return results
+
+    try:
+        return {
+            "visual_quality": {
+                "composition": _avg(_collect(posts, "visual_quality_score", "composition")),
+                "lighting": _avg(_collect(posts, "visual_quality_score", "lighting")),
+                "subject_clarity": _avg(_collect(posts, "visual_quality_score", "subject_clarity")),
+                "aesthetic_quality": _avg(_collect(posts, "visual_quality_score", "aesthetic_quality")),
+            },
+            "caption": {
+                "hook_score": _avg(_collect(posts, "caption_effectiveness_score", "hook_score_0_100")),
+                "hashtag_score": _avg(_collect(posts, "caption_effectiveness_score", "hashtag_score_0_100")),
+                "cta_score": _avg(_collect(posts, "caption_effectiveness_score", "cta_score_0_100")),
+                "length_score": _avg(_collect(posts, "caption_effectiveness_score", "length_score_0_100")),
+            },
+            "content_clarity": {
+                "message_singularity": _avg(_collect(posts, "content_clarity_score", "message_singularity")),
+                "context_clarity": _avg(_collect(posts, "content_clarity_score", "context_clarity")),
+                "caption_alignment": _avg(_collect(posts, "content_clarity_score", "caption_alignment")),
+                "visual_message_support": _avg(_collect(posts, "content_clarity_score", "visual_message_support")),
+                "cognitive_load": _avg(_collect(posts, "content_clarity_score", "cognitive_load")),
+            },
+            "engagement_potential": {
+                "emotional_resonance": _avg(_collect(posts, "engagement_potential_score", "emotional_resonance")),
+                "shareability": _avg(_collect(posts, "engagement_potential_score", "shareability")),
+                "save_worthiness": _avg(_collect(posts, "engagement_potential_score", "save_worthiness")),
+                "comment_potential": _avg(_collect(posts, "engagement_potential_score", "comment_potential")),
+                "novelty_or_value": _avg(_collect(posts, "engagement_potential_score", "novelty_or_value")),
+            },
+        }
+    except Exception:
+        return {
+            "visual_quality": {},
+            "caption": {},
+            "content_clarity": {},
+            "engagement_potential": {},
+        }

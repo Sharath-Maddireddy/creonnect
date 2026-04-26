@@ -577,6 +577,7 @@ Notes:
   - Started stale threshold: `>1800s` (`30` minutes) since `started_at` (or `created_at` when `started_at` is missing).
 - If stale is detected during poll, the API returns a projected `failed` view (`error.type=TimeoutError`, `result=null`) without persisting that transition.
 - `posts_summary` exists only when enqueue flag `include_posts_summary=true` was used.
+- Field-by-field reference for the `result` payload: [docs/ACCOUNT_ANALYSIS_FIELDS.md](docs/ACCOUNT_ANALYSIS_FIELDS.md)
 
 ### Example Response
 ```json
