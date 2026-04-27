@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON, TypeDecorator
@@ -157,3 +157,22 @@ class CreatorDiscoveryMeta(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+# init_db() will create this table via Base.metadata.create_all; no separate migration is required here.
+class FollowerSnapshot(Base):
+    """Stores per-account follower counts by day for dashboard momentum calculations."""
+
+    __tablename__ = "follower_snapshots"
+    __table_args__ = (
+        UniqueConstraint("account_id", "snapshot_date", name="uq_follower_snapshots_account_date"),
+    )
+
+    account_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("creator_discovery_meta.account_id"),
+        primary_key=True,
+        index=True,
+    )
+    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False)
+    follower_count: Mapped[int] = mapped_column(Integer, nullable=False)

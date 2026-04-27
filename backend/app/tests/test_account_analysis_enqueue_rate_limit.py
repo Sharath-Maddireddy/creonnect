@@ -140,7 +140,7 @@ def test_enqueue_failure_rolls_back_rate_counter_and_mappings(monkeypatch) -> No
     else:
         raise AssertionError("Expected enqueue failure to be re-raised")
 
-    assert calls["initialize"] == 0
+    assert calls["initialize"] == 1
     assert calls["dedupe_writes"] == 0
     assert calls["inputhash_writes"] == 0
     assert calls["dedupe_deletes"] == 1

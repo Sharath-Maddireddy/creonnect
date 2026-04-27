@@ -20,6 +20,8 @@ from backend.app.ai.niche import detect_creator_niche
 from backend.app.ai.growth_score import compute_growth_score
 from backend.app.ai.post_insights import analyze_posts
 
+DATA_DIR = Path(__file__).resolve().parents[2] / "ml" / "data"
+
 
 def load_snapshot() -> dict:
     """Load synthetic_creator_snapshot.json"""
@@ -175,7 +177,7 @@ def build_training_example():
     )
     
     # 5) Append as JSON line to training_data.jsonl
-    output_path = Path(__file__).parent / "training_data.jsonl"
+    output_path = DATA_DIR / "training_data.jsonl"
     append_to_jsonl(training_record, output_path)
     
     # 6) Print confirmation

@@ -115,6 +115,9 @@ class AccountHealthScore(BaseModel):
     drivers: list[DeterministicDriver] = Field(default_factory=list)
     recommendations: list[DeterministicRecommendation] = Field(default_factory=list)
     metadata: AccountHealthMetadata = Field(default_factory=AccountHealthMetadata)
+    creator_intelligence: CreatorIntelligence | None = None
+    vision_summary: AccountVisionSummary | None = None
+    engagement_signals: AccountEngagementSignals | None = None
 
     @field_validator("ahs_score", mode="before")
     @classmethod
@@ -126,3 +129,149 @@ class AccountHealthScore(BaseModel):
         except (TypeError, ValueError):
             return 0.0
         return round(max(0.0, min(100.0, numeric)), 2)
+
+
+class AccountVisionSummary(BaseModel):
+    """Vision-derived rollup signals for an account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    avg_cringe_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    avg_hook_strength: float | None = Field(default=None, ge=0.0, le=1.0)
+    avg_production_level: str | None = None
+    flagged_posts_count: int = Field(default=0, ge=0)
+    common_technical_flaws: list[str] = Field(default_factory=list)
+
+    @field_validator("avg_production_level", mode="before")
+    @classmethod
+    def _sanitize_avg_production_level(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.strip().split()).lower()[:20]
+        return text if text in {"low", "medium", "high"} else None
+
+    @field_validator("common_technical_flaws", mode="before")
+    @classmethod
+    def _sanitize_common_technical_flaws(
+        cls, value: list[str] | str | None
+    ) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = " ".join(item.strip().split())
+            if not text:
+                continue
+            sanitized.append(text[:160])
+            if len(sanitized) >= 5:
+                break
+        return sanitized
+
+
+class AccountEngagementSignals(BaseModel):
+    """Aggregate engagement-derived account signals."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    avg_save_rate: float | None = Field(default=None, ge=0.0)
+    avg_share_rate: float | None = Field(default=None, ge=0.0)
+    avg_watch_through_rate: float | None = Field(default=None, ge=0.0)
+    avg_profile_visit_rate: float | None = Field(default=None, ge=0.0)
+    audience_trust_index: float | None = Field(default=None, ge=0.0, le=100.0)
+    virality_potential: float | None = Field(default=None, ge=0.0, le=100.0)
+    consistency_score: float | None = Field(default=None, ge=0.0, le=100.0)
+
+
+class BrandFitSignals(BaseModel):
+    """Brand-fit categories and safety red flags."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fit_categories: list[str] = Field(default_factory=list)
+    red_flags: list[str] = Field(default_factory=list)
+
+    @field_validator("fit_categories", mode="before")
+    @classmethod
+    def _sanitize_fit_categories(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = " ".join(item.strip().split())
+            if not text:
+                continue
+            sanitized.append(text)
+            if len(sanitized) >= 8:
+                break
+        return sanitized
+
+    @field_validator("red_flags", mode="before")
+    @classmethod
+    def _sanitize_red_flags(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = " ".join(item.strip().split())
+            if not text:
+                continue
+            sanitized.append(text)
+            if len(sanitized) >= 5:
+                break
+        return sanitized
+
+
+class CreatorIntelligence(BaseModel):
+    """Account-level creator profile and brand fit rollup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    creator_persona: str | None = None
+    content_style_summary: str | None = None
+    top_performing_themes: list[str] = Field(default_factory=list)
+    brand_fit: BrandFitSignals = Field(default_factory=BrandFitSignals)
+
+    @field_validator("creator_persona", mode="before")
+    @classmethod
+    def _sanitize_creator_persona(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.strip().split())
+        return text[:500] or None
+
+    @field_validator("content_style_summary", mode="before")
+    @classmethod
+    def _sanitize_content_style_summary(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.strip().split())
+        return text[:400] or None
+
+    @field_validator("top_performing_themes", mode="before")
+    @classmethod
+    def _sanitize_top_performing_themes(
+        cls, value: list[str] | str | None
+    ) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = " ".join(item.strip().split())
+            if not text:
+                continue
+            sanitized.append(text[:80])
+            if len(sanitized) >= 5:
+                break
+        return sanitized

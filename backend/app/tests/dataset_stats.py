@@ -7,10 +7,12 @@ Compute basic statistics from training_data.jsonl.
 import json
 from pathlib import Path
 
+DATA_DIR = Path(__file__).resolve().parents[2] / "ml" / "data"
+
 
 def load_training_data():
     """Load and parse training_data.jsonl, handling malformed lines gracefully."""
-    data_path = Path(__file__).parent / "training_data.jsonl"
+    data_path = DATA_DIR / "training_data.jsonl"
     
     records = []
     malformed_count = 0

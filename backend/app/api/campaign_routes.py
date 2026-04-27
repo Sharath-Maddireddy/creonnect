@@ -182,17 +182,32 @@ def ai_campaign_discover(
         )
         
         # 5. Build friendly summary
-        summary = (
+        fallback_summary = (
             f"Extracted mission: find a {brand.niche} creator "
             f"with at least {brand.min_followers or 0} followers for {brand.brand_name}."
         )
+        prompt = (
+            f"Brand: {brand.brand_name}. Niche: {brand.niche}. "
+            f"Found {len(top_matches)} creators. Top match score: "
+            f"{f'{top_matches[0].total_match_score:.1f}/100' if top_matches else 'none'}. "
+            "In 2 sentences, summarize why these creators are a good fit for this campaign."
+        )
+        try:
+            ai_explanation = llm.generate(
+                {
+                    "system": "You summarize creator-brand campaign matches clearly and concisely.",
+                    "user": prompt,
+                }
+            )
+        except Exception:
+            ai_explanation = fallback_summary
 
         return CampaignDiscoverResponse(
             parsed_brief=parsed_brief,
             matches=top_matches,
             total_evaluated=total_eval,
             disqualified_count=disq_count,
-            ai_explanation=summary
+            ai_explanation=ai_explanation
         )
 
     except HTTPException:

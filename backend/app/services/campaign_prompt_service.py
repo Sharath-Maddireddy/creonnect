@@ -42,6 +42,70 @@ def _fallback_keyword_extraction(prompt: str) -> dict:
         "additional_requirements": []
     }
 
+
+def _infer_follower_tier(prompt: str) -> dict:
+    prompt_lower = prompt.lower()
+    tier_map = [
+        {
+            "keywords": [
+                "nano",
+                "micro",
+                "authentic",
+                "genuine",
+                "community",
+                "niche audience",
+                "tight-knit",
+                "real followers",
+                "grassroots",
+            ],
+            "min_followers": 5000,
+            "max_followers": 100000,
+            "label": "nano-micro",
+        },
+        {
+            "keywords": [
+                "mid-tier",
+                "mid tier",
+                "growing creator",
+                "rising creator",
+                "moderate reach",
+                "regional",
+            ],
+            "min_followers": 100000,
+            "max_followers": 500000,
+            "label": "mid-tier",
+        },
+        {
+            "keywords": [
+                "macro",
+                "mega",
+                "viral",
+                "massive reach",
+                "mainstream",
+                "celebrity",
+                "large audience",
+                "millions",
+                "top creator",
+                "famous",
+                "well-known",
+            ],
+            "min_followers": 500000,
+            "max_followers": None,
+            "label": "macro-mega",
+        },
+    ]
+
+    for tier in tier_map:
+        if any(keyword in prompt_lower for keyword in tier["keywords"]):
+            return {
+                "min_followers": tier["min_followers"],
+                "max_followers": tier["max_followers"],
+                "label": tier["label"],
+            }
+
+    return {"min_followers": None, "max_followers": None}
+
+
 def parse_campaign_prompt(prompt: str, brand_name: str | None = None) -> dict:
     """
     Takes a natural language prompt and returns a dictionary of extracted campaign requirements.
@@ -87,6 +151,18 @@ def parse_campaign_prompt(prompt: str, brand_name: str | None = None) -> dict:
     # Ensure niche exists (defaults to 'general' if absolutely nothing is found)
     if not parsed.get("niche"):
         parsed["niche"] = "general"
+
+    # Only infer tier if the parser did not extract explicit follower bounds.
+    if parsed.get("min_followers") is None and parsed.get("max_followers") is None:
+        inferred = _infer_follower_tier(prompt)
+        if inferred["min_followers"] is not None:
+            parsed["min_followers"] = inferred["min_followers"]
+            parsed["max_followers"] = inferred["max_followers"]
+            parsed["follower_tier_inferred"] = inferred["label"]
+        else:
+            parsed["follower_tier_inferred"] = None
+    else:
+        parsed["follower_tier_inferred"] = None
 
     return parsed
 

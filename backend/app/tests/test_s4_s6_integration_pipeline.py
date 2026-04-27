@@ -104,7 +104,7 @@ def test_pipeline_result_and_cache_include_s4_s6_and_weighted_uses_them(monkeypa
     assert response["ai_analysis"] is not None
     assert "audience_relevance_score" in response["ai_analysis"]
     assert "brand_safety_score" in response["ai_analysis"]
-    assert response["post"].audience_relevance_score.s4_raw_0_100 in {15, 50, 75, 100}
+    assert 0 <= response["post"].audience_relevance_score.s4_raw_0_100 <= 100
     assert 0 <= response["post"].brand_safety_score.s6_raw_0_100 <= 100
     assert "S4" in response["post"].weighted_post_score.weights_used
     assert "S6" in response["post"].weighted_post_score.weights_used

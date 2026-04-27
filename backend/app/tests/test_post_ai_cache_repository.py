@@ -1,6 +1,6 @@
 """Unit tests for in-memory post AI cache repository lock semantics."""
 
-from services.post_ai_cache_repository import PostAICacheRepository
+from backend.app.services_legacy.post_ai_cache_repository import PostAICacheRepository
 
 
 def test_acquire_regen_lock_twice_same_key_second_is_blocked() -> None:

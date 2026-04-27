@@ -61,12 +61,14 @@ def _cache_key(
     account_avg_engagement_rate: float | None,
     niche_avg_engagement_rate: float | None,
     follower_band: str | None,
+    now_ts: datetime | None = None,
 ) -> str:
     account_id = posts[0].account_id if posts and isinstance(posts[0].account_id, str) else "unknown_account"
     fingerprint = _stable_post_fingerprint(posts)
+    now_part = now_ts.isoformat() if isinstance(now_ts, datetime) else ""
     return (
         f"{account_id}:{fingerprint}:"
-        f"{_format_rate(account_avg_engagement_rate)}:{_format_rate(niche_avg_engagement_rate)}:{follower_band or ''}"
+        f"{_format_rate(account_avg_engagement_rate)}:{_format_rate(niche_avg_engagement_rate)}:{follower_band or ''}:{now_part}"
     )
 
 
@@ -111,11 +113,11 @@ def analyze_account_health(
 ) -> AccountHealthScore:
     """Analyze account health from precomputed SinglePostInsights posts.
 
-    Note: now_ts is reserved for future time-window overrides and does not
-    affect scoring or caching at present.
+    The now_ts parameter partitions the cache so that the same post set
+    analysed at different time windows produces distinct cache entries.
     """
 
-    key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band)
+    key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band, now_ts)
     current_ts = time.time()
     if use_cache:
         _purge_expired_cache_entries(current_ts)

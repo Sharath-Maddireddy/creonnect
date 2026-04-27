@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import concurrent.futures
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,7 +29,17 @@ from backend.app.domain.post_models import (
 import backend.app.api.post_analysis_routes as post_analysis_routes
 from backend.app.services import account_analysis_jobs
 import backend.app.services.post_insights_service as post_insights_service
+from backend.app.domain.account_models import CreatorIntelligence
 from backend.main import app
+
+@pytest.fixture(autouse=True)
+def _mock_ai_intelligence(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _mock(*args, **kwargs):
+        return CreatorIntelligence()
+    monkeypatch.setattr("backend.app.services.account_analysis_jobs.generate_creator_intelligence", _mock)
+    _patch_post_pipeline(monkeypatch)
+
+
 
 
 EXPECTED_POST_ANALYSIS_TOP_LEVEL_KEYS = {
@@ -64,7 +75,9 @@ class _DeferredQueue:
 
 class _ImmediateQueue:
     def enqueue(self, func, payload, **kwargs):  # noqa: ANN001
-        func(payload)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(func, payload)
+            future.result()  # Wait for completion and propagate exceptions
         return SimpleNamespace(id=kwargs.get("job_id", "job_immediate"))
 
 
@@ -180,6 +193,7 @@ def _patch_post_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(post_insights_service, "build_single_post_insights", _fake_build_single_post_insights)
     monkeypatch.setattr(post_analysis_routes, "build_single_post_insights", _fake_build_single_post_insights)
+    monkeypatch.setattr(account_analysis_jobs, "build_single_post_insights", _fake_build_single_post_insights)
 
 
 def _post_analysis_request_payload() -> dict[str, Any]:
@@ -233,8 +247,11 @@ def test_account_enqueue_dedupe_storm(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_redis = fakeredis.FakeRedis(decode_responses=True)
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(redis_client, "_redis_client", fake_redis)
+    monkeypatch.setattr(account_analysis_jobs, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
     monkeypatch.setattr(account_analysis_jobs, "ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR", 999)
+    monkeypatch.setattr(account_analysis_jobs, "incr_with_expire", lambda key, ttl: 1)
 
     client = TestClient(app)
     payload = {"account_id": "acct_storm", "post_limit": 12}
@@ -250,13 +267,21 @@ def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_redis = fakeredis.FakeRedis(decode_responses=True)
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(redis_client, "_redis_client", fake_redis)
+    monkeypatch.setattr(account_analysis_jobs, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
+
+    _rate_counter: dict[str, int] = {}
+    def _fake_incr(key: str, ttl: int) -> int:
+        _rate_counter[key] = _rate_counter.get(key, 0) + 1
+        return _rate_counter[key]
+    monkeypatch.setattr(account_analysis_jobs, "incr_with_expire", _fake_incr)
 
     client = TestClient(app)
     first = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 5})
     second = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 6})
     third = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 7})
-    fourth = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 5})
+    fourth = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 8})
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -272,6 +297,8 @@ def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_poll_missing_job_returns_404_or_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_redis = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(redis_client, "_redis_client", fake_redis)
+    monkeypatch.setattr(account_analysis_jobs, "get_redis", lambda: fake_redis)
 
     client = TestClient(app)
     response = client.get("/api/account-analysis/unknown_job_id")
@@ -283,7 +310,10 @@ def test_poll_missing_job_returns_404_or_clean_error(monkeypatch: pytest.MonkeyP
 def test_posts_summary_payload_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_redis = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(redis_client, "_redis_client", fake_redis)
+    monkeypatch.setattr(account_analysis_jobs, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _ImmediateQueue())
+    monkeypatch.setattr(account_analysis_jobs, "incr_with_expire", lambda key, ttl: 1)
 
     long_caption = "x" * 500
     posts = [_build_post_payload(index, caption_text=long_caption) for index in range(35)]
@@ -385,7 +415,10 @@ def test_post_analysis_cost_throttle_anti_spam(monkeypatch: pytest.MonkeyPatch) 
 def test_account_analysis_quality_flags_correctness(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_redis = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(redis_client, "_redis_client", fake_redis)
+    monkeypatch.setattr(account_analysis_jobs, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _ImmediateQueue())
+    monkeypatch.setattr(account_analysis_jobs, "incr_with_expire", lambda key, ttl: 1)
     
     payload = {"account_id": "quality_test", "post_limit": 2, "posts": [_build_post_payload(1), _build_post_payload(2)]}
     
@@ -409,7 +442,10 @@ def test_account_analysis_quality_flags_correctness(monkeypatch: pytest.MonkeyPa
 def test_account_analysis_scoring_constraints_impossible_states(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_redis = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(redis_client, "_redis_client", fake_redis)
+    monkeypatch.setattr(account_analysis_jobs, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _ImmediateQueue())
+    monkeypatch.setattr(account_analysis_jobs, "incr_with_expire", lambda key, ttl: 1)
     
     # AG-A6: Anti-gravity scoring constraints (impossible states)
     bad_posts = []

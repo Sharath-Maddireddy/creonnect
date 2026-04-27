@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from services import post_insights
+from backend.app.services_legacy import post_insights
 
 
 class _DummyCacheRepo:

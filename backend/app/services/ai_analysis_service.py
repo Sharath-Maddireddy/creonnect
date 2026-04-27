@@ -43,6 +43,7 @@ from backend.app.utils.logger import logger
 CACHE_TTL_SECONDS = 86400
 MIN_REGEN_SECONDS = 7200
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
+_DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 
 
 def _parse_timeout(env_key: str, default: float) -> float:
@@ -642,8 +643,7 @@ async def run_vision_analysis(
 def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
     import google.generativeai as genai
 
-    # Use gemini-flash-latest for better compatibility with this SDK and free-tier quota.
-    model_name = "gemini-flash-latest"
+    model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
     try:
         # google.generativeai.configure() mutates global state, so guard configure+request.
         with _GENAI_LOCK:

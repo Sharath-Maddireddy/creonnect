@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Creonnect - Creator Intelligence Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0B0E14;
+            --surface-color: rgba(22, 27, 34, 0.6);
+            --surface-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #F0F6FC;
+            --text-secondary: #8B949E;
+            --accent-primary: #58A6FF;
+            --accent-gradient: linear-gradient(135deg, #58A6FF 0%, #B392F0 100%);
+            --success: #3FB950;
+            --warning: #D29922;
+            --danger: #F85149;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(88, 166, 255, 0.08), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(179, 146, 240, 0.08), transparent 25%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 40px 20px;
+        }
+
+        .dashboard-container {
+            max-width: 1200px;
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 24px;
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Glassmorphism Cards */
+        .card {
+            background: var(--surface-color);
+            border: 1px solid var(--surface-border);
+            border-radius: 20px;
+            padding: 28px;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        h1, h2, h3 {
+            font-family: 'Outfit', sans-serif;
+            margin: 0 0 16px 0;
+        }
+
+        .header-section {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .profile-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: var(--accent-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: bold;
+            box-shadow: 0 0 20px rgba(88, 166, 255, 0.4);
+        }
+
+        .profile-text h1 {
+            margin: 0;
+            font-size: 32px;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .profile-text p {
+            margin: 4px 0 0 0;
+            color: var(--text-secondary);
+            font-size: 16px;
+        }
+
+        .top-level-score {
+            text-align: right;
+        }
+
+        .score-value {
+            font-size: 48px;
+            font-weight: 800;
+            font-family: 'Outfit', sans-serif;
+            color: var(--success);
+            text-shadow: 0 0 20px rgba(63, 185, 80, 0.3);
+        }
+
+        /* Metric Grids */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .metric-card {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid var(--surface-border);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 3px;
+            background: var(--accent-gradient);
+            opacity: 0.7;
+        }
+
+        .metric-label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .metric-value {
+            font-size: 32px;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+        }
+
+        /* AI Intelligence Section */
+        .ai-section {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .ai-block h3 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--accent-primary);
+            font-size: 18px;
+        }
+
+        .ai-block p {
+            color: var(--text-primary);
+            line-height: 1.6;
+            font-size: 15px;
+            margin: 0;
+        }
+
+        .tags-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .tag {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            background: rgba(88, 166, 255, 0.1);
+            color: var(--accent-primary);
+            border: 1px solid rgba(88, 166, 255, 0.2);
+        }
+
+        .tag.red-flag {
+            background: rgba(248, 81, 73, 0.1);
+            color: var(--danger);
+            border-color: rgba(248, 81, 73, 0.2);
+        }
+
+        .tag.theme {
+            background: rgba(179, 146, 240, 0.1);
+            color: #B392F0;
+            border-color: rgba(179, 146, 240, 0.2);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .progress-bar-container {
+            margin-top: 12px;
+        }
+        
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+        }
+
+        .progress-track {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-gradient);
+            border-radius: 4px;
+            width: 0;
+            transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .progress-fill.danger { background: var(--danger); }
+        .progress-fill.success { background: var(--success); }
+
+        .list-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--surface-border);
+        }
+        .list-item:last-child { border-bottom: none; }
+        .list-item span { font-size: 14px; }
+        .icon-warn { color: var(--warning); }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard-container">
+        <!-- Header -->
+        <div class="header-section">
+            <div class="profile-info">
+                <div class="avatar">F</div>
+                <div class="profile-text">
+                    <h1>@fitnesscreator</h1>
+                    <p>85.2K Followers • Fitness & Wellness</p>
+                </div>
+            </div>
+            <div class="top-level-score">
+                <div class="metric-label">Account Health Score</div>
+                <div class="score-value">74.5 <span style="font-size: 20px; color: var(--text-secondary);">/ 100</span></div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Deterministic Engagement Signals -->
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-label">Audience Trust Index</div>
+                    <div class="metric-value" style="color: #58A6FF;">63.1</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">High conversion to saves</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Virality Potential</div>
+                    <div class="metric-value" style="color: #B392F0;">60.4</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Strong share velocity</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Consistency Score</div>
+                    <div class="metric-value" style="color: #3FB950;">83.7</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Highly stable engagement</div>
+                </div>
+            </div>
+
+            <!-- AI Intelligence Card -->
+            <div class="card ai-section">
+                <h2 style="margin-bottom: 0;">✨ Creator Intelligence</h2>
+                
+                <div class="ai-block">
+                    <h3>Creator Persona</h3>
+                    <p>This creator focuses on fitness, providing daily motivation and high-intensity interval training (HIIT) workouts. Their audience consists of fitness enthusiasts looking for effective home workouts and meal prep ideas. They project a highly energetic and authoritative persona.</p>
+                </div>
+
+                <div class="ai-block">
+                    <h3>Content Style & Production</h3>
+                    <p>The content features high-energy fitness visuals, often showcasing dynamic workouts and meal preparation. The production quality is generally high, appealing to viewers seeking professional-looking fitness content. Frequent use of fast cuts and energetic background music.</p>
+                </div>
+
+                <div class="ai-block">
+                    <h3>Top Performing Themes</h3>
+                    <div class="tags-container">
+                        <span class="tag theme"># HIIT Workouts</span>
+                        <span class="tag theme"># Morning Routines</span>
+                        <span class="tag theme"># Meal Prep</span>
+                        <span class="tag theme"># Recovery Tips</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar (Vision & Brand Fit) -->
+        <div class="sidebar">
+            <div class="card">
+                <h2>Vision Summary</h2>
+                
+                <div class="progress-bar-container">
+                    <div class="progress-label"><span>Avg. Hook Strength</span> <span>81%</span></div>
+                    <div class="progress-track"><div class="progress-fill success" style="width: 81%;"></div></div>
+                </div>
+
+                <div class="progress-bar-container">
+                    <div class="progress-label"><span>Avg. Cringe Score</span> <span style="color: var(--success);">15% (Low)</span></div>
+                    <div class="progress-track"><div class="progress-fill danger" style="width: 15%;"></div></div>
+                </div>
+
+                <div class="progress-bar-container" style="margin-bottom: 20px;">
+                    <div class="progress-label"><span>Production Level</span> <span style="color: var(--accent-primary);">High</span></div>
+                    <div class="progress-track"><div class="progress-fill" style="width: 90%;"></div></div>
+                </div>
+
+                <h3 style="font-size: 14px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 8px;">Technical Flaws Detected</h3>
+                <div class="list-item">
+                    <span class="icon-warn">⚠️</span>
+                    <span>Slight overexposure (12 posts)</span>
+                </div>
+                <div class="list-item">
+                    <span class="icon-warn">⚠️</span>
+                    <span>Shaky camera (4 posts)</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Brand Fit</h2>
+                
+                <h3 style="font-size: 14px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 12px;">Perfect For</h3>
+                <div class="tags-container" style="margin-bottom: 20px;">
+                    <span class="tag">Fitness Apparel</span>
+                    <span class="tag">Health Supplements</span>
+                    <span class="tag">Workout Apps</span>
+                </div>
+
+                <h3 style="font-size: 14px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 12px;">Red Flags</h3>
+                <div class="tags-container">
+                    <span class="tag red-flag">Occasional explicit language</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Simple animation trigger
+        window.onload = () => {
+            const fills = document.querySelectorAll('.progress-fill');
+            fills.forEach(fill => {
+                const targetWidth = fill.style.width;
+                fill.style.width = '0%';
+                setTimeout(() => {
+                    fill.style.width = targetWidth;
+                }, 100);
+            });
+        };
+    </script>
+</body>
+</html>

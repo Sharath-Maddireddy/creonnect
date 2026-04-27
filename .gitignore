@@ -58,4 +58,7 @@ test_output.txt
 test_reel_e2e.py
 test_brand_match.py
 
+# Pytest temporary directories
 pytest-cache-files-*/
+.pytest_tmp/
+backend/ml/data/*.jsonl

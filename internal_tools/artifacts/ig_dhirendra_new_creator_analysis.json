@@ -1,0 +1,131 @@
+{
+  "ahs_score": 73.0,
+  "ahs_band": "STRONG",
+  "pillars": {
+    "content_quality": {
+      "score": 52.5,
+      "band": "AVERAGE",
+      "notes": []
+    },
+    "engagement_quality": {
+      "score": 85.0,
+      "band": "EXCEPTIONAL",
+      "notes": [
+        "Account average engagement rate unavailable; used absolute ER band mapping."
+      ]
+    },
+    "niche_fit": {
+      "score": 50.0,
+      "band": "AVERAGE",
+      "notes": [
+        "Niche average engagement benchmark unavailable; niche fit based on S4 only."
+      ]
+    },
+    "consistency": {
+      "score": 90.0,
+      "band": "EXCEPTIONAL",
+      "notes": []
+    },
+    "brand_safety": {
+      "score": 100.0,
+      "band": "EXCEPTIONAL",
+      "notes": []
+    }
+  },
+  "drivers": [
+    {
+      "id": "limited_history_context",
+      "label": "Limited post history",
+      "type": "LIMITING",
+      "explanation": "Fewer than 10 posts in history; account-level confidence is reduced."
+    }
+  ],
+  "recommendations": [],
+  "metadata": {
+    "post_count_used": 5,
+    "min_history_threshold_met": false,
+    "time_window_days": 10
+  },
+  "creator_intelligence": null,
+  "vision_summary": null,
+  "engagement_signals": null,
+  "posts_summary": [
+    {
+      "post_id": "POST_001_fitness",
+      "post_type": "IMAGE",
+      "caption_preview": "Morning workout done! \ud83d\udcaa Starting the day right with a high-intensity session. Consistency is key! #fitness #morningworko",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 26.5,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 54.98,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "POST_002_food",
+      "post_type": "IMAGE",
+      "caption_preview": "Healthy meal prep for the week \ud83e\udd57 Balanced macros, clean ingredients. What's your go-to prep meal? Drop it below \ud83d\udc47 #mealp",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 26.5,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 54.98,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "POST_003_travel",
+      "post_type": "IMAGE",
+      "caption_preview": "Weekend getaway to the mountains \ud83c\udfd4\ufe0f Nature heals everything. Sometimes you just need to disconnect to reconnect. #travel",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 26.5,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 54.98,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "POST_004_reel",
+      "post_type": "REEL",
+      "caption_preview": "5 mistakes you're making at the gym \ud83d\udeab Watch till the end for the most common one! #gymtips #fitnessmistakes #workout #re",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 36.5,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 59.68,
+        "predicted_er": null
+      }
+    },
+    {
+      "post_id": "POST_005_lifestyle",
+      "post_type": "IMAGE",
+      "caption_preview": "Team brainstorm session \ud83e\udde0 Building something exciting with these amazing people. Stay tuned for big announcements! #entr",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 26.5,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 54.98,
+        "predicted_er": null
+      }
+    }
+  ],
+  "account_id": "ig_dhirendra",
+  "posts_analyzed": 5
+}

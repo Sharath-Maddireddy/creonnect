@@ -7,6 +7,7 @@ import pytest
 from backend.app.ai.prompts_brand import CAMPAIGN_BRIEF_EXTRACTION_PROMPT
 from backend.app.services.campaign_prompt_service import (
     _fallback_keyword_extraction,
+    _infer_follower_tier,
     build_brand_profile_from_parsed,
     parse_campaign_prompt,
 )
@@ -27,6 +28,24 @@ def test_fallback_keyword_extraction_no_niche() -> None:
     
     assert parsed["niche"] == "general"
     assert parsed["min_followers"] == 100000
+
+
+def test_infer_nano_tier() -> None:
+    result = _infer_follower_tier("I want authentic micro influencers for my brand")
+    assert result["min_followers"] == 5000
+    assert result["max_followers"] == 100000
+
+
+def test_infer_macro_tier() -> None:
+    result = _infer_follower_tier("We need viral mega creators with massive reach")
+    assert result["min_followers"] == 500000
+    assert result["max_followers"] is None
+
+
+def test_infer_no_tier() -> None:
+    result = _infer_follower_tier("I want fitness creators")
+    assert result["min_followers"] is None
+    assert result["max_followers"] is None
 
 
 def test_build_brand_profile_from_parsed_valid() -> None:
@@ -84,6 +103,20 @@ def test_parse_campaign_prompt_success(monkeypatch) -> None:
     assert parsed["niche"] == "fitness"
     assert parsed["min_followers"] == 10000
     assert parsed["min_engagement_rate"] == 0.03
+    assert parsed["follower_tier_inferred"] is None
+
+
+def test_parse_campaign_prompt_infers_follower_tier_when_bounds_missing(monkeypatch) -> None:
+    def mock_generate(*args, **kwargs):  # noqa: ANN002, ANN003
+        return "brand_name: FitCo\nniche: fitness\nmin_followers: null\nmax_followers: null"
+
+    monkeypatch.setattr("backend.app.ai.llm_client.LLMClient.generate", mock_generate)
+
+    parsed = parse_campaign_prompt("I want authentic micro influencers for my brand")
+
+    assert parsed["min_followers"] == 5000
+    assert parsed["max_followers"] == 100000
+    assert parsed["follower_tier_inferred"] == "nano-micro"
 
 
 def test_parse_campaign_prompt_falls_back_when_toon_returns_non_dict(monkeypatch) -> None:

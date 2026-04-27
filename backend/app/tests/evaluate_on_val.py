@@ -19,10 +19,12 @@ from backend.app.ai.niche import detect_creator_niche
 from backend.app.ai.growth_score import compute_growth_score
 from backend.app.ai.post_insights import analyze_posts
 
+DATA_DIR = Path(__file__).resolve().parents[2] / "ml" / "data"
+
 
 def load_val_data():
     """Load validation examples from val.jsonl."""
-    val_file = Path(__file__).parent / "val.jsonl"
+    val_file = DATA_DIR / "val.jsonl"
     examples = []
     
     with open(val_file, "r", encoding="utf-8") as f:

@@ -18,7 +18,7 @@ from backend.ml.clean_action_dataset import (
 )
 
 
-INPUT_PATH = ROOT_DIR / "backend" / "app" / "tests" / "training_data.jsonl"
+INPUT_PATH = ROOT_DIR / "backend" / "ml" / "data" / "training_data.jsonl"
 ENRICHED_PATH = ROOT_DIR / "backend" / "data" / "training_data_with_actions.jsonl"
 CHAT_TRAIN_PATH = ROOT_DIR / "backend" / "data" / "chat_train.jsonl"
 CHAT_VAL_PATH = ROOT_DIR / "backend" / "data" / "chat_val.jsonl"

@@ -20,7 +20,7 @@ from backend.ml.clean_action_dataset import (
 )
 
 
-INPUT_PATH = ROOT_DIR / "backend" / "app" / "tests" / "training_data.jsonl"
+INPUT_PATH = ROOT_DIR / "backend" / "ml" / "data" / "training_data.jsonl"
 OUTPUT_PATH = ROOT_DIR / "backend" / "data" / "training_data_scaled.jsonl"
 
 DEFAULT_NICHES = [

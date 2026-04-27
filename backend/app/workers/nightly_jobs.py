@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.analytics.audience_quality import calculate_authenticity_score
 from backend.app.infra.database import get_sync_sessionmaker
-from backend.app.infra.models import CreatorDiscoveryMeta
+from backend.app.infra.models import CreatorDiscoveryMeta, FollowerSnapshot
 from backend.app.utils.logger import logger
 
 
@@ -17,6 +19,31 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value) if value else default
     except (TypeError, ValueError):
         return default
+
+
+def record_follower_snapshot(account_id: str, follower_count: int) -> None:
+    """Upsert today's follower snapshot for the given creator account."""
+    session_factory = get_sync_sessionmaker()
+    today = date.today()
+
+    with session_factory() as session:
+        existing_snapshot = session.scalar(
+            select(FollowerSnapshot).where(
+                FollowerSnapshot.account_id == account_id,
+                FollowerSnapshot.snapshot_date == today,
+            )
+        )
+        if existing_snapshot is None:
+            session.add(
+                FollowerSnapshot(
+                    account_id=account_id,
+                    snapshot_date=today,
+                    follower_count=int(follower_count),
+                )
+            )
+        else:
+            existing_snapshot.follower_count = int(follower_count)
+        session.commit()
 
 
 def run_authenticity_refresh_job() -> None:

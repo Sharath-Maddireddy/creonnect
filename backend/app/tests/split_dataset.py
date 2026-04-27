@@ -10,14 +10,15 @@ import json
 import random
 from pathlib import Path
 
+DATA_DIR = Path(__file__).resolve().parents[2] / "ml" / "data"
+
 
 def split_dataset(train_ratio: float = 0.8, seed: int = 42):
     """Split training_data.jsonl into train and val sets."""
-    
-    script_dir = Path(__file__).parent
-    input_file = script_dir / "training_data.jsonl"
-    train_file = script_dir / "train.jsonl"
-    val_file = script_dir / "val.jsonl"
+
+    input_file = DATA_DIR / "training_data.jsonl"
+    train_file = DATA_DIR / "train.jsonl"
+    val_file = DATA_DIR / "val.jsonl"
     
     # Load all examples
     examples = []

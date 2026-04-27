@@ -896,6 +896,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
     job_id = current_job_id or raw_job_id or str(uuid4())
     account_id = _normalize_account_id(payload.get("account_id"))
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
+    include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
     include_posts_summary_max = _normalize_include_posts_summary_max(payload.get("include_posts_summary_max", 30))
     vision_enabled = bool((os.getenv("GEMINI_API_KEY") or "").strip())
     warnings_global: list[dict[str, Any]] = []
@@ -1038,7 +1039,8 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             logger.warning("[AccountAnalysisJob] Non-fatal: failed to enqueue embedding ingestion for %s: %s", account_id, embed_exc)
 
         try:
-            result_payload["posts_summary"] = _bounded_posts_summary(
+            if include_posts_summary:
+                result_payload["posts_summary"] = _bounded_posts_summary(
                 processed_posts,
                 include_posts_summary_max=include_posts_summary_max,
                 vision_enabled=vision_enabled,

@@ -88,10 +88,18 @@ def incr_with_expire(key: str, ttl_seconds: int) -> int:
     """Increment counter and ensure the key keeps a TTL."""
     global _incr_script
     redis_client = get_redis()
-    if _incr_script is None:
-        _incr_script = redis_client.register_script(_INCR_WITH_EXPIRE_SCRIPT)
-    value = _incr_script(keys=[key], args=[max(1, int(ttl_seconds))], client=redis_client)
-    return int(value)
+    try:
+        if _incr_script is None:
+            _incr_script = redis_client.register_script(_INCR_WITH_EXPIRE_SCRIPT)
+        value = _incr_script(keys=[key], args=[max(1, int(ttl_seconds))], client=redis_client)
+        return int(value)
+    except Exception:
+        # Fallback for environments without Lua support (e.g. fakeredis in tests)
+        # This is non-atomic but acceptable in such environments.
+        value = redis_client.incr(key)
+        if int(value) == 1:
+            redis_client.expire(key, max(1, int(ttl_seconds)))
+        return int(value)
 
 
 def get_json(key: str) -> dict[str, Any] | None:
@@ -138,8 +146,15 @@ async def aget_text(key: str) -> str | None:
 async def aincr_with_expire(key: str, ttl_seconds: int) -> int:
     """Increment counter and ensure the key keeps a TTL using async Redis."""
     redis_client = get_async_redis()
-    value = await redis_client.eval(_INCR_WITH_EXPIRE_SCRIPT, 1, key, max(1, int(ttl_seconds)))
-    return int(value)
+    try:
+        value = await redis_client.eval(_INCR_WITH_EXPIRE_SCRIPT, 1, key, max(1, int(ttl_seconds)))
+        return int(value)
+    except Exception:
+        # Fallback for environments without Lua support
+        value = await redis_client.incr(key)
+        if int(value) == 1:
+            await redis_client.expire(key, max(1, int(ttl_seconds)))
+        return int(value)
 
 
 async def aget_json(key: str) -> dict[str, Any] | None:

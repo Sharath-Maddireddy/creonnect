@@ -140,6 +140,19 @@ def _get_creators_by_ids(account_ids: list[str]) -> list[dict]:
 
 def _find_lookalikes_sqlite_fallback(account_id: str, k: int) -> list[dict] | None:
     creators = get_all_creators()
+    if len(creators) > 200:
+        logger.warning(
+            "[CreatorPoolService] SQLite cosine fallback running on %d creators — "
+            "consider switching to PostgreSQL for production lookalike search.",
+            len(creators),
+        )
+    if len(creators) > 2000:
+        logger.warning(
+            "[CreatorPoolService] SQLite cosine fallback safety cap hit at %d creators; "
+            "returning no lookalikes.",
+            len(creators),
+        )
+        return []
     target_creator = next((creator for creator in creators if creator.get("account_id") == account_id), None)
     if target_creator is None:
         return None
@@ -176,7 +189,12 @@ def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
             if target_exists is None:
                 return None
 
-            if session.bind is None or session.bind.dialect.name != "postgresql":
+            try:
+                bind = session.get_bind()
+                dialect_name = bind.dialect.name
+            except Exception:
+                dialect_name = "unknown"
+            if dialect_name != "postgresql":
                 return _find_lookalikes_sqlite_fallback(account_id, k)
 
             target_embedding = session.scalar(
