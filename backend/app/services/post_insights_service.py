@@ -24,6 +24,7 @@ from backend.app.services.ai_analysis_service import (
     run_caption_analysis_llm,
 )
 from backend.app.services.post_snapshot_store import write_post_insights_snapshot
+from backend.app.utils.logger import logger
 
 
 class SinglePostInsightsResponse(TypedDict):
@@ -85,6 +86,15 @@ async def build_single_post_insights(
     """
     target_post_model = _coerce_single_post_insights(target_post)
     historical_models = [_coerce_single_post_insights(post) for post in historical_posts]
+    logger.info(
+        "[PostInsights] Start media_id=%s account_id=%s history_count=%d run_ai=%s advanced_caption=%s advanced_audience=%s",
+        target_post_model.media_id,
+        target_post_model.account_id,
+        len(historical_models),
+        run_ai,
+        run_advanced_caption_ai,
+        run_advanced_audience_ai,
+    )
 
     if target_post_model.core_metrics is None:
         raise ValueError("target_post.core_metrics must not be None")
@@ -94,14 +104,26 @@ async def build_single_post_insights(
     filtered_history = [
         post for post in historical_models if post.media_id != target_post_model.media_id
     ]
+    logger.debug(
+        "[PostInsights] Filtered history media_id=%s historical_count=%d comparable_count=%d",
+        target_post_model.media_id,
+        len(historical_models),
+        len(filtered_history),
+    )
 
     post_copy = target_post_model.model_copy(update={})
 
     derived_metrics = compute_derived_metrics(post_copy.core_metrics)
     post_copy = post_copy.model_copy(update={"derived_metrics": derived_metrics})
+    logger.debug(
+        "[PostInsights] Derived metrics media_id=%s engagement_rate=%s",
+        post_copy.media_id,
+        getattr(derived_metrics, "engagement_rate", None),
+    )
 
     caption_effectiveness_score: CaptionEffectivenessScore | None = None
     if run_advanced_caption_ai and isinstance(post_copy.caption_text, str) and post_copy.caption_text.strip():
+        logger.debug("[PostInsights] Running advanced caption AI media_id=%s", post_copy.media_id)
         s2_payload = await run_caption_analysis_llm(post_copy.caption_text)
         if isinstance(s2_payload, dict):
             try:
@@ -109,6 +131,7 @@ async def build_single_post_insights(
             except Exception:
                 caption_effectiveness_score = None
     if caption_effectiveness_score is None:
+        logger.debug("[PostInsights] Using deterministic caption scoring media_id=%s", post_copy.media_id)
         caption_effectiveness_score = compute_s2_caption_effectiveness(post_copy.caption_text)
     post_copy = post_copy.model_copy(update={"caption_effectiveness_score": caption_effectiveness_score})
 
@@ -116,6 +139,12 @@ async def build_single_post_insights(
     creator_cat = post_copy.creator_dominant_category
     post_cat = post_copy.post_category
     if run_advanced_audience_ai and (creator_cat or post_cat):
+        logger.debug(
+            "[PostInsights] Running advanced audience AI media_id=%s creator_category=%s post_category=%s",
+            post_copy.media_id,
+            creator_cat,
+            post_cat,
+        )
         s4_payload = await run_audience_relevance_llm(creator_cat, post_cat)
         if isinstance(s4_payload, dict):
             affinity = s4_payload.get("affinity_band", "UNKNOWN")
@@ -138,11 +167,18 @@ async def build_single_post_insights(
                 notes=notes,
             )
     if audience_relevance_score is None:
+        logger.debug("[PostInsights] Using deterministic audience scoring media_id=%s", post_copy.media_id)
         audience_relevance_score = compute_s4_audience_relevance(post_cat, creator_cat)
     post_copy = post_copy.model_copy(update={"audience_relevance_score": audience_relevance_score})
 
     benchmark_metrics = compute_benchmark_metrics(post_copy, filtered_history)
     post_copy = post_copy.model_copy(update={"benchmark_metrics": benchmark_metrics})
+    logger.debug(
+        "[PostInsights] Benchmarks media_id=%s tier_avg_er=%s percentile_rank=%s",
+        post_copy.media_id,
+        getattr(benchmark_metrics, "tier_avg_engagement_rate", None),
+        getattr(benchmark_metrics, "percentile_engagement_rank", None),
+    )
 
     content_score = compute_content_score(
         post_copy.derived_metrics,
@@ -151,6 +187,7 @@ async def build_single_post_insights(
 
     ai_analysis: dict[str, Any] | None = None
     if run_ai:
+        logger.info("[PostInsights] Running post AI analysis media_id=%s", post_copy.media_id)
         ai_analysis = await analyze_single_post_ai(post_copy)
 
     if isinstance(post_copy.media_id, str) and post_copy.media_id.strip():
@@ -159,7 +196,14 @@ async def build_single_post_insights(
             post=post_copy,
             ai_analysis=ai_analysis,
         )
+        logger.debug("[PostInsights] Snapshot persisted media_id=%s", post_copy.media_id)
 
+    logger.info(
+        "[PostInsights] Completed media_id=%s content_score=%s ai_analysis=%s",
+        post_copy.media_id,
+        content_score.get("content_score") if isinstance(content_score, dict) else None,
+        ai_analysis is not None,
+    )
     return {
         "post": post_copy,
         "content_score": content_score,

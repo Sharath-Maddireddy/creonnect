@@ -1,0 +1,3 @@
+display_name: Creonnect Fullstack
+short_description: Repo guide for Creonnect backend, analytics, AI, infra, and frontend work
+default_prompt: Work on the Creonnect repository using the skill instructions and references to locate the correct product layer, follow the main runtime flow, and validate changes with focused tests.

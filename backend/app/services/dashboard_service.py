@@ -15,23 +15,6 @@ from backend.app.ingestion.instagram_oauth import (
     fetch_instagram_media,
     fetch_instagram_profile,
 )
-"""
-Dashboard Service
-
-Orchestrates creator dashboard data assembly.
-"""
-
-import asyncio
-from datetime import date, timedelta
-
-from backend.app.ai.schemas import CreatorPostAIInput
-from backend.app.analytics.audience_quality import calculate_authenticity_score
-from backend.app.demo.synthetic_loader import load_synthetic
-from backend.app.ingestion.instagram_mapper import map_instagram_to_ai_inputs
-from backend.app.ingestion.instagram_oauth import (
-    fetch_instagram_media,
-    fetch_instagram_profile,
-)
 from backend.app.analytics.account_health_engine import (
     compute_account_health_score,
     compute_account_engagement_signals,

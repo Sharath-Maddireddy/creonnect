@@ -13,6 +13,7 @@ from datetime import datetime
 from backend.app.analytics.account_health_engine import compute_account_health_score
 from backend.app.domain.account_models import AccountHealthScore
 from backend.app.domain.post_models import SinglePostInsights
+from backend.app.utils.logger import logger
 
 
 ACCOUNT_HEALTH_CACHE_TTL_SECONDS = 3600
@@ -116,12 +117,22 @@ def analyze_account_health(
     """
 
     key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band)
+    account_id = posts[0].account_id if posts and isinstance(posts[0].account_id, str) else "unknown_account"
+    logger.info(
+        "[AccountHealth] Start account_id=%s post_count=%d use_cache=%s follower_band=%s",
+        account_id,
+        len(posts),
+        use_cache,
+        follower_band,
+    )
     current_ts = time.time()
     if use_cache:
         _purge_expired_cache_entries(current_ts)
         cached = _get_cached_account_health(key, current_ts)
         if cached is not None:
+            logger.info("[AccountHealth] Cache hit account_id=%s post_count=%d", account_id, len(posts))
             return cached
+        logger.debug("[AccountHealth] Cache miss account_id=%s key_prefix=%s", account_id, key[:16])
 
     result = compute_account_health_score(
         posts=posts,
@@ -130,8 +141,15 @@ def analyze_account_health(
         follower_band=follower_band,
         now_ts=now_ts,
     )
+    logger.info(
+        "[AccountHealth] Computed account_id=%s score=%s band=%s",
+        account_id,
+        getattr(result, "ahs_score", None),
+        getattr(result, "ahs_band", None),
+    )
 
     if use_cache:
         _set_cached_account_health(key, result, current_ts)
+        logger.debug("[AccountHealth] Cached account_id=%s key_prefix=%s", account_id, key[:16])
 
     return result

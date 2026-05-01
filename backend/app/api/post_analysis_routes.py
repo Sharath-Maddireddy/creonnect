@@ -19,6 +19,10 @@ from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.domain.post_models import SinglePostInsights, VisionAnalysis
 from backend.app.infra.redis_client import get_json, set_json
 from backend.app.services.post_insights_service import build_single_post_insights
+from backend.app.services.single_post_analysis_jobs import (
+    enqueue_single_post_analysis_job_async,
+    get_single_post_analysis_job_status,
+)
 from backend.app.services.post_snapshot_store import read_post_insights_snapshot
 from backend.app.utils.logger import logger
 
@@ -53,6 +57,8 @@ class PostAnalysisRequest(BaseModel):
     views: int | None = None
     audio_name: str | None = None
     posted_at: datetime | None = None
+    actor_user_id: str | None = None
+    actor_user_email: str | None = None
 
     @field_validator("media_url", mode="before")
     @classmethod
@@ -418,6 +424,26 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
         "post": raw_post,
         "ai_analysis": payload.get("ai_analysis") if isinstance(payload.get("ai_analysis"), dict) else None,
     }
+
+
+@legacy_router.post("/single-post-analysis")
+async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str, str]:
+    """Enqueue single-post analysis as a background job."""
+    payload = request.model_dump(mode="python")
+    try:
+        return await enqueue_single_post_analysis_job_async(payload)
+    except Exception as exc:
+        logger.exception("[SinglePostJob] Failed to enqueue single-post analysis job: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to enqueue single-post analysis job.") from exc
+
+
+@legacy_router.get("/single-post-analysis/{job_id}")
+def get_single_post_analysis_status(job_id: str) -> dict[str, Any]:
+    """Poll single-post analysis background job status."""
+    status = get_single_post_analysis_job_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
+    return status
 
 
 router.include_router(v1_router)

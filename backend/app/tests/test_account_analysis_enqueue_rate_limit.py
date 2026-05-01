@@ -148,18 +148,21 @@ def test_enqueue_failure_rolls_back_rate_counter_and_mappings(monkeypatch) -> No
     assert calls["rate_restores"] == 1
 
 
-def test_access_token_is_not_enqueued_in_job_payload(monkeypatch) -> None:
+def test_creonnect_bd_source_is_materialized_before_enqueue(monkeypatch) -> None:
     def _assert_ready() -> None:
         return None
 
-    async def _fake_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
-        assert access_token == "secret-token"
-        assert limit == 5
-        return [{"id": "m_1"}]
-
-    def _fake_map_instagram_posts(raw_media: list[dict[str, str]]) -> list[SinglePostInsights]:
-        assert raw_media == [{"id": "m_1"}]
-        return [_build_post(1)]
+    async def _fake_materialize_account_source_payload(payload: dict[str, Any], *, post_limit: int) -> dict[str, Any]:
+        assert payload["source"] == "creonnect_bd"
+        assert payload["connection_id"] == "conn_123"
+        assert post_limit == 5
+        return {
+            "account_id": "acct_secure",
+            "post_limit": 5,
+            "posts": [_build_post(1).model_dump(mode="python")],
+            "source": "creonnect_bd",
+            "source_ref": "conn_123",
+        }
 
     queue = _QueueStub(assert_ready=_assert_ready)
     monkeypatch.setattr(account_analysis_jobs, "_resolve_reusable_job", lambda *args, **kwargs: (None, None))
@@ -168,45 +171,46 @@ def test_access_token_is_not_enqueued_in_job_payload(monkeypatch) -> None:
     monkeypatch.setattr(account_analysis_jobs, "initialize_job_status", lambda _job_id: {"job_id": _job_id})
     monkeypatch.setattr(account_analysis_jobs, "_write_dedupe_job_id", lambda *args, **kwargs: None)
     monkeypatch.setattr(account_analysis_jobs, "_write_inputhash_job_id", lambda *args, **kwargs: None)
-    monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _fake_fetch_instagram_media)
-    monkeypatch.setattr(account_analysis_jobs, "map_instagram_posts", _fake_map_instagram_posts)
+    monkeypatch.setattr(account_analysis_jobs, "materialize_account_source_payload", _fake_materialize_account_source_payload)
 
-    payload = {"account_id": "acct_secure", "post_limit": 5, "access_token": "secret-token"}
+    payload = {"source": "creonnect_bd", "connection_id": "conn_123", "post_limit": 5}
     result = account_analysis_jobs.enqueue_account_analysis_job(payload)
 
     assert result["status"] == "queued"
     assert len(queue.calls) == 1
     enqueue_args, _enqueue_kwargs = queue.calls[0]
     queued_payload = enqueue_args[1]
-    assert "access_token" not in queued_payload
     assert queued_payload["account_id"] == "acct_secure"
     assert queued_payload["post_limit"] == 5
+    assert queued_payload["source"] == "creonnect_bd"
+    assert queued_payload["source_ref"] == "conn_123"
     assert isinstance(queued_payload.get("posts"), list)
     assert len(queued_payload["posts"]) == 1
 
 
-def test_access_token_materialization_requires_async_helper_inside_running_event_loop(monkeypatch) -> None:
-    async def _fake_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
-        assert access_token == "secret-token"
-        assert limit == 5
-        return [{"id": "m_1"}]
+def test_source_materialization_requires_async_helper_inside_running_event_loop(monkeypatch) -> None:
+    async def _fake_materialize_account_source_payload(payload: dict[str, Any], *, post_limit: int) -> dict[str, Any]:
+        assert payload["source"] == "creonnect_bd"
+        assert payload["connection_id"] == "conn_123"
+        assert post_limit == 5
+        return {
+            "account_id": "acct_secure",
+            "post_limit": 5,
+            "posts": [_build_post(1).model_dump(mode="python")],
+            "source": "creonnect_bd",
+        }
 
-    def _fake_map_instagram_posts(raw_media: list[dict[str, str]]) -> list[SinglePostInsights]:
-        assert raw_media == [{"id": "m_1"}]
-        return [_build_post(1)]
-
-    monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _fake_fetch_instagram_media)
-    monkeypatch.setattr(account_analysis_jobs, "map_instagram_posts", _fake_map_instagram_posts)
+    monkeypatch.setattr(account_analysis_jobs, "materialize_account_source_payload", _fake_materialize_account_source_payload)
 
     async def _run_sync_inside_loop() -> None:
         account_analysis_jobs._materialize_posts_for_enqueue(
-            {"account_id": "acct_secure", "access_token": "secret-token"},
+            {"source": "creonnect_bd", "connection_id": "conn_123"},
             post_limit=5,
         )
 
     async def _run_async_inside_loop() -> dict[str, Any]:
         return await account_analysis_jobs._materialize_posts_for_enqueue_async(
-            {"account_id": "acct_secure", "access_token": "secret-token"},
+            {"source": "creonnect_bd", "connection_id": "conn_123"},
             post_limit=5,
         )
 
@@ -218,23 +222,26 @@ def test_access_token_materialization_requires_async_helper_inside_running_event
         raise AssertionError("Expected ValueError when sync materialization runs inside an event loop")
 
     result = asyncio.run(_run_async_inside_loop())
-    assert "access_token" not in result
+    assert result["source"] == "creonnect_bd"
     assert isinstance(result.get("posts"), list)
     assert len(result["posts"]) == 1
 
 
-def test_async_enqueue_materializes_access_token_without_enqueuing_it(monkeypatch) -> None:
+def test_async_enqueue_materializes_creonnect_bd_source(monkeypatch) -> None:
     def _assert_ready() -> None:
         return None
 
-    async def _fake_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
-        assert access_token == "secret-token"
-        assert limit == 5
-        return [{"id": "m_1"}]
-
-    def _fake_map_instagram_posts(raw_media: list[dict[str, str]]) -> list[SinglePostInsights]:
-        assert raw_media == [{"id": "m_1"}]
-        return [_build_post(1)]
+    async def _fake_materialize_account_source_payload(payload: dict[str, Any], *, post_limit: int) -> dict[str, Any]:
+        assert payload["source"] == "creonnect_bd"
+        assert payload["connection_id"] == "conn_123"
+        assert post_limit == 5
+        return {
+            "account_id": "acct_secure",
+            "post_limit": 5,
+            "posts": [_build_post(1).model_dump(mode="python")],
+            "source": "creonnect_bd",
+            "source_ref": "conn_123",
+        }
 
     queue = _QueueStub(assert_ready=_assert_ready)
     monkeypatch.setattr(account_analysis_jobs, "_resolve_reusable_job", lambda *args, **kwargs: (None, None))
@@ -243,35 +250,35 @@ def test_async_enqueue_materializes_access_token_without_enqueuing_it(monkeypatc
     monkeypatch.setattr(account_analysis_jobs, "initialize_job_status", lambda _job_id: {"job_id": _job_id})
     monkeypatch.setattr(account_analysis_jobs, "_write_dedupe_job_id", lambda *args, **kwargs: None)
     monkeypatch.setattr(account_analysis_jobs, "_write_inputhash_job_id", lambda *args, **kwargs: None)
-    monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _fake_fetch_instagram_media)
-    monkeypatch.setattr(account_analysis_jobs, "map_instagram_posts", _fake_map_instagram_posts)
+    monkeypatch.setattr(account_analysis_jobs, "materialize_account_source_payload", _fake_materialize_account_source_payload)
 
-    payload = {"account_id": "acct_secure", "post_limit": 5, "access_token": "secret-token"}
+    payload = {"source": "creonnect_bd", "connection_id": "conn_123", "post_limit": 5}
     result = asyncio.run(account_analysis_jobs.enqueue_account_analysis_job_async(payload))
 
     assert result["status"] == "queued"
     assert len(queue.calls) == 1
     enqueue_args, _enqueue_kwargs = queue.calls[0]
     queued_payload = enqueue_args[1]
-    assert "access_token" not in queued_payload
     assert queued_payload["account_id"] == "acct_secure"
     assert queued_payload["post_limit"] == 5
+    assert queued_payload["source"] == "creonnect_bd"
+    assert queued_payload["source_ref"] == "conn_123"
     assert isinstance(queued_payload.get("posts"), list)
     assert len(queued_payload["posts"]) == 1
 
 
-def test_access_token_materialization_wraps_fetch_failures(monkeypatch) -> None:
-    async def _failing_fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, str]]:
-        raise RuntimeError("instagram api unavailable")
+def test_source_materialization_wraps_failures(monkeypatch) -> None:
+    async def _failing_materialize_account_source_payload(payload: dict[str, Any], *, post_limit: int) -> dict[str, Any]:
+        raise RuntimeError("creonnect-bd unavailable")
 
-    monkeypatch.setattr(account_analysis_jobs, "fetch_instagram_media", _failing_fetch_instagram_media)
+    monkeypatch.setattr(account_analysis_jobs, "materialize_account_source_payload", _failing_materialize_account_source_payload)
 
     try:
         account_analysis_jobs._materialize_posts_for_enqueue(
-            {"account_id": "acct_secure", "access_token": "secret-token"},
+            {"source": "creonnect_bd", "connection_id": "conn_123"},
             post_limit=5,
         )
     except ValueError as exc:
-        assert str(exc) == "Failed to fetch Instagram media: instagram api unavailable"
+        assert str(exc) == "Failed to materialize account source payload: creonnect-bd unavailable"
     else:
-        raise AssertionError("Expected ValueError when Instagram media fetch fails")
+        raise AssertionError("Expected ValueError when source materialization fails")

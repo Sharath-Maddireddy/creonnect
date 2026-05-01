@@ -130,3 +130,62 @@ def test_upload_and_analyse_fails_fast_when_upload_returns_no_name(monkeypatch) 
         assert str(exc) == "Gemini upload did not return a file name."
     else:
         raise AssertionError("Expected RuntimeError when Gemini upload returns no file name")
+
+
+def test_upload_and_analyse_falls_back_to_google_generativeai(monkeypatch) -> None:
+    captured_contents: list[object] = []
+
+    class FakeUploadedFile:
+        name = "legacy-uploaded-file"
+
+    class FakeLegacyModel:
+        def __init__(self, model_name: str) -> None:
+            self.model_name = model_name
+
+        def generate_content(self, contents: list[object]):
+            captured_contents.extend(contents)
+            return types.SimpleNamespace(
+                text="""
+hook_frame_score 0.55
+hook_text_overlay Wait for it
+pacing_label medium
+cut_count_estimate 5
+dominant_emotion surprise
+retention_signal 0.61
+audio_visual_sync 0.66
+objects
+  - creator
+scene_description Creator gestures toward a reveal card
+detected_text Big reveal
+visual_style tutorial
+hook_strength_score 0.64
+cringe_score 14
+cringe_signals
+  - Slightly busy opening frame
+cringe_fixes
+  - Trim the first beat
+production_level medium
+adult_content_detected false
+""".strip()
+            )
+
+    fake_legacy_genai = types.ModuleType("google.generativeai")
+    fake_legacy_genai.configure = lambda **_kwargs: None
+    fake_legacy_genai.upload_file = lambda _file_obj, mime_type=None: FakeUploadedFile()
+    fake_legacy_genai.get_file = lambda _name: types.SimpleNamespace(name="legacy-uploaded-file", state="ACTIVE")
+    fake_legacy_genai.delete_file = lambda _name: None
+    fake_legacy_genai.GenerativeModel = FakeLegacyModel
+
+    fake_google_module = types.ModuleType("google")
+    fake_google_module.__path__ = []
+
+    monkeypatch.setitem(sys.modules, "google", fake_google_module)
+    monkeypatch.delitem(sys.modules, "google.genai", raising=False)
+    monkeypatch.setitem(sys.modules, "google.generativeai", fake_legacy_genai)
+    monkeypatch.setattr(reel_gemini_engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    payload = reel_gemini_engine._upload_and_analyse(api_key="test-key", video_bytes=b"fake-video")
+
+    assert captured_contents[0] == REEL_VISION_EVALUATION_PROMPT
+    assert payload["hook_strength_score"] == 0.64
+    assert payload["audio_visual_sync"] == 0.66

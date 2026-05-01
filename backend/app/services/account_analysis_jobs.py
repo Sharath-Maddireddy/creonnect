@@ -13,21 +13,29 @@ from uuid import uuid4
 
 from rq import Retry, get_current_job
 
+from backend.app.account_sources.creonnect_bd_client import CreonnectBDClient
+from backend.app.account_sources import materialize_account_source_payload
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.infra.redis_client import get_json, get_redis, get_text, incr_with_expire, set_json, set_text
+from backend.app.infra.job_queue import (
+    ACCOUNT_ANALYSIS_JOB_NAME,
+    ACCOUNT_ANALYSIS_QUEUE_NAME,
+    enqueue_callable,
+)
 from backend.app.infra.rq_queue import (
     DEFAULT_FAILURE_TTL_SECONDS,
     DEFAULT_JOB_TIMEOUT_SECONDS,
     DEFAULT_RESULT_TTL_SECONDS,
-    get_queue,
 )
-from backend.app.ingestion.instagram_mapper import map_instagram_posts
-from backend.app.ingestion.instagram_oauth import fetch_instagram_media
 from backend.app.analytics.account_health_engine import (
     compute_account_engagement_signals,
     compute_account_vision_summary,
 )
+from backend.app.analytics.reel_analysis_service import compute_reel_analysis
+from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
+from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
+from backend.app.services.account_analysis_result_store import persist_account_analysis_result
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
 from backend.app.utils.logger import logger
@@ -146,6 +154,77 @@ def _sanitize_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
     sanitized_payload = dict(payload)
     sanitized_payload["result"] = sanitized_result
     return sanitized_payload
+
+
+def _connection_id_from_payload(payload: dict[str, Any]) -> str | None:
+    value = payload.get("connection_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    source_meta = payload.get("source_meta")
+    if isinstance(source_meta, dict):
+        meta_value = source_meta.get("connection_id")
+        if isinstance(meta_value, str) and meta_value.strip():
+            return meta_value.strip()
+    return None
+
+
+def _publish_result_to_creonnect_bd(
+    *,
+    payload: dict[str, Any],
+    result_payload: dict[str, Any],
+    job_id: str,
+) -> None:
+    source = payload.get("source")
+    if not (isinstance(source, str) and source.strip().lower() == "creonnect_bd"):
+        return
+    connection_id = _connection_id_from_payload(payload)
+    if not connection_id:
+        logger.warning("[AccountAnalysisJob] Skipping creonnect-bd sync: missing connection_id job_id=%s", job_id)
+        return
+
+    account_level = dict(result_payload)
+    posts_summary = account_level.pop("posts_summary", None)
+    post_items: list[dict[str, Any]] = []
+    if isinstance(posts_summary, list):
+        for item in posts_summary:
+            if not isinstance(item, dict):
+                continue
+            post_id = item.get("post_id")
+            if not isinstance(post_id, str) or not post_id.strip():
+                continue
+            post_items.append(
+                {
+                    "post_id": post_id.strip(),
+                    "ai_analysis": item,
+                }
+            )
+
+    client = CreonnectBDClient(
+        base_url=payload.get("bd_base_url") if isinstance(payload.get("bd_base_url"), str) else None,
+        timeout_seconds=payload.get("bd_timeout_seconds") if isinstance(payload.get("bd_timeout_seconds"), (int, float)) else None,
+    )
+    logger.info(
+        "[AccountAnalysisJob] Syncing analysis to creonnect-bd job_id=%s connection_id=%s posts=%s",
+        job_id,
+        connection_id,
+        len(post_items),
+    )
+    asyncio.run(
+        client.update_connection_ai_analysis(
+            platform="instagram",
+            connection_id=connection_id,
+            ai_analysis=account_level,
+        )
+    )
+    if post_items:
+        asyncio.run(
+            client.update_posts_ai_analysis(
+                platform="instagram",
+                connection_id=connection_id,
+                items=post_items,
+            )
+        )
+    logger.info("[AccountAnalysisJob] Synced analysis to creonnect-bd job_id=%s connection_id=%s", job_id, connection_id)
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
@@ -330,6 +409,15 @@ def _compute_posts_payload_hash(payload: dict[str, Any]) -> str | None:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def _coalesce_account_id(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    raise ValueError("account_id is required for account analysis jobs.")
+
+
 def _read_inputhash_job_id(account_id: str, payload_hash: str | None) -> str | None:
     if not payload_hash:
         return None
@@ -416,42 +504,26 @@ async def _materialize_posts_for_enqueue_async(
     payload: dict[str, Any],
     post_limit: int,
 ) -> dict[str, Any]:
-    sanitized_payload = dict(payload)
-    access_token = sanitized_payload.pop("access_token", None)
-
-    if isinstance(sanitized_payload.get("posts"), list):
+    if isinstance(payload.get("posts"), list):
+        sanitized_payload = dict(payload)
+        sanitized_payload.pop("access_token", None)
         return sanitized_payload
-
-    if not isinstance(access_token, str) or not access_token.strip():
-        return sanitized_payload
-
     try:
-        raw_media = await fetch_instagram_media(access_token.strip(), limit=post_limit)
-        creator_posts = map_instagram_posts(raw_media)
-        sanitized_payload["posts"] = [post.model_dump(mode="python") for post in creator_posts[:post_limit]]
+        return await materialize_account_source_payload(payload, post_limit=post_limit)
     except Exception as exc:
-        raise ValueError(f"Failed to fetch Instagram media: {exc}") from exc
-    return sanitized_payload
+        raise ValueError(f"Failed to materialize account source payload: {exc}") from exc
 
 
 def _materialize_posts_for_enqueue(payload: dict[str, Any], post_limit: int) -> dict[str, Any]:
     """Sync-only helper. Callers in async contexts must use `_materialize_posts_for_enqueue_async`."""
-    sanitized_payload = dict(payload)
-    access_token = sanitized_payload.pop("access_token", None)
-
-    if isinstance(sanitized_payload.get("posts"), list):
+    if isinstance(payload.get("posts"), list):
+        sanitized_payload = dict(payload)
+        sanitized_payload.pop("access_token", None)
         return sanitized_payload
-
-    if not isinstance(access_token, str) or not access_token.strip():
-        return sanitized_payload
-
     try:
-        raw_media = _run_coroutine_sync(fetch_instagram_media(access_token.strip(), limit=post_limit))
-        creator_posts = map_instagram_posts(raw_media)
-        sanitized_payload["posts"] = [post.model_dump(mode="python") for post in creator_posts[:post_limit]]
+        return _run_coroutine_sync(materialize_account_source_payload(payload, post_limit=post_limit))
     except Exception as exc:
-        raise ValueError(f"Failed to fetch Instagram media: {exc}") from exc
-    return sanitized_payload
+        raise ValueError(f"Failed to materialize account source payload: {exc}") from exc
 
 
 def _enqueue_account_analysis_job_impl(
@@ -459,11 +531,21 @@ def _enqueue_account_analysis_job_impl(
     *,
     sanitized_payload: dict[str, Any],
 ) -> dict[str, str]:
-    account_id = _normalize_account_id(payload.get("account_id"))
+    account_id = _normalize_account_id(
+        _coalesce_account_id(sanitized_payload.get("account_id"), payload.get("account_id"))
+    )
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
     include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
     include_posts_summary_max = _normalize_include_posts_summary_max(payload.get("include_posts_summary_max", 30))
-    payload_hash = _compute_posts_payload_hash(payload)
+    payload_hash = _compute_posts_payload_hash(sanitized_payload)
+    logger.info(
+        "[AccountAnalysisJob] Enqueue prepared account_id=%s post_limit=%s source=%s posts_in_payload=%s include_posts_summary=%s",
+        account_id,
+        post_limit,
+        sanitized_payload.get("source"),
+        len(sanitized_payload.get("posts")) if isinstance(sanitized_payload.get("posts"), list) else None,
+        include_posts_summary,
+    )
 
     reusable_job_id, reusable_status = _resolve_reusable_job(
         account_id=account_id,
@@ -471,10 +553,15 @@ def _enqueue_account_analysis_job_impl(
         payload_hash=payload_hash,
     )
     if reusable_job_id and reusable_status:
+        logger.info(
+            "[AccountAnalysisJob] Reusing existing job job_id=%s account_id=%s status=%s",
+            reusable_job_id,
+            account_id,
+            reusable_status,
+        )
         return {"job_id": reusable_job_id, "status": reusable_status}
     _enforce_rate_limit(account_id, running_job_id=None)
 
-    queue = get_queue()
     raw_job_id = _normalize_job_id(sanitized_payload.get("job_id"))
     job_id = raw_job_id or str(uuid4())
     full_payload = dict(sanitized_payload)
@@ -485,18 +572,41 @@ def _enqueue_account_analysis_job_impl(
     full_payload["include_posts_summary_max"] = include_posts_summary_max
 
     initialize_job_status(job_id)
+    logger.info(
+        "[AccountAnalysisJob] Queueing job job_id=%s account_id=%s post_limit=%s source=%s",
+        job_id,
+        account_id,
+        post_limit,
+        sanitized_payload.get("source"),
+    )
     try:
-        queue.enqueue(
-            run_account_analysis_job,
-            full_payload,
+        enqueued_job = enqueue_callable(
+            queue_name=ACCOUNT_ANALYSIS_QUEUE_NAME,
+            job_name=ACCOUNT_ANALYSIS_JOB_NAME,
+            func=run_account_analysis_job,
+            payload=full_payload,
             job_id=job_id,
-            job_timeout=DEFAULT_JOB_TIMEOUT_SECONDS,
-            result_ttl=DEFAULT_RESULT_TTL_SECONDS,
-            failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
-            retry=Retry(max=2, interval=[10, 30]),
+            timeout_seconds=DEFAULT_JOB_TIMEOUT_SECONDS,
+            result_ttl_seconds=DEFAULT_RESULT_TTL_SECONDS,
+            failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
+            retry_max=2,
+            retry_intervals=[10, 30],
+        )
+        logger.info(
+            "[AccountAnalysisJob] Enqueued job job_id=%s queue=%s backend=%s transport_status=%s retry=%s",
+            job_id,
+            ACCOUNT_ANALYSIS_QUEUE_NAME,
+            enqueued_job.backend,
+            enqueued_job.raw_status,
+            2,
         )
         _write_dedupe_job_id(account_id, post_limit, job_id)
         _write_inputhash_job_id(account_id, payload_hash, job_id)
+        logger.debug(
+            "[AccountAnalysisJob] Dedupe/inputhash recorded job_id=%s payload_hash_prefix=%s",
+            job_id,
+            payload_hash[:12] if isinstance(payload_hash, str) else None,
+        )
     except Exception:
         _delete_dedupe_job_id(account_id, post_limit, job_id)
         _delete_inputhash_job_id(account_id, payload_hash, job_id)
@@ -509,7 +619,20 @@ def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
     """Enqueue account analysis background job and persist queued status."""
     payload = payload if isinstance(payload, dict) else {}
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
+    logger.info(
+        "[AccountAnalysisJob] Enqueue request received sync account_id=%s post_limit=%s source=%s has_posts=%s",
+        payload.get("account_id"),
+        post_limit,
+        payload.get("source"),
+        isinstance(payload.get("posts"), list),
+    )
     sanitized_payload = _materialize_posts_for_enqueue(payload, post_limit=post_limit)
+    logger.debug(
+        "[AccountAnalysisJob] Enqueue materialized sync account_id=%s posts=%s source=%s",
+        sanitized_payload.get("account_id"),
+        len(sanitized_payload.get("posts")) if isinstance(sanitized_payload.get("posts"), list) else None,
+        sanitized_payload.get("source"),
+    )
     return _enqueue_account_analysis_job_impl(payload, sanitized_payload=sanitized_payload)
 
 
@@ -517,7 +640,20 @@ async def enqueue_account_analysis_job_async(payload: dict[str, Any]) -> dict[st
     """Async enqueue path that materializes Instagram media without blocking the event loop."""
     payload = payload if isinstance(payload, dict) else {}
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
+    logger.info(
+        "[AccountAnalysisJob] Enqueue request received async account_id=%s post_limit=%s source=%s has_posts=%s",
+        payload.get("account_id"),
+        post_limit,
+        payload.get("source"),
+        isinstance(payload.get("posts"), list),
+    )
     sanitized_payload = await _materialize_posts_for_enqueue_async(payload, post_limit=post_limit)
+    logger.debug(
+        "[AccountAnalysisJob] Enqueue materialized async account_id=%s posts=%s source=%s",
+        sanitized_payload.get("account_id"),
+        len(sanitized_payload.get("posts")) if isinstance(sanitized_payload.get("posts"), list) else None,
+        sanitized_payload.get("source"),
+    )
     return _enqueue_account_analysis_job_impl(payload, sanitized_payload=sanitized_payload)
 
 
@@ -542,6 +678,12 @@ def _fetch_posts_from_source(payload: dict[str, Any], post_limit: int) -> list[S
 
 
 def _posts_payload_has_precomputed_scores(payload: dict[str, Any]) -> bool:
+
+    return False
+    # source = payload.get("source")
+    # if isinstance(source, str) and source.strip().lower() != "precomputed":
+    #     return False
+
     raw_posts = payload.get("posts")
     if not isinstance(raw_posts, list) or not raw_posts:
         return False
@@ -641,6 +783,74 @@ def _bounded_media_url(value: Any) -> str | None:
     return text
 
 
+def _is_reel_post(post: SinglePostInsights) -> bool:
+    media_type = post.media_type if isinstance(post.media_type, str) else ""
+    return media_type.strip().upper() == "REEL"
+
+
+def _maybe_attach_inline_reel_analysis(post: SinglePostInsights) -> SinglePostInsights:
+    if not _is_reel_post(post):
+        return post
+
+    media_url = post.media_url if isinstance(post.media_url, str) else ""
+    logger.info(
+        "[AccountAnalysisJob] Detected REEL post for inline reel analysis media_id=%s",
+        post.media_id,
+    )
+    if not media_url.strip():
+        logger.info(
+            "[AccountAnalysisJob] Skipping inline reel analysis for media_id=%s: missing media_url",
+            post.media_id,
+        )
+        return post
+
+    try:
+        logger.info(
+            "[AccountAnalysisJob] Starting inline reel analysis media_id=%s",
+            post.media_id,
+        )
+        vision_result = run_reel_gemini_analysis(media_url.strip())
+        vision_status = str(vision_result.get("status", "error"))
+        signals = vision_result.get("signals", {})
+        if not isinstance(signals, dict):
+            signals = {}
+        logger.info(
+            "[AccountAnalysisJob] Inline reel vision result media_id=%s status=%s signal_keys=%s",
+            post.media_id,
+            vision_status,
+            sorted(signals.keys()),
+        )
+
+        audio_score = compute_reel_audio_score(
+            audio_name=None,
+            caption_text=post.caption_text,
+        )
+        reel_model = compute_reel_analysis(
+            reel_vision_signals=signals,
+            audio_score=audio_score,
+            watch_time_pct=None,
+            reel_vision_status=vision_status,
+        )
+        logger.info(
+            "[AccountAnalysisJob] Inline reel analysis complete media_id=%s status=%s total=%s",
+            post.media_id,
+            vision_status,
+            reel_model.total,
+        )
+        logger.info(
+            "[AccountAnalysisJob] Attached reel_analysis to post media_id=%s",
+            post.media_id,
+        )
+        return post.model_copy(update={"reel_analysis": reel_model})
+    except Exception as exc:
+        logger.warning(
+            "[AccountAnalysisJob] Non-fatal: inline reel analysis failed for media_id=%s: %s",
+            post.media_id,
+            exc,
+        )
+        return post
+
+
 def _build_post_summary(
     post: SinglePostInsights,
     *,
@@ -704,6 +914,13 @@ def _build_post_summary(
             "technical_flaws": list(getattr(first_signal, "technical_flaws", []) or [])[:],
         },
     }
+    if post.reel_analysis is not None:
+        logger.info(
+            "[AccountAnalysisJob] Including reel_analysis in posts_summary media_id=%s total=%s",
+            post.media_id,
+            post.reel_analysis.total,
+        )
+        summary["reel_analysis"] = post.reel_analysis.model_dump(mode="python")
     return summary
 
 
@@ -767,6 +984,7 @@ def _extract_ai_notes(ai_analysis: dict[str, Any] | None, *, vision_enabled: boo
         "vision_status": "disabled" if not vision_enabled else "ok",
         "fallback_used": False,
         "ai_summary": None,
+        "analysis_failure_reason": None,
     }
     if not isinstance(ai_analysis, dict):
         return notes
@@ -777,6 +995,22 @@ def _extract_ai_notes(ai_analysis: dict[str, Any] | None, *, vision_enabled: boo
     summary = ai_analysis.get("summary")
     if isinstance(summary, str) and summary.strip():
         notes["ai_summary"] = summary.strip()
+    explicit_reason = ai_analysis.get("vision_error_reason")
+    if isinstance(explicit_reason, str) and explicit_reason.strip():
+        notes["analysis_failure_reason"] = explicit_reason.strip()
+        return notes
+
+    raw_warnings = ai_analysis.get("warnings")
+    if isinstance(raw_warnings, list):
+        for item in raw_warnings:
+            if not isinstance(item, dict):
+                continue
+            if item.get("code") != "VISION_ERROR":
+                continue
+            warning_message = item.get("message")
+            if isinstance(warning_message, str) and warning_message.strip():
+                notes["analysis_failure_reason"] = warning_message.strip()
+                break
     return notes
 
 
@@ -838,7 +1072,9 @@ async def _run_single_post_pipeline_if_needed(
                 historical_posts=historical,
                 run_ai=True,
             )
-            processed_posts.append(pipeline_result["post"])
+            processed_post = pipeline_result["post"]
+            processed_post = _maybe_attach_inline_reel_analysis(processed_post)
+            processed_posts.append(processed_post)
             appended = True
 
             ai_analysis = pipeline_result.get("ai_analysis")
@@ -901,6 +1137,15 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
     warnings_global: list[dict[str, Any]] = []
     per_post_warnings_count: dict[str, int] = {}
     quality = _quality_payload(vision_enabled=vision_enabled)
+    logger.info(
+        "[AccountAnalysisJob] Picked from queue job_id=%s rq_ pjob_id=%s queue=%s payload_keys=%s",
+        job_id,
+        current_job_id or None,
+        getattr(getattr(current_job, "origin", None), "strip", lambda: getattr(current_job, "origin", None))()
+        if current_job is not None
+        else None,
+        sorted(payload.keys()),
+    )
 
     if not vision_enabled:
         _append_unique_warning(
@@ -921,6 +1166,13 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         )
 
     try:
+        logger.info(
+            "[AccountAnalysisJob] Started job_id=%s account_id=%s post_limit=%s vision_enabled=%s",
+            job_id,
+            account_id,
+            post_limit,
+            vision_enabled,
+        )
         _update_status(
             job_id,
             status="started",
@@ -933,8 +1185,20 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         )
 
         posts = _fetch_posts_from_source(payload, post_limit=post_limit)
+        logger.info(
+            "[AccountAnalysisJob] Fetched posts job_id=%s account_id=%s count=%s",
+            job_id,
+            account_id,
+            len(posts),
+        )
         _write_dedupe_job_id(account_id, post_limit, job_id)
         run_single_post_pipeline = not _posts_payload_has_precomputed_scores(payload)
+        logger.info(
+            "[AccountAnalysisJob] Running post pipeline job_id=%s account_id=%s enabled=%s",
+            job_id,
+            account_id,
+            run_single_post_pipeline,
+        )
         pipeline_run = asyncio.run(
             _run_single_post_pipeline_if_needed(
                 posts=posts,
@@ -952,6 +1216,13 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         quality["vision_error_count"] = int(pipeline_run["vision_error_count"])
         quality["ai_fallback_count"] = int(pipeline_run["ai_fallback_count"])
 
+        logger.info(
+            "[AccountAnalysisJob] Aggregating account result job_id=%s account_id=%s processed_posts=%s warnings=%s",
+            job_id,
+            account_id,
+            len(processed_posts),
+            len(warnings_global),
+        )
         _progress(stage="aggregate", done=len(processed_posts), total=max(1, len(posts)))
         result = analyze_account_health(
             posts=processed_posts,
@@ -1051,6 +1322,15 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
                 summary_exc,
             )
 
+        logger.info(
+            "[AccountAnalysisJob] Succeeded job_id=%s account_id=%s ahs_score=%s warnings=%s vision_errors=%s ai_fallbacks=%s",
+            job_id,
+            account_id,
+            getattr(result, "ahs_score", None),
+            len(warnings_global),
+            quality.get("vision_error_count"),
+            quality.get("ai_fallback_count"),
+        )
         _update_status(
             job_id,
             status="succeeded",
@@ -1061,15 +1341,38 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             quality=quality,
             result=result_payload,
         )
+        persist_account_analysis_result(
+            job_id=job_id,
+            account_id=account_id,
+            username=payload.get("username") if isinstance(payload.get("username"), str) else None,
+            payload=payload,
+            status="succeeded",
+            result=result_payload,
+            warnings=warnings_global,
+            quality=quality,
+            error=None,
+        )
     except Exception as exc:
         logger.exception("[AccountAnalysisJob] Job failed for job_id=%s", job_id)
+        error_payload = {"type": exc.__class__.__name__, "message": str(exc)}
         _update_status(
             job_id,
             status="failed",
             finished_at=_now_iso(),
-            error={"type": exc.__class__.__name__, "message": str(exc)},
+            error=error_payload,
             warnings=warnings_global,
             quality=quality,
             result=None,
+        )
+        persist_account_analysis_result(
+            job_id=job_id,
+            account_id=account_id,
+            username=payload.get("username") if isinstance(payload.get("username"), str) else None,
+            payload=payload,
+            status="failed",
+            result=None,
+            warnings=warnings_global,
+            quality=quality,
+            error=error_payload,
         )
         raise

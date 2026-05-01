@@ -11,11 +11,15 @@ from rq import get_current_job
 from backend.app.analytics.reel_analysis_service import compute_reel_analysis
 from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
 from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
+from backend.app.infra.job_queue import (
+    REEL_ANALYSIS_JOB_NAME,
+    REEL_ANALYSIS_QUEUE_NAME,
+    enqueue_callable,
+)
 from backend.app.infra.redis_client import get_json, set_json
 from backend.app.infra.rq_queue import (
     DEFAULT_FAILURE_TTL_SECONDS,
     DEFAULT_RESULT_TTL_SECONDS,
-    get_queue,
 )
 from backend.app.utils.logger import logger
 
@@ -61,6 +65,7 @@ def _update_status(job_id: str, **updates: Any) -> dict[str, Any]:
 
 
 def initialize_reel_job_status(job_id: str) -> None:
+    logger.debug("[ReelAnalysisJob] Initializing status job_id=%s", job_id)
     _write_status(job_id, _base_status(job_id))
 
 
@@ -82,15 +87,23 @@ def enqueue_reel_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         "caption_text": str(payload.get("caption_text", "")),
         "watch_time_pct": payload.get("watch_time_pct"),
     }
+    logger.info(
+        "[ReelAnalysisJob] Enqueue requested job_id=%s media_url_present=%s audio_name=%s watch_time_pct=%s",
+        job_id,
+        bool(media_url),
+        bool(payload.get("audio_name")),
+        payload.get("watch_time_pct"),
+    )
     initialize_reel_job_status(job_id)
-    queue = get_queue()
-    queue.enqueue(
-        run_reel_analysis_job,
-        full_payload,
+    enqueue_callable(
+        queue_name=REEL_ANALYSIS_QUEUE_NAME,
+        job_name=REEL_ANALYSIS_JOB_NAME,
+        func=run_reel_analysis_job,
+        payload=full_payload,
         job_id=job_id,
-        job_timeout=REEL_JOB_TIMEOUT_SECONDS,
-        result_ttl=DEFAULT_RESULT_TTL_SECONDS,
-        failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
+        timeout_seconds=REEL_JOB_TIMEOUT_SECONDS,
+        result_ttl_seconds=DEFAULT_RESULT_TTL_SECONDS,
+        failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
     )
     return {"job_id": job_id, "status": "queued"}
 
@@ -105,6 +118,12 @@ def run_reel_analysis_job(payload: dict[str, Any]) -> None:
     watch_time_pct_raw = payload.get("watch_time_pct")
     watch_time_pct = float(watch_time_pct_raw) if isinstance(watch_time_pct_raw, (int, float)) else None
 
+    logger.info(
+        "[ReelAnalysisJob] Started job_id=%s audio_name=%s watch_time_pct=%s",
+        job_id,
+        bool(audio_name),
+        watch_time_pct,
+    )
     _update_status(job_id, status="started", started_at=_now_iso())
 
     try:
@@ -113,10 +132,21 @@ def run_reel_analysis_job(payload: dict[str, Any]) -> None:
         signals = vision_result.get("signals", {})
         if not isinstance(signals, dict):
             signals = {}
+        logger.debug(
+            "[ReelAnalysisJob] Vision result job_id=%s status=%s signal_keys=%s",
+            job_id,
+            vision_status,
+            sorted(signals.keys()),
+        )
 
         audio_score = compute_reel_audio_score(
             audio_name=audio_name if isinstance(audio_name, str) else None,
             caption_text=caption_text,
+        )
+        logger.debug(
+            "[ReelAnalysisJob] Audio score job_id=%s total=%s",
+            job_id,
+            getattr(audio_score, "total", None),
         )
 
         reel_model = compute_reel_analysis(

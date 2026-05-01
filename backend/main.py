@@ -8,22 +8,24 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+
+from backend.app.utils.env import load_app_env
+
+load_app_env(override=False)
+
 from backend.app.api.account_analysis_routes import router as account_analysis_router
 from backend.app.api.brand_match_routes import router as brand_match_router
 from backend.app.api.campaign_routes import router as campaign_router
+from backend.app.api.grpc_analysis_server import start_grpc_analysis_server, stop_grpc_analysis_server
 from backend.app.api.post_analysis_routes import router as post_analysis_router
 from backend.app.api.reel_analysis_routes import router as reel_analysis_router
 from backend.app.api.dashboard import router as dashboard_router
 from backend.app.api.instagram_auth_routes import router as instagram_auth_router
 from backend.app.infra.database import init_db, initialize_database_engines
 from backend.app.utils.logger import logger
-
-
-load_dotenv(override=False)
 
 
 _DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -79,7 +81,9 @@ async def _app_lifespan(_app: FastAPI):
     logger.info("vision_enabled=%s", vision_enabled)
     initialize_database_engines()
     await init_db()
+    await start_grpc_analysis_server()
     yield
+    await stop_grpc_analysis_server()
 
 app = FastAPI(
     title="Creonnect API",
@@ -117,6 +121,3 @@ app.include_router(instagram_auth_router)
 def health_check():
     """Health check endpoint for monitoring."""
     return {"status": "ok"}
-
-
-

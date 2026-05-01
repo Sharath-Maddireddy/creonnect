@@ -11,7 +11,7 @@ import threading
 import time
 from dataclasses import dataclass
 from ipaddress import ip_address
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
@@ -41,7 +41,7 @@ from backend.app.utils.logger import logger
 
 
 CACHE_TTL_SECONDS = 86400
-MIN_REGEN_SECONDS = 7200
+MIN_REGEN_SECONDS = 1
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
 
 
@@ -88,6 +88,7 @@ class AIAnalysisResult(TypedDict):
     warnings: list["AIWarning"]
     vision_status: Literal["ok", "error", "disabled", "no_media"]
     fallback_used: bool
+    vision_error_reason: NotRequired[str | None]
 
 
 class AIWarning(TypedDict):
@@ -432,6 +433,8 @@ async def run_vision_analysis(
     """Run Gemini Vision analysis for a post media URL with strict TOON parsing."""
     from urllib.parse import urlparse
 
+    post_id = post.media_id if isinstance(post.media_id, str) else None
+
     instruction = (
         "You are an expert Social Media Art Director and Computer Vision analysis engine. "
         "Analyze the provided Instagram media (image/frame) strictly through the lens of technical visual quality "
@@ -479,6 +482,7 @@ async def run_vision_analysis(
     media_url = post.media_url
     if not isinstance(media_url, str) or not media_url.strip():
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")
+    logger.debug("[Vision] Start media_id=%s", post_id)
 
     media_url = media_url.strip()
     parsed_url = urlparse(media_url)
@@ -490,7 +494,8 @@ async def run_vision_analysis(
         or not await _is_safe_public_hostname(hostname)
     ):
         logger.warning(
-            "[Vision] Rejected media_url for SSRF protection: %s",
+            "[Vision] Rejected media_url for SSRF protection media_id=%s url=%s",
+            post_id,
             _sanitize_url_for_logging(media_url),
         )
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")
@@ -547,8 +552,6 @@ async def run_vision_analysis(
             raise ValueError("Invalid scene_type field.")
         if not isinstance(visual_quality_score, dict):
             raise ValueError("Invalid visual_quality_score field.")
-        if not isinstance(technical_flaws, list) or not all(isinstance(item, str) for item in technical_flaws):
-            raise ValueError("Invalid technical_flaws field.")
         if not isinstance(hook_strength_score, (int, float)):
             raise ValueError("Invalid hook_strength_score field.")
 
@@ -631,12 +634,17 @@ async def run_vision_analysis(
 
         return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
     except Exception as e:
+        error_reason = str(e).strip() or e.__class__.__name__
         logger.error(
-            "[Vision] Gemini vision analysis failed for media_url=%s: %s",
+            "[Vision] Gemini vision analysis failed for media_id=%s media_url=%s: %s",
+            post_id,
             _sanitize_url_for_logging(media_url),
-            e,
+            error_reason,
         )
-        return VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+        failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+        # Keep a compact reason so post summaries can explain exactly why fallback happened.
+        failure_payload["error_reason"] = error_reason[:300]
+        return failure_payload
 
 
 def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
@@ -822,6 +830,7 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
     """Run LLM-based S2 caption evaluation and return normalized payload."""
     if not isinstance(caption_text, str) or not caption_text.strip():
         return None
+    logger.debug("[AIAnalysis] Caption LLM start length=%d", len(caption_text.strip()))
 
     prompt = {
         "system": (
@@ -832,11 +841,13 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
     }
     raw_text = await _call_llm_async(prompt, llm_client)
     if not isinstance(raw_text, str) or not raw_text.strip():
+        logger.debug("[AIAnalysis] Caption LLM returned empty response")
         return None
 
     try:
         payload = toon_loads(raw_text)
     except Exception:
+        logger.debug("[AIAnalysis] Caption LLM parse failed; attempting repair")
         repaired = await _repair_llm_toon_output(raw_text, llm_client)
         if not isinstance(repaired, str):
             return None
@@ -874,7 +885,7 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
     if isinstance(improved_hook, str) and improved_hook.strip():
         notes.append(f"improved_hook_suggestion: {improved_hook.strip()[:160]}")
 
-    return {
+    result = {
         "hook_score_0_100": hook,
         "length_score_0_100": length,
         "hashtag_score_0_100": hashtag,
@@ -883,6 +894,8 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
         "total_0_50": total_0_50,
         "notes": notes,
     }
+    logger.debug("[AIAnalysis] Caption LLM completed total_0_50=%s", total_0_50)
+    return result
 
 
 async def run_audience_relevance_llm(
@@ -893,6 +906,11 @@ async def run_audience_relevance_llm(
     """Run LLM-based S4 audience relevance evaluation."""
     creator_text = creator_category or ""
     post_text = post_category or ""
+    logger.debug(
+        "[AIAnalysis] Audience LLM start creator_category=%s post_category=%s",
+        creator_text or None,
+        post_text or None,
+    )
 
     user_prompt = S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", creator_text).replace("{post_category}", post_text)
     prompt = {
@@ -904,11 +922,13 @@ async def run_audience_relevance_llm(
     }
     raw_text = await _call_llm_async(prompt, llm_client)
     if not isinstance(raw_text, str) or not raw_text.strip():
+        logger.debug("[AIAnalysis] Audience LLM returned empty response")
         return None
 
     try:
         payload = toon_loads(raw_text)
     except Exception:
+        logger.debug("[AIAnalysis] Audience LLM parse failed; attempting repair")
         repaired = await _repair_llm_toon_output(raw_text, llm_client)
         if not isinstance(repaired, str):
             return None
@@ -942,11 +962,17 @@ async def run_audience_relevance_llm(
     explanation = payload.get("audience_overlap_explanation")
     explanation_text = explanation.strip() if isinstance(explanation, str) else ""
 
-    return {
+    result = {
         "s4_raw_0_100": s4_raw,
         "affinity_band": affinity,
         "audience_overlap_explanation": explanation_text,
     }
+    logger.debug(
+        "[AIAnalysis] Audience LLM completed affinity_band=%s s4_raw_0_100=%s",
+        affinity,
+        s4_raw,
+    )
+    return result
 
 
 def _parse_driver_item(value: Any) -> AIDriver | None:
@@ -1299,15 +1325,24 @@ async def analyze_single_post_ai(
 
     now_ts = time.time()
     key = _cache_key(post)
+    logger.info(
+        "[AIAnalysis] Start media_id=%s account_id=%s media_type=%s",
+        post.media_id,
+        post.account_id,
+        post.media_type,
+    )
     with _ANALYSIS_CACHE_LOCK:
         _prune_analysis_cache(now_ts)
         cached = _ANALYSIS_CACHE.get(key) if key is not None else None
         if cached is not None and _is_fresh(cached, now_ts):
+            logger.debug("[AIAnalysis] Cache hit media_id=%s", post.media_id)
             return cached.result
         if cached is not None and (now_ts - cached.last_regen_attempt_at) < MIN_REGEN_SECONDS:
+            logger.debug("[AIAnalysis] Returning throttled cached result media_id=%s", post.media_id)
             return cached.result
         if cached is not None:
             cached.last_regen_attempt_at = now_ts
+            logger.debug("[AIAnalysis] Cache stale; regenerating media_id=%s", post.media_id)
     visual_quality_score = (
         post.visual_quality_score
         if isinstance(post.visual_quality_score, VisualQualityScore)
@@ -1352,6 +1387,7 @@ async def analyze_single_post_ai(
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     vision_enabled = bool(isinstance(gemini_api_key, str) and gemini_api_key.strip())
     warnings: list[AIWarning] = []
+    vision_error_reason: str | None = None
     if not vision_enabled:
         warnings.append(
             _build_ai_warning(
@@ -1362,6 +1398,12 @@ async def analyze_single_post_ai(
         )
     vision_status: Literal["ok", "error", "disabled", "no_media"] = "disabled" if not vision_enabled else "ok"
     fallback_used = False
+    logger.debug(
+        "[AIAnalysis] Vision config media_id=%s vision_enabled=%s published_at=%s",
+        post.media_id,
+        vision_enabled,
+        post.published_at,
+    )
 
     if post.published_at is not None:
         published_at = post.published_at
@@ -1372,6 +1414,11 @@ async def analyze_single_post_ai(
         post_age_seconds = (now_utc - published_at).total_seconds()
         if post_age_seconds < MIN_REGEN_SECONDS:
             fallback_used = True
+            logger.info(
+                "[AIAnalysis] Skipping AI analysis for very recent post media_id=%s age_seconds=%.2f",
+                post.media_id,
+                post_age_seconds,
+            )
             result: AIAnalysisResult = {
                 "summary": "AI analysis unavailable. Post is still accumulating data.",
                 "drivers": [],
@@ -1402,13 +1449,20 @@ async def analyze_single_post_ai(
     if not vision_enabled:
         vision = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
     else:
+        logger.debug("[AIAnalysis] Running Gemini vision media_id=%s", post.media_id)
         vision = await run_vision_analysis(post)
         if vision.get("status") == "error":
             vision_status = "error"
+            raw_error_reason = vision.get("error_reason")
+            if isinstance(raw_error_reason, str) and raw_error_reason.strip():
+                vision_error_reason = raw_error_reason.strip()[:300]
+            warning_message = "Gemini vision request failed; deterministic fallback scoring applied."
+            if vision_error_reason:
+                warning_message = f"{warning_message} reason={vision_error_reason}"
             warnings.append(
                 _build_ai_warning(
                     code="VISION_ERROR",
-                    message="Gemini vision request failed; deterministic fallback scoring applied.",
+                    message=warning_message,
                     post_id=post_id,
                 )
             )
@@ -1416,6 +1470,7 @@ async def analyze_single_post_ai(
             vision_status = "ok"
         elif vision.get("status") == "no_media":
             vision_status = "no_media"
+    logger.debug("[AIAnalysis] Vision finished media_id=%s status=%s", post.media_id, vision_status)
 
     visual_quality_score = compute_visual_quality_score(vision)
     caption_effectiveness_score = (
@@ -1453,6 +1508,16 @@ async def analyze_single_post_ai(
         s7=None,
     )
     post.weighted_post_score = weighted_post_score
+    logger.debug(
+        "[AIAnalysis] Deterministic scores media_id=%s s1=%s s2=%s s3=%s s4=%s s6=%s weighted=%s",
+        post.media_id,
+        visual_quality_score.total,
+        caption_effectiveness_score.total_0_50,
+        content_clarity_score.total,
+        audience_relevance_score.total_0_50,
+        brand_safety_score.total_0_50,
+        weighted_post_score.score,
+    )
     try:
         post.vision_analysis = VisionAnalysis.model_validate(vision)
     except Exception:
@@ -1479,6 +1544,13 @@ async def analyze_single_post_ai(
         llm_text,
         llm_client,
     )
+    logger.debug(
+        "[AIAnalysis] LLM parsed media_id=%s summary_present=%s drivers=%d recommendations=%d",
+        post.media_id,
+        summary is not None,
+        len(drivers or []),
+        len(recommendations or []),
+    )
 
     if summary is None:
         summary = _fallback_summary(score, band)
@@ -1486,12 +1558,14 @@ async def analyze_single_post_ai(
         recommendations = []
         engagement_potential_score = _fallback_engagement_potential_score()
         fallback_used = True
+        logger.info("[AIAnalysis] Using fallback summary media_id=%s", post.media_id)
     else:
         drivers = deterministic_drivers + drivers
         engagement_potential_score = _sanitize_engagement_potential_score(engagement_potential_raw)
         if engagement_potential_score is None:
             engagement_potential_score = _fallback_engagement_potential_score()
             fallback_used = True
+            logger.info("[AIAnalysis] Using fallback S5 score media_id=%s", post.media_id)
 
     if vision_status in {"disabled", "error"}:
         fallback_used = True
@@ -1513,6 +1587,13 @@ async def analyze_single_post_ai(
         s7=None,
     )
     post.weighted_post_score = weighted_post_score
+    logger.debug(
+        "[AIAnalysis] Final scores media_id=%s s5=%s weighted=%s fallback_used=%s",
+        post.media_id,
+        engagement_potential_score.total,
+        weighted_post_score.score,
+        fallback_used,
+    )
     tier_avg_engagement_rate, tier_notes = _resolve_tier_avg_engagement_rate(post)
     predicted_engagement_rate, prediction_notes = compute_predicted_engagement_rate(
         tier_avg_engagement_rate,
@@ -1544,6 +1625,8 @@ async def analyze_single_post_ai(
         "vision_status": vision_status,
         "fallback_used": fallback_used,
     }
+    if vision_error_reason:
+        result["vision_error_reason"] = vision_error_reason
 
     if key is not None:
         with _ANALYSIS_CACHE_LOCK:
@@ -1553,4 +1636,11 @@ async def analyze_single_post_ai(
                 last_regen_attempt_at=now_ts,
             )
             _prune_analysis_cache(now_ts)
+    logger.info(
+        "[AIAnalysis] Completed media_id=%s vision_status=%s warnings=%d fallback_used=%s",
+        post.media_id,
+        vision_status,
+        len(warnings),
+        fallback_used,
+    )
     return result
