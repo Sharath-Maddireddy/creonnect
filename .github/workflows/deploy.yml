@@ -95,6 +95,7 @@ jobs:
             ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
             aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
             export ECR_IMAGE="${IMAGE_URI}"
+            echo "ECR_IMAGE=${IMAGE_URI}" >> "${APP_DIR}/.env"
             docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" pull
             docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" up -d
             sleep 8
