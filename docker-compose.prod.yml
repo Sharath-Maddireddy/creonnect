@@ -1,6 +1,16 @@
 version: "3.9"
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: creonnect-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
   api:
     image: ${ECR_IMAGE}
     container_name: creonnect-python-api
@@ -9,6 +19,8 @@ services:
       - .env
     ports:
       - "8000:8000"
+    depends_on:
+      - redis
     command:
       [
         "python",
@@ -31,4 +43,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    depends_on:
+      - redis
     command: ["python", "-m", "backend.app.workers.sqs_worker"]
+
+volumes:
+  redis-data:
