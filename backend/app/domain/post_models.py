@@ -397,6 +397,8 @@ class ReelAnalysis(BaseModel):
     retention_score: float | None = Field(default=None, ge=0.0, le=50.0)
     total: float | None = Field(default=None, ge=0.0, le=100.0)
     reel_vision_status: str | None = Field(default=None, description="ok | error | disabled")
+    spoken_transcript: str | None = Field(default=None)
+    sarvam_transcription_status: str | None = Field(default=None)
     notes: list[str] = Field(default_factory=list)
 
     @field_validator("hook_score", "pacing_score", "audio_alignment_score", "retention_score", mode="before")

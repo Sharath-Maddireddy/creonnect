@@ -531,7 +531,7 @@ async def run_vision_analysis(
         visual_style = payload.get("visual_style")
         scene_type = payload.get("scene_type")
         visual_quality_score = payload.get("visual_quality_score") or {}
-        technical_flaws = payload.get("technical_flaws") or []
+        technical_flaws = _normalize_short_text_list(payload.get("technical_flaws"), limit=3)
         hook_strength_score = payload.get("hook_strength_score")
 
         if not isinstance(objects, list) or not all(isinstance(item, str) for item in objects):
@@ -548,8 +548,6 @@ async def run_vision_analysis(
             raise ValueError("Invalid scene_type field.")
         if not isinstance(visual_quality_score, dict):
             raise ValueError("Invalid visual_quality_score field.")
-        if not isinstance(technical_flaws, list) or not all(isinstance(item, str) for item in technical_flaws):
-            raise ValueError("Invalid technical_flaws field.")
         if not isinstance(hook_strength_score, (int, float)):
             raise ValueError("Invalid hook_strength_score field.")
 
@@ -563,7 +561,6 @@ async def run_vision_analysis(
         detected_text = detected_text.strip() if detected_text else None
         visual_style = visual_style.strip()
         scene_type = scene_type.strip() if isinstance(scene_type, str) else None
-        technical_flaws = [item.strip() for item in technical_flaws if isinstance(item, str) and item.strip()][:3]
         composition_raw = _as_float(visual_quality_score.get("composition"))
         lighting_raw = _as_float(visual_quality_score.get("lighting"))
         subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))

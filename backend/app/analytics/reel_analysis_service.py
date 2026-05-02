@@ -17,6 +17,8 @@ def compute_reel_analysis(
     audio_score: ReelAudioScore,
     watch_time_pct: float | None,
     reel_vision_status: str = "ok",
+    spoken_transcript: str | None = None,
+    sarvam_transcription_status: str | None = None,
 ) -> ReelAnalysis:
     """
     Compute reel scores where sub-scores are 0..50 and final total is 0..100.
@@ -67,6 +69,9 @@ def compute_reel_analysis(
         100.0,
     )
 
+    if isinstance(spoken_transcript, str) and spoken_transcript.strip():
+        notes.append("Sarvam STT transcript applied.")
+
     return ReelAnalysis(
         hook_score=round(hook_score, 2),
         pacing_score=round(pacing_score, 2),
@@ -74,5 +79,7 @@ def compute_reel_analysis(
         retention_score=round(retention_score, 2),
         total=round(total, 2),
         reel_vision_status=reel_vision_status,
+        spoken_transcript=spoken_transcript,
+        sarvam_transcription_status=sarvam_transcription_status,
         notes=notes,
     )

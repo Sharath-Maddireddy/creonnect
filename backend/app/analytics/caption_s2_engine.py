@@ -107,7 +107,7 @@ async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScor
         return compute_s2_caption_effectiveness(caption_text)
 
 
-def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffectivenessScore:
+def compute_s2_caption_effectiveness(caption_text: str | None, spoken_transcript: str | None = None) -> CaptionEffectivenessScore:
     """Compute S2 using the PDF/TS reference logic on a 0..100 raw scale.
 
     S2 raw formula:
@@ -116,20 +116,26 @@ def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffecti
     """
 
     caption = caption_text if isinstance(caption_text, str) else ""
+    transcript = spoken_transcript if isinstance(spoken_transcript, str) else None
     first_line = caption.split("\n")[0] if caption else ""
+    transcript_first_line = transcript.split("\n")[0] if transcript else ""
     notes: list[str] = []
 
-    # Hook scoring
-    first_line_len = len(first_line)
-    if 0 < first_line_len <= 125:
-        hook_score = 60
-        if "?" in first_line or "!" in first_line:
-            hook_score += 20
-        if _HOOK_KEYWORD_RE.search(first_line):
-            hook_score += 20
-        hook_score = min(100, hook_score)
-    else:
-        hook_score = 30
+    # Hook scoring: consider caption first line and spoken transcript equally
+    def _score_hook_from_line(line: str) -> int:
+        line_len = len(line)
+        if 0 < line_len <= 125:
+            score = 60
+            if "?" in line or "!" in line:
+                score += 20
+            if _HOOK_KEYWORD_RE.search(line):
+                score += 20
+            return min(100, score)
+        return 30
+
+    hook_score_caption = _score_hook_from_line(first_line)
+    hook_score_transcript = _score_hook_from_line(transcript_first_line) if transcript else 30
+    hook_score = max(hook_score_caption, hook_score_transcript)
 
     # Length scoring (excluding hashtags)
     caption_without_hashtags = _HASHTAG_RE.sub("", caption).strip()
@@ -155,8 +161,10 @@ def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffecti
     else:
         hashtag_score = 20
 
-    # CTA scoring
-    cta_score = 100 if _CTA_RE.search(caption) else 20
+    # CTA scoring: check both caption and transcript for CTAs
+    cta_found_in_caption = bool(_CTA_RE.search(caption))
+    cta_found_in_transcript = bool(_CTA_RE.search(transcript)) if transcript else False
+    cta_score = 100 if (cta_found_in_caption or cta_found_in_transcript) else 20
 
     s2_raw_0_100 = round(
         hook_score * 0.30
@@ -174,6 +182,10 @@ def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffecti
         notes.append("No CTA detected")
     if char_count < 50:
         notes.append("Caption too short")
+
+    # Add note if audio transcript was factored into scoring
+    if transcript:
+        notes.append("Audio transcript factored into caption effectiveness scoring")
 
     return CaptionEffectivenessScore(
         hook_score_0_100=_clamp_0_100(hook_score),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import platform
 from typing import Any
 from uuid import uuid4
 
@@ -11,6 +12,9 @@ from rq import get_current_job
 from backend.app.analytics.reel_analysis_service import compute_reel_analysis
 from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
 from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
+from backend.app.analytics.reel_sarvam_engine import transcribe_reel_audio
+import concurrent.futures
+import os
 from backend.app.infra.redis_client import get_json, set_json
 from backend.app.infra.rq_queue import (
     DEFAULT_FAILURE_TTL_SECONDS,
@@ -83,12 +87,13 @@ def enqueue_reel_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         "watch_time_pct": payload.get("watch_time_pct"),
     }
     initialize_reel_job_status(job_id)
-    queue = get_queue()
+    queue = get_queue("reel-analysis")
+    job_timeout = None if platform.system() == "Windows" else REEL_JOB_TIMEOUT_SECONDS
     queue.enqueue(
         run_reel_analysis_job,
         full_payload,
         job_id=job_id,
-        job_timeout=REEL_JOB_TIMEOUT_SECONDS,
+        job_timeout=job_timeout,
         result_ttl=DEFAULT_RESULT_TTL_SECONDS,
         failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
     )
@@ -108,11 +113,48 @@ def run_reel_analysis_job(payload: dict[str, Any]) -> None:
     _update_status(job_id, status="started", started_at=_now_iso())
 
     try:
-        vision_result = run_reel_gemini_analysis(media_url)
+        # Run vision (Gemini) and STT (Sarvam) in parallel to save time
+        transcript = None
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                future_vision = executor.submit(run_reel_gemini_analysis, media_url)
+                future_transcript = executor.submit(transcribe_reel_audio, media_url)
+                try:
+                    vision_result = future_vision.result()
+                except Exception as _e:
+                    logger.error("[ReelAnalysisJob] run_reel_gemini_analysis failed: %s", _e)
+                    vision_result = {"status": "error", "signals": {}, "error": str(_e)}
+                try:
+                    transcript = future_transcript.result()
+                except Exception as _e:
+                    logger.error("[ReelAnalysisJob] transcribe_reel_audio failed: %s", _e)
+                    transcript = None
+        except Exception as e:
+            # Fall back to sequential calls if executor fails
+            logger.error("[ReelAnalysisJob] concurrency executor failed, falling back: %s", e)
+            try:
+                vision_result = run_reel_gemini_analysis(media_url)
+            except Exception as _e:
+                logger.error("[ReelAnalysisJob] run_reel_gemini_analysis failed: %s", _e)
+                vision_result = {"status": "error", "signals": {}, "error": str(_e)}
+            try:
+                transcript = transcribe_reel_audio(media_url)
+            except Exception as _e:
+                logger.error("[ReelAnalysisJob] transcribe_reel_audio failed: %s", _e)
+                transcript = None
+
         vision_status = str(vision_result.get("status", "error"))
         signals = vision_result.get("signals", {})
         if not isinstance(signals, dict):
             signals = {}
+
+        # Determine sarvam transcription status per returned transcript and env
+        if isinstance(transcript, str) and transcript.strip():
+            sarvam_status = "ok"
+        elif transcript is None:
+            sarvam_status = "disabled" if not os.getenv("SARVAM_API_KEY") else "error"
+        else:
+            sarvam_status = "error"
 
         audio_score = compute_reel_audio_score(
             audio_name=audio_name if isinstance(audio_name, str) else None,
@@ -124,6 +166,8 @@ def run_reel_analysis_job(payload: dict[str, Any]) -> None:
             audio_score=audio_score,
             watch_time_pct=watch_time_pct,
             reel_vision_status=vision_status,
+            spoken_transcript=transcript,
+            sarvam_transcription_status=sarvam_status,
         )
 
         result = reel_model.model_dump()

@@ -6,7 +6,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend.app.analytics.account_health_engine import _build_engagement_quality, compute_account_health_score
+from backend.app.analytics.account_health_engine import (
+    _build_engagement_quality,
+    compute_account_health_score,
+    compute_account_engagement_signals,
+    compute_account_vision_summary,
+)
 from backend.app.domain.post_models import (
     AudienceRelevanceScore,
     BenchmarkMetrics,
@@ -19,6 +24,9 @@ from backend.app.domain.post_models import (
     SinglePostInsights,
     VisualQualityScore,
     WeightedPostScore,
+    VisionSignal,
+    VisionAnalysis,
+    EngagementPotentialScore,
 )
 
 
@@ -235,3 +243,82 @@ def test_engagement_quality_fallback_uses_median_save_share_rates() -> None:
     assert metrics["median_engagement_rate"] is None
     assert metrics["median_save_rate"] == pytest.approx(0.01)
     assert metrics["median_share_rate"] == pytest.approx(0.02)
+
+
+def test_compute_account_engagement_signals() -> None:
+    posts = [
+        _build_post(0, engagement_rate=0.08, save_rate=0.15, share_rate=0.10),
+        _build_post(1, engagement_rate=0.06, save_rate=0.10, share_rate=0.05),
+    ]
+    # Inject engagement potential and vision analysis for the signals
+    posts[0].engagement_potential_score = EngagementPotentialScore(shareability=8.0)
+    posts[1].engagement_potential_score = EngagementPotentialScore(shareability=6.0)
+    posts[0].vision_analysis = VisionAnalysis(
+        signals=[VisionSignal(hook_strength_score=0.9)]
+    )
+    posts[1].vision_analysis = VisionAnalysis(
+        signals=[VisionSignal(hook_strength_score=0.7)]
+    )
+    posts[0].derived_metrics.watch_through_rate = 0.50
+    posts[1].derived_metrics.watch_through_rate = 0.40
+    posts[0].derived_metrics.profile_visit_rate = 0.05
+    posts[1].derived_metrics.profile_visit_rate = 0.03
+    posts[0].derived_metrics.comment_rate = 0.02
+    posts[1].derived_metrics.comment_rate = 0.01
+
+    signals = compute_account_engagement_signals(posts)
+    
+    assert signals.avg_save_rate == pytest.approx(0.125)
+    assert signals.avg_share_rate == pytest.approx(0.075)
+    assert signals.avg_watch_through_rate == pytest.approx(0.45)
+    assert signals.avg_profile_visit_rate == pytest.approx(0.04)
+    assert signals.audience_trust_index is not None and signals.audience_trust_index > 0
+    assert signals.virality_potential is not None and signals.virality_potential > 0
+    assert signals.consistency_score is not None and signals.consistency_score > 0
+
+
+def test_compute_account_vision_summary() -> None:
+    posts = [
+        _build_post(0, engagement_rate=0.08),
+        _build_post(1, engagement_rate=0.06),
+        _build_post(2, engagement_rate=0.07),
+    ]
+    posts[0].vision_analysis = VisionAnalysis(
+        signals=[
+            VisionSignal(
+                cringe_score=20,
+                hook_strength_score=0.8,
+                production_level="high",
+                technical_flaws=[],
+            )
+        ]
+    )
+    posts[1].vision_analysis = VisionAnalysis(
+        signals=[
+            VisionSignal(
+                cringe_score=50,
+                hook_strength_score=0.6,
+                production_level="medium",
+                technical_flaws=["shaky_camera"],
+            )
+        ]
+    )
+    posts[2].vision_analysis = VisionAnalysis(
+        signals=[
+            VisionSignal(
+                cringe_score=80,
+                hook_strength_score=0.4,
+                production_level="medium",
+                technical_flaws=["shaky_camera", "bad_lighting"],
+            )
+        ]
+    )
+    
+    summary = compute_account_vision_summary(posts)
+    
+    assert summary.avg_cringe_score == pytest.approx(50.0)
+    assert summary.avg_hook_strength == pytest.approx(0.6)
+    assert summary.avg_production_level == "medium"
+    assert summary.flagged_posts_count == 2  # scores >= 45 are flagged
+    assert "shaky_camera" in summary.common_technical_flaws
+    assert "bad_lighting" in summary.common_technical_flaws

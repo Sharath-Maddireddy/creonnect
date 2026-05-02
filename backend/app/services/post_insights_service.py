@@ -34,6 +34,17 @@ class SinglePostInsightsResponse(TypedDict):
     ai_analysis: dict[str, Any] | None
 
 
+def _spoken_transcript_for_s2(post: SinglePostInsights) -> str | None:
+    reel_analysis = post.reel_analysis
+    if reel_analysis is None:
+        return None
+    transcript = reel_analysis.spoken_transcript
+    if not isinstance(transcript, str):
+        return None
+    cleaned = transcript.strip()
+    return cleaned or None
+
+
 def _coerce_single_post_insights(post: SinglePostInsights | CreatorPostAIInput) -> SinglePostInsights:
     if isinstance(post, SinglePostInsights):
         return post
@@ -109,7 +120,10 @@ async def build_single_post_insights(
             except Exception:
                 caption_effectiveness_score = None
     if caption_effectiveness_score is None:
-        caption_effectiveness_score = compute_s2_caption_effectiveness(post_copy.caption_text)
+        caption_effectiveness_score = compute_s2_caption_effectiveness(
+            post_copy.caption_text,
+            spoken_transcript=_spoken_transcript_for_s2(post_copy),
+        )
     post_copy = post_copy.model_copy(update={"caption_effectiveness_score": caption_effectiveness_score})
 
     audience_relevance_score: AudienceRelevanceScore | None = None

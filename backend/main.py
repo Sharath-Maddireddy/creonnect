@@ -8,6 +8,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 
+from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +25,11 @@ from backend.app.infra.database import init_db, initialize_database_engines
 from backend.app.utils.logger import logger
 
 
-load_dotenv(override=False)
+# Load .env from backend directory or root fallback
+_backend_env = Path(__file__).parent / ".env"
+_root_env = Path(__file__).parent.parent / ".env"
+_env_file = _backend_env if _backend_env.exists() else _root_env
+load_dotenv(_env_file, override=False)
 
 
 _DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]

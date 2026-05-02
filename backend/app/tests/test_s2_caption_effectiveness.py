@@ -42,6 +42,17 @@ def test_cta_regex() -> None:
     assert compute_s2_caption_effectiveness("No action words here").cta_score_0_100 == 20
 
 
+def test_transcript_can_improve_hook_and_cta_scores() -> None:
+    score = compute_s2_caption_effectiveness(
+        "boring opener",
+        spoken_transcript="How to triple saves? Comment below for the template",
+    )
+
+    assert score.hook_score_0_100 == 100
+    assert score.cta_score_0_100 == 100
+    assert "Audio transcript factored into caption effectiveness scoring" in score.notes
+
+
 def test_s2_weighted_total_matches_reference() -> None:
     caption = "Amazing reveal!\n" + ("x" * 70) + " #tag1 #tag2"
     score = compute_s2_caption_effectiveness(caption)

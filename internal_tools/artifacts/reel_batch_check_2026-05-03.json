@@ -1,0 +1,35 @@
+[
+  {
+    "username": "keepem.flying787",
+    "status": "ok",
+    "hook_strength": null,
+    "retention_risk": null,
+    "shareability_score": null,
+    "audio_clarity_score": null,
+    "cta_strength": null,
+    "spoken_transcript": null,
+    "failure_reason": null
+  },
+  {
+    "username": "epicgardening",
+    "status": "ok",
+    "hook_strength": null,
+    "retention_risk": null,
+    "shareability_score": null,
+    "audio_clarity_score": null,
+    "cta_strength": null,
+    "spoken_transcript": null,
+    "failure_reason": null
+  },
+  {
+    "username": "kevinbparry",
+    "status": "ok",
+    "hook_strength": null,
+    "retention_risk": null,
+    "shareability_score": null,
+    "audio_clarity_score": null,
+    "cta_strength": null,
+    "spoken_transcript": null,
+    "failure_reason": null
+  }
+]

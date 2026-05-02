@@ -132,6 +132,8 @@ def _select_items(posts: list[dict[str, Any]], reels: list[dict[str, Any]], limi
 async def _build_fixture_payload(username: str, limit: int) -> dict[str, Any]:
     profile_data = await fetch_instagram_profile(username)
     followers = _safe_int_or_none(profile_data.get("followers"))
+    following = _safe_int_or_none(profile_data.get("following"))
+    posts_count = _safe_int_or_none(profile_data.get("posts_count"))
     posts = profile_data.get("posts") if isinstance(profile_data.get("posts"), list) else []
     reels = profile_data.get("reels") if isinstance(profile_data.get("reels"), list) else []
     selected = _select_items(posts=posts, reels=reels, limit=limit)
@@ -139,8 +141,15 @@ async def _build_fixture_payload(username: str, limit: int) -> dict[str, Any]:
     return {
         "source": "scraper",
         "username": username,
+        "full_name": _optional_str(profile_data.get("full_name")),
+        "biography": _optional_str(profile_data.get("biography")),
+        "profile_pic_url": _optional_str(profile_data.get("profile_pic_url")),
+        "is_private": bool(profile_data.get("is_private")),
+        "is_verified": bool(profile_data.get("is_verified")),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "followers": followers,
+        "following": following,
+        "posts_count": posts_count,
         "limit": limit,
         "items": items,
     }

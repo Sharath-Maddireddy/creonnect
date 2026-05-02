@@ -23,7 +23,7 @@ def main() -> None:
     connection = get_rq_redis()
     # Windows lacks os.fork(); use SimpleWorker to avoid crash.
     worker_cls = SimpleWorker if platform.system() == "Windows" else Worker
-    worker = worker_cls(["account-analysis", "embedding-ingestion"], connection=connection)
+    worker = worker_cls(["account-analysis", "embedding-ingestion", "reel-analysis"], connection=connection)
     worker.work(with_scheduler=False)
 
 

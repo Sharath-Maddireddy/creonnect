@@ -132,6 +132,7 @@ def test_run_vision_analysis_reads_gemini_key(monkeypatch) -> None:
                 "scene_description": "Person presenting",
                 "detected_text": None,
                 "visual_style": "clean",
+                "technical_flaws": "Slight blur on subject edges",
                 "hook_strength_score": 0.75,
             }
         )
@@ -148,3 +149,4 @@ def test_run_vision_analysis_reads_gemini_key(monkeypatch) -> None:
 
     assert result["status"] == "ok"
     assert isinstance(result["signals"], list)
+    assert result["signals"][0]["technical_flaws"] == ["Slight blur on subject edges"]
