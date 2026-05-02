@@ -45,3 +45,25 @@ def test_client_includes_access_token_from_env(monkeypatch) -> None:
     assert query["includeDisconnected"] == ["false"]
     assert "access_token" not in query
     assert captured["authorization"] == "Bearer test-access-token"
+
+
+def test_hmac_headers_allow_user_id_only_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("CREONNECT_BD_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("CREONNECT_INTERNAL_HMAC_SECRET", "secret")
+    monkeypatch.delenv("CREONNECT_INTERNAL_HMAC_INCLUDE_EMAIL", raising=False)
+
+    client = CreonnectBDClient(
+        base_url="https://bd.example",
+        actor_user_id="user_123",
+        actor_user_email=None,
+    )
+    headers = client._build_hmac_headers(
+        method="GET",
+        path_with_query="/api/creator/profile",
+        payload_bytes=None,
+    )
+
+    assert headers.get("X-User-Id") == "user_123"
+    assert headers.get("X-Service-Id") == client.internal_service_id
+    assert "X-Signature" in headers
+    assert "X-User-Email" not in headers

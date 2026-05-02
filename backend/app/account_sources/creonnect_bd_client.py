@@ -46,7 +46,7 @@ class CreonnectBDClient:
         path_with_query: str,
         payload_bytes: bytes | None,
     ) -> dict[str, str]:
-        if not (self.internal_hmac_secret and self.actor_user_id and self.actor_user_email):
+        if not (self.internal_hmac_secret and self.actor_user_id):
             return {}
         timestamp = str(int(time.time()))
         nonce = uuid.uuid4().hex
@@ -58,7 +58,6 @@ class CreonnectBDClient:
                 timestamp,
                 nonce,
                 self.actor_user_id,
-                self.actor_user_email,
                 body_hash,
             ]
         )
@@ -72,9 +71,15 @@ class CreonnectBDClient:
             "X-Timestamp": timestamp,
             "X-Nonce": nonce,
             "X-User-Id": self.actor_user_id,
-            "X-User-Email": self.actor_user_email,
             "X-Signature": signature,
         }
+
+    @staticmethod
+    def _encode_json_body(body: dict[str, Any] | None) -> bytes | None:
+        if body is None:
+            return None
+        # Keep canonical JSON aligned with JS JSON.stringify: no spaces, UTF-8 text.
+        return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
     async def _request_json(
         self,
@@ -94,7 +99,7 @@ class CreonnectBDClient:
         payload_bytes: bytes | None = None
         if body is not None:
             headers["Content-Type"] = "application/json"
-            payload_bytes = json.dumps(body).encode("utf-8")
+            payload_bytes = self._encode_json_body(body)
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"
         else:
