@@ -8,13 +8,13 @@ import threading
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
 
-from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.app.utils.env import load_app_env
 from backend.app.utils.logger import logger
 
 
@@ -28,7 +28,7 @@ _SYNC_SESSIONMAKER: sessionmaker[Session] | None = None
 _ENGINE_LOCK = threading.RLock()
 
 
-load_dotenv(override=False)
+load_app_env(override=False)
 
 
 def get_database_url() -> str:

@@ -52,9 +52,27 @@ INSTAGRAM_APP_SECRET=your_facebook_app_secret_here
 INSTAGRAM_REDIRECT_URI=http://localhost:8000/api/auth/instagram/callback
 CREONNECT_SESSION_SECRET=replace_with_a_long_random_secret_for_cookie_signing
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+CREONNECT_BD_ACCESS_TOKEN=your_creonnect_bd_access_token_here
 ```
 
 Use `CORS_ALLOWED_ORIGINS` as a comma-separated list for your frontend origins in non-local environments.
+Use `CREONNECT_BD_ACCESS_TOKEN` when loading data from the `creonnect_bd` upstream source so the backend sends `Authorization: Bearer <token>` on those outbound API requests automatically.
+Use `QUEUE_BACKEND=rq` for the current Redis/RQ flow or `QUEUE_BACKEND=sqs` to send jobs through AWS SQS.
+When using SQS, configure:
+
+```bash
+QUEUE_BACKEND=sqs
+AWS_REGION=ap-south-1
+AWS_SQS_ACCOUNT_ANALYSIS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account-id>/account-analysis
+AWS_SQS_EMBEDDING_INGESTION_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account-id>/embedding-ingestion
+AWS_SQS_REEL_ANALYSIS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account-id>/reel-analysis
+```
+
+Optional for LocalStack or custom endpoints:
+
+```bash
+AWS_SQS_ENDPOINT_URL=http://localhost:4566
+```
 
 Note: `INSTAGRAM_SESSION_ID` is deprecated and only used for legacy dev scraper tooling.
 
@@ -69,6 +87,10 @@ Note: `INSTAGRAM_SESSION_ID` is deprecated and only used for legacy dev scraper 
 - Root-level diagnostics, fixture assets, and operational helper scripts now live under `internal_tools/`.
 - Generated helper outputs are stored under `internal_tools/artifacts/`.
 - Sidecar experiments that are not part of the launch product live under `experimental/`.
+
+## Codebase Documentation
+
+- Consolidated repository guide: [docs/CODEBASE_GUIDE.md](docs/CODEBASE_GUIDE.md)
 
 ## Dev Fixture Tools (Instagram Scraper)
 
@@ -160,5 +182,3 @@ backend/
 |   `-- utils/        # Logging and utilities
 `-- main.py           # FastAPI application
 ```
-
-

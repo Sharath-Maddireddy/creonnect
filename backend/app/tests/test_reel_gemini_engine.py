@@ -135,60 +135,57 @@ def test_upload_and_analyse_fails_fast_when_upload_returns_no_name(monkeypatch) 
 def test_upload_and_analyse_falls_back_to_google_generativeai(monkeypatch) -> None:
     captured_contents: list[object] = []
 
-    class FakeFile:
+    class FakeUploadedFile:
         name = "legacy-uploaded-file"
-        state = 2
 
-    class FakeModel:
-        def __init__(self, model_name: str) -> None:  # noqa: ARG002
-            pass
+    class FakeLegacyModel:
+        def __init__(self, model_name: str) -> None:
+            self.model_name = model_name
 
         def generate_content(self, contents: list[object]):
             captured_contents.extend(contents)
             return types.SimpleNamespace(
                 text="""
-hook_frame_score 0.61
-hook_text_overlay null
+hook_frame_score 0.55
+hook_text_overlay Wait for it
 pacing_label medium
-cut_count_estimate 4
-dominant_emotion calm
-retention_signal 0.52
-audio_visual_sync 0.48
+cut_count_estimate 5
+dominant_emotion surprise
+retention_signal 0.61
+audio_visual_sync 0.66
 objects
   - creator
-scene_description Creator speaks directly to camera
-detected_text null
-visual_style talking-head
-hook_strength_score 0.66
-cringe_score 12
+scene_description Creator gestures toward a reveal card
+detected_text Big reveal
+visual_style tutorial
+hook_strength_score 0.64
+cringe_score 14
 cringe_signals
-  - Slightly slow opener
+  - Slightly busy opening frame
 cringe_fixes
-  - Show the payoff earlier
+  - Trim the first beat
 production_level medium
 adult_content_detected false
 """.strip()
             )
 
     fake_legacy_genai = types.ModuleType("google.generativeai")
-    fake_legacy_genai.configure = lambda api_key: None
-    fake_legacy_genai.upload_file = lambda path, mime_type=None: FakeFile()
-    fake_legacy_genai.get_file = lambda name: FakeFile()
-    fake_legacy_genai.delete_file = lambda name: None
-    fake_legacy_genai.GenerativeModel = FakeModel
+    fake_legacy_genai.configure = lambda **_kwargs: None
+    fake_legacy_genai.upload_file = lambda _file_obj, mime_type=None: FakeUploadedFile()
+    fake_legacy_genai.get_file = lambda _name: types.SimpleNamespace(name="legacy-uploaded-file", state="ACTIVE")
+    fake_legacy_genai.delete_file = lambda _name: None
+    fake_legacy_genai.GenerativeModel = FakeLegacyModel
 
-    real_import = __import__
+    fake_google_module = types.ModuleType("google")
+    fake_google_module.__path__ = []
 
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: ANN001
-        if name == "google" and tuple(fromlist or ()) == ("genai",):
-            raise ImportError("google.genai not installed")
-        return real_import(name, globals, locals, fromlist, level)
-
+    monkeypatch.setitem(sys.modules, "google", fake_google_module)
+    monkeypatch.delitem(sys.modules, "google.genai", raising=False)
     monkeypatch.setitem(sys.modules, "google.generativeai", fake_legacy_genai)
-    monkeypatch.setattr("builtins.__import__", fake_import)
+    monkeypatch.setattr(reel_gemini_engine.time, "sleep", lambda *_args, **_kwargs: None)
 
     payload = reel_gemini_engine._upload_and_analyse(api_key="test-key", video_bytes=b"fake-video")
 
     assert captured_contents[0] == REEL_VISION_EVALUATION_PROMPT
-    assert payload["hook_strength_score"] == 0.66
-    assert payload["audio_visual_sync"] == 0.48
+    assert payload["hook_strength_score"] == 0.64
+    assert payload["audio_visual_sync"] == 0.66

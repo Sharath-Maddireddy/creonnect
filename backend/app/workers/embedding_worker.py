@@ -7,8 +7,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.ai.llm_client import LLMClient
 from backend.app.analytics.audience_quality import calculate_authenticity_score
 from backend.app.infra.database import get_sync_sessionmaker
+from backend.app.infra.job_queue import (
+    EMBEDDING_INGESTION_JOB_NAME,
+    EMBEDDING_INGESTION_QUEUE_NAME,
+    enqueue_callable,
+)
 from backend.app.infra.models import CreatorDiscoveryMeta, CreatorVector, EMBEDDING_DIMENSION
-from backend.app.infra.rq_queue import get_queue
 from backend.app.utils.logger import logger
 
 
@@ -116,6 +120,11 @@ def upsert_creator(creator_data: dict) -> None:
         return
 
     try:
-        get_queue("embedding-ingestion").enqueue(generate_creator_embedding, account_id)
+        enqueue_callable(
+            queue_name=EMBEDDING_INGESTION_QUEUE_NAME,
+            job_name=EMBEDDING_INGESTION_JOB_NAME,
+            func=generate_creator_embedding,
+            payload=account_id,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[EmbeddingWorker] Failed to enqueue embedding job for account_id=%s: %s", account_id, exc)

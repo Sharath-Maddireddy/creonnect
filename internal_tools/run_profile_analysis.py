@@ -11,7 +11,6 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 
@@ -21,55 +20,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(REPO_ROOT / "backend" / ".env", override=False)
 load_dotenv(override=False)
 
-from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
+from backend.app.account_sources.mappers import build_seed_post_from_fixture_item
+from backend.app.domain.post_models import SinglePostInsights
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
-from backend.app.tools.fixture_to_creator_input import build_creator_post_ai_input_from_fixture
 
 
-def _safe_int_or_none(value: Any) -> int | None:
-    try:
-        if value is None or (isinstance(value, str) and not value.strip()):
-            return None
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _build_seed_post(fixture_item: dict[str, Any], account_id: str) -> SinglePostInsights:
-    creator_post = build_creator_post_ai_input_from_fixture(fixture_item)
-    view_count = _safe_int_or_none(fixture_item.get("view_count"))
-    like_count = _safe_int_or_none(fixture_item.get("like_count"))
-    comment_count = _safe_int_or_none(fixture_item.get("comment_count"))
-
-    core_metrics = CoreMetrics(
-        reach=view_count,
-        impressions=view_count,
-        likes=like_count,
-        comments=comment_count,
-        shares=None,
-        saves=None,
-        profile_visits=None,
-        website_taps=None,
-        source_engagement_rate=None,
-    )
-
-    return SinglePostInsights(
-        account_id=account_id,
-        media_id=creator_post.post_id,
-        media_url=creator_post.media_url or None,
-        media_type=creator_post.post_type,
-        caption_text=creator_post.caption_text,
-        post_category=None,
-        creator_dominant_category=None,
-        extracted_brand_mentions=[],
-        safety_extra_flags={},
-        follower_count=_safe_int_or_none(fixture_item.get("follower_count")),
-        published_at=creator_post.posted_at,
-        core_metrics=core_metrics,
-        derived_metrics=DerivedMetrics(),
-        benchmark_metrics=BenchmarkMetrics(),
-    )
+def _build_seed_post(fixture_item: dict[str, object], account_id: str) -> SinglePostInsights:
+    return build_seed_post_from_fixture_item(fixture_item, account_id=account_id)
 
 
 async def _run_post_analysis(post: SinglePostInsights, all_posts: list[SinglePostInsights]) -> SinglePostInsights:

@@ -1,0 +1,49 @@
+name: Rollback Docker on AWS EC2 (Python)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "ECR image tag to rollback to (example: sha-<commit>)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  ECR_REPOSITORY: "creonnect-python"
+
+jobs:
+  rollback:
+    name: Rollback and Redeploy Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rollback on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_ENV: ${{ secrets.EC2_APP_ENV }}
+          APP_DIR: ${{ secrets.EC2_APP_DIR }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          envs: APP_ENV,APP_DIR,AWS_REGION,AWS_ACCOUNT_ID,ECR_REPOSITORY,IMAGE_TAG
+          script_stop: true
+          script: |
+            set -euo pipefail
+            mkdir -p "${APP_DIR}"
+            printf '%s' "${APP_ENV}" > "${APP_DIR}/.env"
+            chmod 600 "${APP_DIR}/.env"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}"
+            ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+            aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+            export ECR_IMAGE="${IMAGE_URI}"
+            docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" pull
+            docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" up -d
+            sleep 8
+            curl -fsS "http://127.0.0.1:8000/health" >/dev/null
+            docker ps --filter name=creonnect-python-api --filter name=creonnect-python-worker --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"

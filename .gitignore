@@ -62,3 +62,4 @@ test_brand_match.py
 pytest-cache-files-*/
 .pytest_tmp/
 backend/ml/data/*.jsonl
+frontend/node_modules

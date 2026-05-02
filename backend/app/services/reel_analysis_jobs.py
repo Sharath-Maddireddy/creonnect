@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import platform
 from typing import Any
 from uuid import uuid4
 
@@ -12,14 +11,15 @@ from rq import get_current_job
 from backend.app.analytics.reel_analysis_service import compute_reel_analysis
 from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
 from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
-from backend.app.analytics.reel_sarvam_engine import transcribe_reel_audio
-import concurrent.futures
-import os
+from backend.app.infra.job_queue import (
+    REEL_ANALYSIS_JOB_NAME,
+    REEL_ANALYSIS_QUEUE_NAME,
+    enqueue_callable,
+)
 from backend.app.infra.redis_client import get_json, set_json
 from backend.app.infra.rq_queue import (
     DEFAULT_FAILURE_TTL_SECONDS,
     DEFAULT_RESULT_TTL_SECONDS,
-    get_queue,
 )
 from backend.app.utils.logger import logger
 
@@ -65,6 +65,7 @@ def _update_status(job_id: str, **updates: Any) -> dict[str, Any]:
 
 
 def initialize_reel_job_status(job_id: str) -> None:
+    logger.debug("[ReelAnalysisJob] Initializing status job_id=%s", job_id)
     _write_status(job_id, _base_status(job_id))
 
 
@@ -86,16 +87,23 @@ def enqueue_reel_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         "caption_text": str(payload.get("caption_text", "")),
         "watch_time_pct": payload.get("watch_time_pct"),
     }
+    logger.info(
+        "[ReelAnalysisJob] Enqueue requested job_id=%s media_url_present=%s audio_name=%s watch_time_pct=%s",
+        job_id,
+        bool(media_url),
+        bool(payload.get("audio_name")),
+        payload.get("watch_time_pct"),
+    )
     initialize_reel_job_status(job_id)
-    queue = get_queue("reel-analysis")
-    job_timeout = None if platform.system() == "Windows" else REEL_JOB_TIMEOUT_SECONDS
-    queue.enqueue(
-        run_reel_analysis_job,
-        full_payload,
+    enqueue_callable(
+        queue_name=REEL_ANALYSIS_QUEUE_NAME,
+        job_name=REEL_ANALYSIS_JOB_NAME,
+        func=run_reel_analysis_job,
+        payload=full_payload,
         job_id=job_id,
-        job_timeout=job_timeout,
-        result_ttl=DEFAULT_RESULT_TTL_SECONDS,
-        failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
+        timeout_seconds=REEL_JOB_TIMEOUT_SECONDS,
+        result_ttl_seconds=DEFAULT_RESULT_TTL_SECONDS,
+        failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
     )
     return {"job_id": job_id, "status": "queued"}
 
@@ -110,55 +118,35 @@ def run_reel_analysis_job(payload: dict[str, Any]) -> None:
     watch_time_pct_raw = payload.get("watch_time_pct")
     watch_time_pct = float(watch_time_pct_raw) if isinstance(watch_time_pct_raw, (int, float)) else None
 
+    logger.info(
+        "[ReelAnalysisJob] Started job_id=%s audio_name=%s watch_time_pct=%s",
+        job_id,
+        bool(audio_name),
+        watch_time_pct,
+    )
     _update_status(job_id, status="started", started_at=_now_iso())
 
     try:
-        # Run vision (Gemini) and STT (Sarvam) in parallel to save time
-        transcript = None
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                future_vision = executor.submit(run_reel_gemini_analysis, media_url)
-                future_transcript = executor.submit(transcribe_reel_audio, media_url)
-                try:
-                    vision_result = future_vision.result()
-                except Exception as _e:
-                    logger.error("[ReelAnalysisJob] run_reel_gemini_analysis failed: %s", _e)
-                    vision_result = {"status": "error", "signals": {}, "error": str(_e)}
-                try:
-                    transcript = future_transcript.result()
-                except Exception as _e:
-                    logger.error("[ReelAnalysisJob] transcribe_reel_audio failed: %s", _e)
-                    transcript = None
-        except Exception as e:
-            # Fall back to sequential calls if executor fails
-            logger.error("[ReelAnalysisJob] concurrency executor failed, falling back: %s", e)
-            try:
-                vision_result = run_reel_gemini_analysis(media_url)
-            except Exception as _e:
-                logger.error("[ReelAnalysisJob] run_reel_gemini_analysis failed: %s", _e)
-                vision_result = {"status": "error", "signals": {}, "error": str(_e)}
-            try:
-                transcript = transcribe_reel_audio(media_url)
-            except Exception as _e:
-                logger.error("[ReelAnalysisJob] transcribe_reel_audio failed: %s", _e)
-                transcript = None
-
+        vision_result = run_reel_gemini_analysis(media_url)
         vision_status = str(vision_result.get("status", "error"))
         signals = vision_result.get("signals", {})
         if not isinstance(signals, dict):
             signals = {}
-
-        # Determine sarvam transcription status per returned transcript and env
-        if isinstance(transcript, str) and transcript.strip():
-            sarvam_status = "ok"
-        elif transcript is None:
-            sarvam_status = "disabled" if not os.getenv("SARVAM_API_KEY") else "error"
-        else:
-            sarvam_status = "error"
+        logger.debug(
+            "[ReelAnalysisJob] Vision result job_id=%s status=%s signal_keys=%s",
+            job_id,
+            vision_status,
+            sorted(signals.keys()),
+        )
 
         audio_score = compute_reel_audio_score(
             audio_name=audio_name if isinstance(audio_name, str) else None,
             caption_text=caption_text,
+        )
+        logger.debug(
+            "[ReelAnalysisJob] Audio score job_id=%s total=%s",
+            job_id,
+            getattr(audio_score, "total", None),
         )
 
         reel_model = compute_reel_analysis(
@@ -166,8 +154,6 @@ def run_reel_analysis_job(payload: dict[str, Any]) -> None:
             audio_score=audio_score,
             watch_time_pct=watch_time_pct,
             reel_vision_status=vision_status,
-            spoken_transcript=transcript,
-            sarvam_transcription_status=sarvam_status,
         )
 
         result = reel_model.model_dump()

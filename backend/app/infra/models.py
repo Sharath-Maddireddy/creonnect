@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON, TypeDecorator
@@ -159,20 +159,69 @@ class CreatorDiscoveryMeta(Base):
     )
 
 
-# init_db() will create this table via Base.metadata.create_all; no separate migration is required here.
-class FollowerSnapshot(Base):
-    """Stores per-account follower counts by day for dashboard momentum calculations."""
+class AccountAnalysisResult(Base):
+    """Durably stores account-analysis job outputs."""
 
-    __tablename__ = "follower_snapshots"
+    __tablename__ = "account_analysis_results"
     __table_args__ = (
-        UniqueConstraint("account_id", "snapshot_date", name="uq_follower_snapshots_account_date"),
+        Index("ix_account_analysis_results_account_id", "account_id"),
+        Index("ix_account_analysis_results_status", "status"),
+        Index("ix_account_analysis_results_updated_at", "updated_at"),
+        Index("ix_account_analysis_results_source_type", "source_type"),
     )
 
-    account_id: Mapped[str] = mapped_column(
-        String,
-        ForeignKey("creator_discovery_meta.account_id"),
-        primary_key=True,
-        index=True,
+    job_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    username: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    request_metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    warnings_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    quality_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
-    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False)
-    follower_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class BackgroundJob(Base):
+    """Stores cross-queue job state independently of the transport backend."""
+
+    __tablename__ = "background_jobs"
+    __table_args__ = (
+        Index("ix_background_jobs_queue_name", "queue_name"),
+        Index("ix_background_jobs_status", "status"),
+        Index("ix_background_jobs_account_id", "account_id"),
+        Index("ix_background_jobs_created_at", "created_at"),
+        Index("ix_background_jobs_payload_hash", "payload_hash"),
+    )
+
+    job_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    queue_name: Mapped[str] = mapped_column(Text, nullable=False)
+    job_name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    account_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    post_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payload_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    warnings_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    quality_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )

@@ -104,6 +104,92 @@ class AccountHealthMetadata(BaseModel):
     time_window_days: int | None = Field(default=None, ge=1)
 
 
+class AccountEngagementSignals(BaseModel):
+    """Aggregate engagement-health signals computed across account posts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    avg_save_rate: float | None = Field(default=None, ge=0.0)
+    avg_share_rate: float | None = Field(default=None, ge=0.0)
+    avg_watch_through_rate: float | None = Field(default=None, ge=0.0)
+    avg_profile_visit_rate: float | None = Field(default=None, ge=0.0)
+    audience_trust_index: float | None = Field(default=None, ge=0.0, le=100.0)
+    virality_potential: float | None = Field(default=None, ge=0.0, le=100.0)
+    consistency_score: float | None = Field(default=None, ge=0.0, le=100.0)
+
+
+class AccountVisionSummary(BaseModel):
+    """Aggregate vision-analysis summary computed across account posts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    avg_cringe_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    avg_hook_strength: float | None = Field(default=None, ge=0.0, le=1.0)
+    avg_production_level: Literal["low", "medium", "high"] | None = Field(default=None)
+    flagged_posts_count: int = Field(default=0, ge=0)
+    common_technical_flaws: list[str] = Field(default_factory=list)
+
+    @field_validator("common_technical_flaws", mode="before")
+    @classmethod
+    def _sanitize_technical_flaws(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = " ".join(item.strip().split())
+            if not text:
+                continue
+            sanitized.append(text[:160])
+        return sanitized[:5]
+
+
+class CreatorBrandFit(BaseModel):
+    """Brand-fit rollup for creator intelligence output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fit_categories: list[str] = Field(default_factory=list)
+    red_flags: list[str] = Field(default_factory=list)
+
+    @field_validator("fit_categories", "red_flags", mode="before")
+    @classmethod
+    def _sanitize_text_list(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        sanitized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            text = " ".join(item.strip().split())
+            if not text:
+                continue
+            sanitized.append(text[:160])
+        return sanitized[:8]
+
+
+class CreatorIntelligence(BaseModel):
+    """Optional AI-style creator summary attached to account analysis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    creator_persona: str | None = Field(default=None)
+    content_style_summary: str | None = Field(default=None)
+    top_performing_themes: list[str] = Field(default_factory=list)
+    brand_fit: CreatorBrandFit = Field(default_factory=CreatorBrandFit)
+
+    @field_validator("creator_persona", "content_style_summary", mode="before")
+    @classmethod
+    def _sanitize_optional_text(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.strip().split())
+        return text[:240] if text else None
+
+
 class AccountHealthScore(BaseModel):
     """Composite deterministic account health score."""
 

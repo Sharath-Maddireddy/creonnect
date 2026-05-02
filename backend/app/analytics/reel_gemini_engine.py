@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-import warnings
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,57 @@ REEL_DOWNLOAD_TIMEOUT_SEC = 30.0
 MAX_VIDEO_BYTES = 100 * 1024 * 1024
 GEMINI_FILE_POLL_MAX_ATTEMPTS = 20
 GEMINI_FILE_POLL_INTERVAL_SEC = 2.0
+
+
+def _build_genai_adapter():
+    """Return a small adapter over the installed Gemini SDK."""
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+
+        class _GoogleGenaiAdapter:
+            def __init__(self, api_key: str) -> None:
+                self._client = genai.Client(api_key=api_key)
+
+            def upload(self, file_obj):
+                return self._client.files.upload(
+                    file=file_obj,
+                    config=genai_types.UploadFileConfig(mime_type="video/mp4"),
+                )
+
+            def get(self, name: str):
+                return self._client.files.get(name=name)
+
+            def delete(self, name: str) -> None:
+                self._client.files.delete(name=name)
+
+            def generate_content(self, model_name: str, contents: list[object]):
+                return self._client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                )
+
+        return _GoogleGenaiAdapter
+    except ImportError:
+        import google.generativeai as legacy_genai
+
+        class _LegacyGenaiAdapter:
+            def __init__(self, api_key: str) -> None:
+                legacy_genai.configure(api_key=api_key)
+
+            def upload(self, file_obj):
+                return legacy_genai.upload_file(file_obj, mime_type="video/mp4")
+
+            def get(self, name: str):
+                return legacy_genai.get_file(name)
+
+            def delete(self, name: str) -> None:
+                legacy_genai.delete_file(name)
+
+            def generate_content(self, model_name: str, contents: list[object]):
+                return legacy_genai.GenerativeModel(model_name).generate_content(contents)
+
+        return _LegacyGenaiAdapter
 
 
 def _download_reel(media_url: str) -> bytes | None:
@@ -54,27 +104,10 @@ def _strip_markdown_fences(text: str) -> str:
     return "\n".join(lines[1:]).strip()
 
 
-def _normalize_file_state(value: Any) -> str:
-    state_name = getattr(value, "name", None)
-    if isinstance(state_name, str) and state_name.strip():
-        return state_name.strip().upper()
-    if isinstance(value, str):
-        return value.strip().upper()
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError):
-        return ""
-    if numeric == 2:
-        return "ACTIVE"
-    if numeric == 10:
-        return "FAILED"
-    if numeric == 1:
-        return "PROCESSING"
-    return str(numeric)
-
-
 def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
     """Upload video to Gemini File API, poll until ACTIVE, then analyse."""
+    genai_adapter_cls = _build_genai_adapter()
+    client = genai_adapter_cls(api_key=api_key)
     tmp_path: Path | None = None
     uploaded_file_name: str | None = None
 
@@ -85,67 +118,20 @@ def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
     # File handle is now closed — safe to read on Windows
 
     try:
-        delete_file = None
-        generate_content = None
-        get_file = None
-        upload_file = None
-        try:
-            from google import genai
-            from google.genai import types as genai_types
-
-            client = genai.Client(api_key=api_key)
-
-            def upload_file(path: Path) -> Any:
-                with open(path, "rb") as video_file:
-                    return client.files.upload(
-                        file=video_file,
-                        config=genai_types.UploadFileConfig(mime_type="video/mp4"),
-                    )
-
-            def get_file(name: str) -> Any:
-                return client.files.get(name=name)
-
-            def delete_file(name: str) -> None:
-                client.files.delete(name=name)
-
-            def generate_content(model_name: str, file_status: Any) -> Any:
-                return client.models.generate_content(
-                    model=model_name,
-                    contents=[REEL_VISION_EVALUATION_PROMPT, file_status],
-                )
-        except ImportError:
-            import google.generativeai as legacy_genai
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", FutureWarning)
-                legacy_genai.configure(api_key=api_key)
-
-            def upload_file(path: Path) -> Any:
-                return legacy_genai.upload_file(path=path, mime_type="video/mp4")
-
-            def get_file(name: str) -> Any:
-                return legacy_genai.get_file(name)
-
-            def delete_file(name: str) -> None:
-                legacy_genai.delete_file(name)
-
-            def generate_content(model_name: str, file_status: Any) -> Any:
-                model = legacy_genai.GenerativeModel(model_name=model_name)
-                return model.generate_content([REEL_VISION_EVALUATION_PROMPT, file_status])
-
         logger.info("[ReelGemini] Uploading video to Gemini File API (%d bytes).", len(video_bytes))
-        uploaded = upload_file(tmp_path)
+        with open(tmp_path, "rb") as video_file:
+            uploaded = client.upload(video_file)
         uploaded_file_name = getattr(uploaded, "name", None)
         if not uploaded_file_name:
             raise RuntimeError("Gemini upload did not return a file name.")
 
         # Poll until ACTIVE
         for attempt in range(GEMINI_FILE_POLL_MAX_ATTEMPTS):
-            file_status = get_file(uploaded_file_name)
-            state = _normalize_file_state(getattr(file_status, "state", ""))
-            if state == "ACTIVE":
+            file_status = client.get(uploaded_file_name)
+            state = str(getattr(file_status, "state", "")).upper()
+            if "ACTIVE" in state:
                 break
-            if state == "FAILED":
+            if "FAILED" in state:
                 raise RuntimeError("Gemini file processing FAILED.")
             logger.debug("[ReelGemini] File state=%s, waiting... (attempt %d)", state, attempt + 1)
             time.sleep(GEMINI_FILE_POLL_INTERVAL_SEC)
@@ -159,7 +145,10 @@ def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
         for model_name in _MODELS_TO_TRY:
             for attempt in range(2):  # 1 retry per model
                 try:
-                    response = generate_content(model_name, file_status)
+                    response = client.generate_content(
+                        model_name,
+                        [REEL_VISION_EVALUATION_PROMPT, file_status],
+                    )
                     last_exc = None
                     break
                 except Exception as exc:
@@ -195,7 +184,7 @@ def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
         # Best-effort: delete Gemini-hosted file to stay within quota
         if uploaded_file_name:
             try:
-                delete_file(uploaded_file_name)
+                client.delete(uploaded_file_name)
             except Exception:
                 pass
 

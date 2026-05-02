@@ -11,6 +11,8 @@ import pytest
 import fakeredis
 from fastapi.testclient import TestClient
 
+from backend.app.analytics.reel_audio_engine import ReelAudioScore
+from backend.app.domain.account_models import AccountHealthScore, CreatorIntelligence, PillarScore
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
 import backend.app.infra.redis_client as redis_client
 import backend.app.infra.redis_client as _redis_client_module
@@ -48,6 +50,14 @@ def _build_post_payload(index: int) -> dict:
 def _build_post_payload_with_caption(index: int, caption_text: str) -> dict:
     payload = _build_post_payload(index)
     payload["caption_text"] = caption_text
+    return payload
+
+
+def _build_reel_post_payload(index: int) -> dict:
+    payload = _build_post_payload(index)
+    payload["media_type"] = "REEL"
+    payload["media_url"] = f"https://cdn.example/reel_{index}.mp4"
+    payload["caption_text"] = "Original audio reel about clouds"
     return payload
 
 
@@ -460,3 +470,73 @@ def test_posts_summary_determinism(monkeypatch) -> None:
     status_two = account_analysis_jobs.get_account_analysis_job_status("job_posts_summary_det_2")
     assert status_one is not None and status_two is not None
     assert status_one["result"]["posts_summary"] == status_two["result"]["posts_summary"]
+
+
+def test_reel_posts_receive_inline_reel_analysis_in_account_analysis(monkeypatch) -> None:
+    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
+
+    async def _fake_build_single_post_insights(target_post, historical_posts, run_ai=True):  # noqa: ANN001
+        return {
+            "post": target_post,
+            "content_score": {"score": 60, "band": "AVERAGE"},
+            "ai_analysis": {
+                "summary": "Reel summary",
+                "warnings": [],
+                "vision_status": "ok",
+                "fallback_used": False,
+            },
+        }
+
+    async def _fake_generate_creator_intelligence(**kwargs):  # noqa: ANN003
+        return CreatorIntelligence()
+
+    monkeypatch.setattr(account_analysis_jobs, "build_single_post_insights", _fake_build_single_post_insights)
+    monkeypatch.setattr(account_analysis_jobs, "generate_creator_intelligence", _fake_generate_creator_intelligence)
+    monkeypatch.setattr(account_analysis_jobs, "upsert_creator", lambda creator_data: None)
+    monkeypatch.setattr(
+        account_analysis_jobs,
+        "analyze_account_health",
+        lambda **kwargs: AccountHealthScore(
+            ahs_score=72.0,
+            pillars={
+                "content_quality": PillarScore(score=60.0),
+                "engagement_quality": PillarScore(score=75.0),
+                "brand_safety": PillarScore(score=90.0),
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        account_analysis_jobs,
+        "run_reel_gemini_analysis",
+        lambda media_url: {
+            "status": "ok",
+            "signals": {"hook_frame_score": 0.8, "pacing_label": "fast", "retention_signal": 0.6},
+        },
+    )
+    monkeypatch.setattr(
+        account_analysis_jobs,
+        "compute_reel_audio_score",
+        lambda audio_name, caption_text: ReelAudioScore(total=4.0, notes=["audio score stub"]),
+    )
+
+    payload = {
+        "job_id": "job_inline_reel_analysis",
+        "account_id": "acct_queue",
+        "post_limit": 1,
+        "posts": [_build_reel_post_payload(1)],
+        "include_posts_summary": True,
+        "include_posts_summary_max": 1,
+    }
+
+    account_analysis_jobs.run_account_analysis_job(payload)
+
+    status = account_analysis_jobs.get_account_analysis_job_status("job_inline_reel_analysis")
+    assert status is not None
+    assert status["status"] == "succeeded"
+    posts_summary = status["result"]["posts_summary"]
+    assert len(posts_summary) == 1
+    assert posts_summary[0]["post_type"] == "REEL"
+    assert posts_summary[0]["reel_analysis"]["reel_vision_status"] == "ok"
+    assert posts_summary[0]["reel_analysis"]["hook_score"] == 40.0
+    assert posts_summary[0]["reel_analysis"]["total"] is not None

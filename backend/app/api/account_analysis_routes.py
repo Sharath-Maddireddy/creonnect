@@ -23,7 +23,7 @@ class AccountAnalysisRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    account_id: str
+    account_id: str | None = None
     username: str | None = None
     bio: str | None = None
     follower_count: int | None = None
@@ -34,7 +34,13 @@ class AccountAnalysisRequest(BaseModel):
     niche_avg_engagement_rate: float | None = None
     follower_band: str | None = None
     posts: list[dict[str, Any]] | None = None
-    access_token: str | None = None
+    source: str | None = None
+    fixture_path: str | None = None
+    connection_id: str | None = None
+    bd_base_url: str | None = None
+    bd_timeout_seconds: float | None = None
+    actor_user_id: str | None = None
+    actor_user_email: str | None = None
     include_posts_summary: bool = False
     include_posts_summary_max: int = Field(default=30, ge=1, le=30)
 
