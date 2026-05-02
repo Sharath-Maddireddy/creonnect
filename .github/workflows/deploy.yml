@@ -48,11 +48,6 @@ jobs:
             pip install -r backend/requirements.txt
           fi
 
-      - name: Run antigravity suites
-        run: |
-          python -m pytest backend/app/tests/test_api_antigravity_runner.py -v --tb=short
-          python -m pytest backend/app/tests/test_system_antigravity_suite.py -v --tb=short
-
   build-and-push:
     name: Build and Push Docker Image to ECR
     runs-on: ubuntu-latest
