@@ -88,14 +88,14 @@ jobs:
           script: |
             set -euo pipefail
             mkdir -p "${APP_DIR}"
-            printf '%s' "${APP_ENV}" > "${APP_DIR}/.env"
+            printf '%s\n' "${APP_ENV}" > "${APP_DIR}/.env"
             chmod 600 "${APP_DIR}/.env"
             cp "${APP_DIR}/docker-compose.prod.yml" "${APP_DIR}/docker-compose.yml"
             ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
             IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
             aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
             export ECR_IMAGE="${IMAGE_URI}"
-            echo "ECR_IMAGE=${IMAGE_URI}" >> "${APP_DIR}/.env"
+            printf 'ECR_IMAGE=%s\n' "${IMAGE_URI}" >> "${APP_DIR}/.env"
             docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" pull
             docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" up -d
             sleep 8
