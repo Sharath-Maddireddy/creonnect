@@ -79,12 +79,11 @@ jobs:
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
           ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          envs: APP_ENV,APP_DIR,AWS_REGION,AWS_ACCOUNT_ID,ECR_REPOSITORY,IMAGE_TAG,IMAGE_URI
+          envs: APP_ENV,APP_DIR,AWS_REGION,AWS_ACCOUNT_ID,ECR_REPOSITORY,IMAGE_TAG
           script_stop: true
           script: |
             set -euo pipefail
@@ -93,6 +92,7 @@ jobs:
             chmod 600 "${APP_DIR}/.env"
             cp "${APP_DIR}/docker-compose.prod.yml" "${APP_DIR}/docker-compose.yml"
             ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+            IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
             aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
             export ECR_IMAGE="${IMAGE_URI}"
             echo "ECR_IMAGE=${IMAGE_URI}" >> "${APP_DIR}/.env"
