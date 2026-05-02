@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  api:
+    image: ${ECR_IMAGE}
+    container_name: creonnect-python-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "backend.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--workers",
+        "2",
+        "--log-level",
+        "info"
+      ]
+
+  worker:
+    image: ${ECR_IMAGE}
+    container_name: creonnect-python-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["python", "-m", "backend.app.workers.sqs_worker"]

@@ -1,90 +1,49 @@
-name: Rollback Docker on GCP VM (Python)
+name: Rollback Docker on AWS EC2 (Python)
 
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Docker image tag to rollback to (example: sha-<commit>)"
+        description: "ECR image tag to rollback to (example: sha-<commit>)"
         required: true
 
 permissions:
   contents: read
-  id-token: write
 
 env:
-  instanceName: "instance-20260223-200714"
-  instanceZone: "us-central1-c"
-  projectId: "serious-cat-488312-p9"
-  imageName: "creonnect-python"
+  ECR_REPOSITORY: "creonnect-python"
 
 jobs:
   rollback:
     name: Rollback and Redeploy Docker Image
     runs-on: ubuntu-latest
     steps:
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
-
-      - name: Setup gcloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.projectId }}
-
-      - name: Configure project
-        run: gcloud config set project "${{ env.projectId }}"
-
-      - name: Sync .env from GitHub secret
+      - name: Rollback on EC2
+        uses: appleboy/ssh-action@v1.0.3
         env:
-          GCP_APP_ENV: ${{ secrets.GCP_APP_ENV }}
-        run: |
-          APP_DIR="${{ secrets.GCP_APP_DIR || '/opt/creonnect-python' }}"
-
-          if [ -z "${GCP_APP_ENV:-}" ]; then
-            echo "Missing required secret: GCP_APP_ENV"
-            exit 1
-          fi
-
-          printf '%s' "$GCP_APP_ENV" > app.env
-
-          gcloud compute ssh "${{ env.instanceName }}" \
-            --zone "${{ env.instanceZone }}" \
-            --project "${{ env.projectId }}" \
-            --tunnel-through-iap \
-            --command "sudo mkdir -p ${APP_DIR}"
-
-          gcloud compute scp \
-            --zone "${{ env.instanceZone }}" \
-            --project "${{ env.projectId }}" \
-            --tunnel-through-iap \
-            app.env "${{ env.instanceName }}:/tmp/creonnect-python.env"
-
-          gcloud compute ssh "${{ env.instanceName }}" \
-            --zone "${{ env.instanceZone }}" \
-            --project "${{ env.projectId }}" \
-            --tunnel-through-iap \
-            --command "sudo mv /tmp/creonnect-python.env ${APP_DIR}/.env && sudo chmod 600 ${APP_DIR}/.env"
-
-          rm -f app.env
-
-      - name: Pull selected image tag and restart containers on VM
-        run: |
-          APP_DIR="${{ secrets.GCP_APP_DIR || '/opt/creonnect-python' }}"
-          IMAGE_REPO="${{ secrets.DOCKER_USERNAME }}/${{ env.imageName }}"
-          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
-
-          gcloud compute ssh "${{ env.instanceName }}" \
-            --zone "${{ env.instanceZone }}" \
-            --project "${{ env.projectId }}" \
-            --tunnel-through-iap \
-            --command "bash -lc 'set -euo pipefail; \
-              [ -f ${APP_DIR}/.env ] || { echo \"Missing ${APP_DIR}/.env\"; exit 1; }; \
-              command -v docker >/dev/null 2>&1 || { echo \"Docker is not installed on VM\"; exit 1; }; \
-              echo \"${{ secrets.DOCKER_PASSWORD }}\" | sudo docker login -u \"${{ secrets.DOCKER_USERNAME }}\" --password-stdin; \
-              sudo docker pull ${IMAGE_REPO}:${IMAGE_TAG}; \
-              sudo docker rm -f creonnect-python-api creonnect-python-worker >/dev/null 2>&1 || true; \
-              sudo docker run -d --name creonnect-python-api --restart unless-stopped --network creonnect-net --env-file ${APP_DIR}/.env -p 8000:8000 ${IMAGE_REPO}:${IMAGE_TAG}; \
-              sudo docker run -d --name creonnect-python-worker --restart unless-stopped --network creonnect-net --env-file ${APP_DIR}/.env -e QUEUE_BACKEND=sqs ${IMAGE_REPO}:${IMAGE_TAG} python -m backend.app.workers.sqs_worker; \
-              sudo docker ps --filter name=creonnect-python-api --filter name=creonnect-python-worker --format \"table {{.Names}}\t{{.Image}}\t{{.Status}}\"'"
+          APP_ENV: ${{ secrets.EC2_APP_ENV }}
+          APP_DIR: ${{ secrets.EC2_APP_DIR }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          envs: APP_ENV,APP_DIR,AWS_REGION,AWS_ACCOUNT_ID,ECR_REPOSITORY,IMAGE_TAG
+          script_stop: true
+          script: |
+            set -euo pipefail
+            mkdir -p "${APP_DIR}"
+            printf '%s' "${APP_ENV}" > "${APP_DIR}/.env"
+            chmod 600 "${APP_DIR}/.env"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}"
+            ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+            aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+            export ECR_IMAGE="${IMAGE_URI}"
+            docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" pull
+            docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" up -d
+            sleep 8
+            curl -fsS "http://127.0.0.1:8000/health" >/dev/null
+            docker ps --filter name=creonnect-python-api --filter name=creonnect-python-worker --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
