@@ -42,7 +42,7 @@ class AccountAnalysisRequest(BaseModel):
     actor_user_id: str | None = None
     actor_user_email: str | None = None
     include_posts_summary: bool = False
-    include_posts_summary_max: int = Field(default=30, ge=1, le=30)
+    include_posts_summary_max: int = Field(default=30, ge=1)
 
 
 @router.post("/account-analysis")

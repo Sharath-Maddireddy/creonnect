@@ -305,7 +305,7 @@ def test_posts_summary_payload_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "posts_summary" in result
     posts_summary = result["posts_summary"]
     assert isinstance(posts_summary, list)
-    assert len(posts_summary) == 30
+    assert len(posts_summary) == 35
     assert all(len(item.get("caption_preview", "")) <= 120 for item in posts_summary)
 
 

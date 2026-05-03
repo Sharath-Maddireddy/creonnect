@@ -129,7 +129,7 @@ def _sanitize_posts_summary(result: dict[str, Any]) -> dict[str, Any]:
         return result
 
     bounded: list[dict[str, Any]] = []
-    for item in posts_summary[:30]:
+    for item in posts_summary:
         if not isinstance(item, dict):
             continue
         sanitized = _strip_signals(item)
@@ -366,7 +366,7 @@ def _normalize_include_posts_summary_max(value: Any) -> int:
         parsed = int(value)
     except (TypeError, ValueError):
         parsed = 30
-    return max(1, min(30, parsed))
+    return max(1, parsed)
 
 
 def _status_value(job_id: str) -> str | None:
