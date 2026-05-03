@@ -30,7 +30,7 @@ class AccountSourceRequest(BaseModel):
     follower_count: int | None = None
     creator_dominant_category: str | None = None
     niche_tags: list[str] | None = None
-    post_limit: int = Field(default=30, ge=1, le=30)
+    post_limit: int = Field(default=30, ge=1)
     fixture_path: str | None = None
     connection_id: str | None = None
     bd_base_url: str | None = None

@@ -331,7 +331,7 @@ def _normalize_post_limit(value: Any) -> int:
         post_limit = int(value)
     except (TypeError, ValueError):
         post_limit = 30
-    return max(1, min(30, post_limit))
+    return max(1, post_limit)
 
 
 def _normalize_job_id(value: Any) -> str:

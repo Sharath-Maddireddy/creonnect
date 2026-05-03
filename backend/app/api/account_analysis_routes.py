@@ -29,7 +29,7 @@ class AccountAnalysisRequest(BaseModel):
     follower_count: int | None = None
     creator_dominant_category: str | None = None
     niche_tags: list[str] | None = None
-    post_limit: int = Field(default=30, ge=1, le=30)
+    post_limit: int = Field(default=30, ge=1)
     account_avg_engagement_rate: float | None = None
     niche_avg_engagement_rate: float | None = None
     follower_band: str | None = None

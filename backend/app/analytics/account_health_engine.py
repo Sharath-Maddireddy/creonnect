@@ -64,8 +64,7 @@ def _sort_recent_posts(posts: list[SinglePostInsights]) -> list[SinglePostInsigh
             return _as_utc(published_at).timestamp()
         return float("-inf")
 
-    ordered = sorted(posts, key=_sort_key, reverse=True)
-    return ordered[:30]
+    return sorted(posts, key=_sort_key, reverse=True)
 
 
 def _mean_or_none(values: list[float]) -> float | None:

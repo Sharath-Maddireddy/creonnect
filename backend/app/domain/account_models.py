@@ -99,7 +99,7 @@ class AccountHealthMetadata(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    post_count_used: int = Field(default=0, ge=0, le=30)
+    post_count_used: int = Field(default=0, ge=0)
     min_history_threshold_met: bool = Field(default=False)
     time_window_days: int | None = Field(default=None, ge=1)
 

@@ -73,7 +73,7 @@ def main() -> None:
         "username": fixture.get("username"),
         "bio": fixture.get("biography") or fixture.get("bio"),
         "follower_count": fixture.get("followers_count") or fixture.get("follower_count"),
-        "post_limit": min(len(analyzed_posts), 30),
+        "post_limit": len(analyzed_posts),
         "posts": [post.model_dump(mode="python") for post in analyzed_posts],
     }
     queued = enqueue_account_analysis_job(payload)
