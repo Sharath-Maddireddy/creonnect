@@ -98,6 +98,22 @@ jobs:
             printf 'ECR_IMAGE=%s\n' "${IMAGE_URI}" >> "${APP_DIR}/.env"
             docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" pull
             docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" up -d
-            sleep 8
-            curl -fsS "http://127.0.0.1:8000/health" >/dev/null
+            HEALTH_URL="http://127.0.0.1:8000/health"
+            ATTEMPTS=24
+            SLEEP_SECONDS=5
+            for attempt in $(seq 1 "${ATTEMPTS}"); do
+              if curl -fsS "${HEALTH_URL}" >/dev/null; then
+                echo "Health check passed on attempt ${attempt}/${ATTEMPTS}"
+                break
+              fi
+              if [ "${attempt}" -eq "${ATTEMPTS}" ]; then
+                echo "Health check failed after $((ATTEMPTS * SLEEP_SECONDS)) seconds."
+                docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" ps
+                docker logs --tail 200 creonnect-python-api || true
+                docker logs --tail 200 creonnect-python-worker || true
+                exit 1
+              fi
+              echo "Health check not ready (${attempt}/${ATTEMPTS}); retrying in ${SLEEP_SECONDS}s..."
+              sleep "${SLEEP_SECONDS}"
+            done
             docker ps --filter name=creonnect-python-api --filter name=creonnect-python-worker --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
