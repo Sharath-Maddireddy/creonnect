@@ -118,11 +118,10 @@ def loads(text: str) -> dict[str, Any]:
         if not raw_line.strip():
             continue
 
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        if indent % INDENT_SPACES != 0:
-            raise ValueError(f"Invalid indentation: {raw_line!r}")
+        raw_indent = len(raw_line) - len(raw_line.lstrip(" "))
+        indent = (raw_indent // INDENT_SPACES) * INDENT_SPACES
 
-        content = raw_line[indent:].rstrip()
+        content = raw_line.lstrip(" ").rstrip()
 
         if indent > stack[-1][0]:
             if pending is None:

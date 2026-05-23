@@ -68,6 +68,9 @@ def enforce_cringe_floor(cringe_score: int, cringe_signals: list[str]) -> int:
     Port of enforceCringeFloor from Cringe-detector-main/server.js.
     - 3+ signals with strong keywords -> score >= 70
     - 2 signals with strong keywords -> score >= 60
+    - confusing/nonsensical concept + awkward posing -> score >= 75
+    - confusing/nonsensical concept -> score >= 65
+    - awkward posing -> score >= 55
     - Cap at 100, floor at 0.
     Strong signal keywords: awkward, cringe, forced, overexaggerated, nonsens, confus, chaotic,
     low production, poor quality
@@ -76,13 +79,23 @@ def enforce_cringe_floor(cringe_score: int, cringe_signals: list[str]) -> int:
     signals = [item for item in cringe_signals if isinstance(item, str)]
     signal_text = " ".join(signals).lower()
     strong_signal = bool(_STRONG_SIGNAL_RE.search(signal_text))
+    confusing_concept = any(keyword in signal_text for keyword in ("confus", "nonsens"))
+    awkward_posing = any(keyword in signal_text for keyword in ("awkward", "forced", "pose"))
+    floor = score
 
     if len(signals) >= 3 and strong_signal:
-        score = max(score, 70)
+        floor = max(floor, 70)
     elif len(signals) >= 2 and strong_signal:
-        score = max(score, 60)
+        floor = max(floor, 60)
 
-    return int(max(0, min(100, score)))
+    if confusing_concept and awkward_posing:
+        floor = max(floor, 75)
+    elif confusing_concept:
+        floor = max(floor, 65)
+    elif awkward_posing:
+        floor = max(floor, 55)
+
+    return int(max(0, min(100, floor)))
 
 
 def derive_cringe_label(cringe_score: int | None) -> str | None:

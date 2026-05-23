@@ -14,6 +14,8 @@ from ipaddress import ip_address
 from typing import Any, Literal, NotRequired, TypedDict
 from urllib.parse import urlparse, urlunparse
 
+from google.genai import types as genai_types
+
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
 from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_RELEVANCE_PROMPT, format_user_text_block
 from backend.app.ai.toon import loads as toon_loads
@@ -43,6 +45,7 @@ from backend.app.utils.logger import logger
 CACHE_TTL_SECONDS = 86400
 MIN_REGEN_SECONDS = 1
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
+_DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 
 def _parse_timeout(env_key: str, default: float) -> float:
@@ -411,22 +414,6 @@ def _coerce_int_0_100(value: Any) -> int | None:
     return int(max(0.0, min(100.0, round(numeric))))
 
 
-def _apply_cringe_prompt_floor(cringe_score: int, cringe_signals: list[str]) -> int:
-    score = int(max(0, min(100, cringe_score)))
-    text = " ".join(cringe_signals).lower()
-    confusing_concept = any(keyword in text for keyword in ("confus", "nonsens"))
-    awkward_posing = any(keyword in text for keyword in ("awkward", "forced", "pose"))
-
-    if confusing_concept and awkward_posing:
-        score = max(score, 75)
-    elif confusing_concept:
-        score = max(score, 65)
-    elif awkward_posing:
-        score = max(score, 55)
-
-    return int(max(0, min(100, score)))
-
-
 async def run_vision_analysis(
     post: SinglePostInsights,
 ) -> dict[str, Any]:
@@ -437,8 +424,12 @@ async def run_vision_analysis(
 
     instruction = (
         "You are an expert Social Media Art Director and Computer Vision analysis engine. "
-        "Analyze the provided Instagram media (image/frame) strictly through the lens of technical visual quality "
-        "and compositional structure. Return ONLY valid TOON format (Token-Oriented Object Notation). "
+        "Analyze the provided Instagram media (image or video) strictly through the lens of technical visual quality "
+        "and compositional structure. If the media is a video, you MUST watch it from beginning to end. "
+        "Your analysis and scene_description must account for the entire duration, including any scene changes, "
+        "unexpected twists, or different content in the second half. "
+        "Keep the scene_description VERY CONCISE (maximum 2 sentences). Focus only on the core actions and twists. "
+        "Return ONLY valid TOON format (Token-Oriented Object Notation). "
         "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes.\n\n"
         "You must evaluate the image objectively on the following deterministic rules to calculate S1 sub-scores:\n"
         "1) COMPOSITION (0-10): Rule of Thirds/symmetry (+3), dominant_focus present (+4), >4 primary objects (-3), "
@@ -451,7 +442,7 @@ async def run_vision_analysis(
         "heavy text overlays (-3) or very heavy (-5), remaining points for premium visual feel.\n\n"
         "Output TOON must include exactly these keys:\n"
         "objects\n"
-        "  - object\n"
+        "  - string\n"
         "dominant_focus value_or_null\n"
         "scene_description value\n"
         "visual_style value\n"
@@ -473,10 +464,12 @@ async def run_vision_analysis(
         "production_level low|medium|high\n"
         "adult_content_detected true|false\n"
         "adult_content_confidence 0-100\n\n"
-        "Cringe rubric: 0-20 polished/natural; 21-40 minor awkwardness; 41-60 noticeable awkwardness or weak concept; "
-        "61-80 strong cringe (forced, confusing, low coherence); 81-100 extreme cringe. "
-        "Floor rules: if concept is confusing or nonsensical score must be >=65; "
-        "if repeated awkward posing score must be >=55; if both are present score must be >=75."
+        "Cringe rubric (EXTREMELY FORGIVING): "
+        "0-40: Normal social media behavior. Includes gym selfies, mirror selfies, typical flexing, slightly awkward posing, filters, and standard candids. DO NOT penalize these. "
+        "41-60: Very awkward, but still borderline acceptable. "
+        "61-80: Undeniable cringe. Deeply uncomfortable, bizarrely out of touch, or severely forced interactions. "
+        "81-100: Extreme cringe. Nonsensical, absolutely horrible execution, socially oblivious. "
+        "Floor rules: ONLY apply cringe scores > 50 to the absolute worst, most egregiously awful content."
     )
 
     media_url = post.media_url
@@ -500,6 +493,7 @@ async def run_vision_analysis(
         )
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")
 
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
@@ -511,49 +505,48 @@ async def run_vision_analysis(
             media_url=media_url,
         )
         stripped_raw_text = raw_text.strip()
-        if stripped_raw_text.startswith("{"):
-            payload = json.loads(stripped_raw_text)
-        else:
-            payload = toon_loads(raw_text)
+        if stripped_raw_text.startswith("```"):
+            lines = stripped_raw_text.splitlines()
+            if len(lines) > 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
+                stripped_raw_text = "\n".join(lines[1:-1]).strip()
+
+        try:
+            if "{" in stripped_raw_text and "}" in stripped_raw_text:
+                start = stripped_raw_text.find("{")
+                end = stripped_raw_text.rfind("}") + 1
+                payload = json.loads(stripped_raw_text[start:end])
+            else:
+                payload = toon_loads(stripped_raw_text)
+        except Exception:
+            payload = toon_loads(stripped_raw_text)
         if not isinstance(payload, dict):
             raise ValueError("Gemini output must be a TOON object.")
 
-        required_keys = {
-            "objects",
-            "scene_description",
-            "visual_style",
-            "detected_text",
-            "hook_strength_score",
-        }
-        if not required_keys.issubset(payload.keys()):
-            raise ValueError("Gemini TOON schema mismatch.")
-
-        objects = payload.get("objects")
+        objects = payload.get("objects") or []
         dominant_focus = payload.get("dominant_focus")
-        scene_description = payload.get("scene_description")
+        scene_description = payload.get("scene_description") or ""
         detected_text = payload.get("detected_text")
-        visual_style = payload.get("visual_style")
+        visual_style = payload.get("visual_style") or "Unknown"
         scene_type = payload.get("scene_type")
         visual_quality_score = payload.get("visual_quality_score") or {}
         technical_flaws = payload.get("technical_flaws") or []
         hook_strength_score = payload.get("hook_strength_score")
 
-        if not isinstance(objects, list) or not all(isinstance(item, str) for item in objects):
-            raise ValueError("Invalid objects field.")
+        if not isinstance(objects, list):
+            objects = []
         if dominant_focus is not None and not isinstance(dominant_focus, str):
             raise ValueError("Invalid dominant_focus field.")
-        if not isinstance(scene_description, str):
-            raise ValueError("Invalid scene_description field.")
         if detected_text is not None and not isinstance(detected_text, str):
-            raise ValueError("Invalid detected_text field.")
-        if not isinstance(visual_style, str):
-            raise ValueError("Invalid visual_style field.")
+            if isinstance(detected_text, list):
+                detected_text = ", ".join(str(x) for x in detected_text)
+            else:
+                detected_text = str(detected_text)
         if scene_type is not None and not isinstance(scene_type, str):
             raise ValueError("Invalid scene_type field.")
         if not isinstance(visual_quality_score, dict):
-            raise ValueError("Invalid visual_quality_score field.")
+            visual_quality_score = {}
         if not isinstance(hook_strength_score, (int, float)):
-            raise ValueError("Invalid hook_strength_score field.")
+            hook_strength_score = 0.5
 
         objects = [
             item.strip()
@@ -561,9 +554,9 @@ async def run_vision_analysis(
             if isinstance(item, str) and item.strip()
         ]
         dominant_focus = dominant_focus.strip() if isinstance(dominant_focus, str) else None
-        scene_description = scene_description.strip()
+        scene_description = scene_description.strip() if isinstance(scene_description, str) else ""
         detected_text = detected_text.strip() if detected_text else None
-        visual_style = visual_style.strip()
+        visual_style = visual_style.strip() if isinstance(visual_style, str) else "Unknown"
         scene_type = scene_type.strip() if isinstance(scene_type, str) else None
         technical_flaws = [item.strip() for item in technical_flaws if isinstance(item, str) and item.strip()][:3]
         composition_raw = _as_float(visual_quality_score.get("composition"))
@@ -595,7 +588,6 @@ async def run_vision_analysis(
 
         if cringe_score is not None:
             floored_score = enforce_cringe_floor(cringe_score, cringe_signals)
-            floored_score = _apply_cringe_prompt_floor(floored_score, cringe_signals)
             if floored_score != cringe_score:
                 logger.info(
                     "[Cringe] Applied cringe floor for media_url=%s score=%s->%s",
@@ -635,6 +627,35 @@ async def run_vision_analysis(
         return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
     except Exception as e:
         error_reason = str(e).strip() or e.__class__.__name__
+        
+        if "SAFETY_BLOCK" in error_reason:
+            logger.warning("[Vision] Caught safety block for %s: %s", post_id, error_reason)
+            synthetic_signal = {
+                "objects": [],
+                "primary_objects": [],
+                "scene_description": "Content blocked by AI safety filters.",
+                "detected_text": None,
+                "visual_style": None,
+                "hook_strength_score": 0.0,
+                "dominant_focus": None,
+                "dominant_object": None,
+                "scene_type": None,
+                "lighting_quality": None,
+                "subject_clarity": None,
+                "aesthetic_quality": None,
+                "visual_quality_score": None,
+                "technical_flaws": [],
+                "cringe_score": 100,
+                "cringe_signals": ["safety_filter_blocked", "unsafe_content"],
+                "cringe_fixes": [],
+                "production_level": "low",
+                "is_cringe": True,
+                "cringe_label": "unsafe",
+                "adult_content_detected": True,
+                "adult_content_confidence": 100,
+            }
+            return VisionAnalysis(provider="gemini", status="ok", signals=[synthetic_signal]).model_dump(mode="python")
+            
         logger.error(
             "[Vision] Gemini vision analysis failed for media_id=%s media_url=%s: %s",
             post_id,
@@ -647,6 +668,31 @@ async def run_vision_analysis(
         return failure_payload
 
 
+def _infer_mime_type(url: str) -> str:
+    from urllib.parse import urlparse, parse_qs
+    
+    url_lower = url.lower()
+    parsed = urlparse(url_lower)
+    qs = parse_qs(parsed.query)
+    
+    filename = ""
+    if "filename" in qs and qs["filename"]:
+        filename = qs["filename"][0]
+        
+    path = parsed.path
+    
+    if filename.endswith(".mp4") or path.endswith(".mp4") or ".mp4" in url_lower:
+        return "video/mp4"
+    if filename.endswith(".png") or path.endswith(".png"):
+        return "image/png"
+    if filename.endswith(".gif") or path.endswith(".gif"):
+        return "image/gif"
+    if filename.endswith(".webp") or path.endswith(".webp"):
+        return "image/webp"
+        
+    return "image/jpeg"
+
+
 def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
     import google.generativeai as genai
 
@@ -655,15 +701,27 @@ def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -
     try:
         # google.generativeai.configure() mutates global state, so guard configure+request.
         with _GENAI_LOCK:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content([instruction, media_url])
+            client = genai.Client(api_key=api_key)
+            mime = _infer_mime_type(media_url)
+            image_part = genai_types.Part.from_uri(file_uri=media_url, mime_type=mime)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[instruction, image_part]
+            )
         text = getattr(response, "text", None)
         if not isinstance(text, str):
+            block_reason = None
+            if hasattr(response, "prompt_feedback") and response.prompt_feedback:
+                block_reason = getattr(response.prompt_feedback, "block_reason", None)
+            
+            if block_reason:
+                raise ValueError(f"SAFETY_BLOCK: {block_reason}")
+                
             logger.warning(
-                "[Vision] Gemini %s returned no text for media_url=%s",
+                "[Vision] Gemini %s returned no text for media_url=%s. Raw response: %s",
                 model_name,
                 _sanitize_url_for_logging(media_url),
+                response,
             )
             raise ValueError("Gemini response did not include text output.")
         return text
@@ -683,7 +741,7 @@ async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_
         # Shortened to 10s for smoke test to avoid long hangs.
         return await asyncio.wait_for(
             asyncio.to_thread(_call_gemini_vision_api, api_key=api_key, instruction=instruction, media_url=media_url),
-            timeout=30.0
+            timeout=120.0
         )
     except asyncio.TimeoutError:
         logger.error(
@@ -980,7 +1038,7 @@ def _parse_driver_item(value: Any) -> AIDriver | None:
     if not isinstance(value, dict):
         return None
     required_keys = {"id", "label", "type", "explanation"}
-    if set(value.keys()) != required_keys:
+    if not required_keys.issubset(value.keys()):
         return None
 
     item_id = value.get("id")
@@ -1010,7 +1068,7 @@ def _parse_recommendation_item(value: Any) -> AIRecommendation | None:
     if not isinstance(value, dict):
         return None
     required_keys = {"id", "text", "impact_level"}
-    if set(value.keys()) != required_keys:
+    if not required_keys.issubset(value.keys()):
         return None
 
     item_id = value.get("id")
