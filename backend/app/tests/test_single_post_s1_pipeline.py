@@ -200,3 +200,72 @@ def test_call_gemini_vision_api_falls_back_when_google_genai_client_is_missing(m
 
     payload = json.loads(text)
     assert payload["scene_description"] == "Person presenting"
+
+
+def test_run_vision_analysis_repairs_malformed_output(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-visible")
+
+    async def fake_generate_gemini_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
+        assert api_key == "test-key-visible"
+        assert media_url == "https://example.com/post.jpg"
+        return "scene_description Person presenting\n  broken indentation"
+
+    async def fake_repair_gemini_vision_json(*, api_key: str, raw_text: str) -> str:
+        assert api_key == "test-key-visible"
+        assert "broken indentation" in raw_text
+        return json.dumps(
+            {
+                "objects": ["person"],
+                "scene_description": "Person presenting",
+                "detected_text": None,
+                "visual_style": "clean",
+                "technical_flaws": ["Slight blur"],
+                "hook_strength_score": 0.75,
+            }
+        )
+
+    monkeypatch.setattr(ai_analysis_service, "_generate_gemini_vision_json", fake_generate_gemini_vision_json)
+    monkeypatch.setattr(ai_analysis_service, "_repair_gemini_vision_json", fake_repair_gemini_vision_json)
+
+    post = _build_post("m_repair", reach=1000, engagement_rate=0.05, media_url="https://example.com/post.jpg")
+    result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
+
+    assert result["status"] == "ok"
+    assert result["signals"][0]["scene_description"] == "Person presenting"
+    assert result["signals"][0]["technical_flaws"] == ["Slight blur"]
+
+
+def test_run_vision_analysis_retries_with_simplified_prompt(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-visible")
+    calls: list[str] = []
+
+    async def fake_generate_gemini_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
+        assert api_key == "test-key-visible"
+        assert media_url == "https://example.com/post.jpg"
+        calls.append(instruction)
+        if len(calls) == 1:
+            return ""
+        assert instruction == ai_analysis_service._SIMPLIFIED_GEMINI_VISION_PROMPT
+        return json.dumps(
+            {
+                "objects": ["person"],
+                "scene_description": "Recovered on retry",
+                "detected_text": None,
+                "visual_style": "clean",
+                "technical_flaws": [],
+                "hook_strength_score": 0.55,
+            }
+        )
+
+    async def fake_repair_gemini_vision_json(*, api_key: str, raw_text: str) -> str:
+        raise AssertionError("Repair should not run for empty primary response in this scenario")
+
+    monkeypatch.setattr(ai_analysis_service, "_generate_gemini_vision_json", fake_generate_gemini_vision_json)
+    monkeypatch.setattr(ai_analysis_service, "_repair_gemini_vision_json", fake_repair_gemini_vision_json)
+
+    post = _build_post("m_retry", reach=1000, engagement_rate=0.05, media_url="https://example.com/post.jpg")
+    result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
+
+    assert result["status"] == "ok"
+    assert result["signals"][0]["scene_description"] == "Recovered on retry"
+    assert len(calls) == 2

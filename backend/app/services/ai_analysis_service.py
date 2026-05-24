@@ -47,6 +47,26 @@ CACHE_TTL_SECONDS = 86400
 MIN_REGEN_SECONDS = 1
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
 _DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+_SIMPLIFIED_GEMINI_VISION_PROMPT = (
+    "Analyze the provided Instagram media and return ONLY valid JSON. "
+    "Do not include markdown fences or commentary. "
+    "Return exactly one JSON object with keys: "
+    "objects (array of strings), dominant_focus (string or null), scene_description (string), "
+    "visual_style (string or null), scene_type (string or null), "
+    "visual_quality_score (object with composition, lighting, subject_clarity, aesthetic_quality as numbers 0..10), "
+    "technical_flaws (array of strings), detected_text (string or null), hook_strength_score (number 0..1), "
+    "cringe_score (number 0..100), cringe_signals (array of strings), cringe_fixes (array of strings), "
+    "production_level (low, medium, or high), adult_content_detected (boolean), adult_content_confidence (number 0..100). "
+    "If unsure about a field, use null or an empty array. Keep scene_description to at most 2 sentences."
+)
+_GEMINI_VISION_REPAIR_PROMPT = (
+    "Convert the following malformed model output into a single valid JSON object only. "
+    "Do not include markdown fences, commentary, or extra keys. "
+    "Use exactly these keys: objects, dominant_focus, scene_description, visual_style, scene_type, "
+    "visual_quality_score, technical_flaws, detected_text, hook_strength_score, cringe_score, cringe_signals, "
+    "cringe_fixes, production_level, adult_content_detected, adult_content_confidence. "
+    "If a value is missing or unclear, use null or an empty array.\n\nMalformed output:\n"
+)
 
 
 def _parse_timeout(env_key: str, default: float) -> float:
@@ -415,6 +435,139 @@ def _coerce_int_0_100(value: Any) -> int | None:
     return int(max(0.0, min(100.0, round(numeric))))
 
 
+def _strip_markdown_fences(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) > 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
+
+
+def _parse_gemini_payload(raw_text: str) -> dict[str, Any]:
+    stripped_raw_text = _strip_markdown_fences(raw_text)
+    if not stripped_raw_text:
+        raise ValueError("Gemini response was empty.")
+
+    try:
+        if "{" in stripped_raw_text and "}" in stripped_raw_text:
+            start = stripped_raw_text.find("{")
+            end = stripped_raw_text.rfind("}") + 1
+            payload = json.loads(stripped_raw_text[start:end])
+        else:
+            payload = toon_loads(stripped_raw_text)
+    except Exception:
+        payload = toon_loads(stripped_raw_text)
+
+    if not isinstance(payload, dict):
+        raise ValueError("Gemini output must be an object.")
+    return payload
+
+
+def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str, Any]:
+    objects = payload.get("objects") or []
+    dominant_focus = payload.get("dominant_focus")
+    scene_description = payload.get("scene_description") or ""
+    detected_text = payload.get("detected_text")
+    visual_style = payload.get("visual_style") or "Unknown"
+    scene_type = payload.get("scene_type")
+    visual_quality_score = payload.get("visual_quality_score") or {}
+    technical_flaws = _normalize_short_text_list(payload.get("technical_flaws"), limit=3)
+    hook_strength_score = payload.get("hook_strength_score")
+
+    if not isinstance(objects, list):
+        objects = []
+    if dominant_focus is not None and not isinstance(dominant_focus, str):
+        raise ValueError("Invalid dominant_focus field.")
+    if detected_text is not None and not isinstance(detected_text, str):
+        if isinstance(detected_text, list):
+            detected_text = ", ".join(str(x) for x in detected_text)
+        else:
+            detected_text = str(detected_text)
+    if scene_type is not None and not isinstance(scene_type, str):
+        raise ValueError("Invalid scene_type field.")
+    if not isinstance(visual_quality_score, dict):
+        visual_quality_score = {}
+    if not isinstance(hook_strength_score, (int, float)):
+        hook_strength_score = 0.5
+
+    objects = [item.strip() for item in objects if isinstance(item, str) and item.strip()]
+    dominant_focus = dominant_focus.strip() if isinstance(dominant_focus, str) else None
+    scene_description = scene_description.strip() if isinstance(scene_description, str) else ""
+    detected_text = detected_text.strip() if detected_text else None
+    visual_style = visual_style.strip() if isinstance(visual_style, str) else "Unknown"
+    scene_type = scene_type.strip() if isinstance(scene_type, str) else None
+    composition_raw = _as_float(visual_quality_score.get("composition"))
+    lighting_raw = _as_float(visual_quality_score.get("lighting"))
+    subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))
+    aesthetic_quality_raw = _as_float(visual_quality_score.get("aesthetic_quality"))
+    if None in {composition_raw, lighting_raw, subject_clarity_raw, aesthetic_quality_raw}:
+        normalized_visual_quality = None
+    else:
+        normalized_visual_quality = {
+            "composition": max(0.0, min(10.0, float(composition_raw))),
+            "lighting": max(0.0, min(10.0, float(lighting_raw))),
+            "subject_clarity": max(0.0, min(10.0, float(subject_clarity_raw))),
+            "aesthetic_quality": max(0.0, min(10.0, float(aesthetic_quality_raw))),
+        }
+    clamped_hook_strength_score = max(0.0, min(1.0, float(hook_strength_score)))
+    dominant_object = payload.get("dominant_object")
+    lighting_quality = normalized_visual_quality.get("lighting") if isinstance(normalized_visual_quality, dict) else None
+    subject_clarity = (
+        normalized_visual_quality.get("subject_clarity") if isinstance(normalized_visual_quality, dict) else None
+    )
+    aesthetic_quality = (
+        normalized_visual_quality.get("aesthetic_quality") if isinstance(normalized_visual_quality, dict) else None
+    )
+    cringe_score = _clamp_int_0_100(payload.get("cringe_score"))
+    cringe_signals = _normalize_short_text_list(payload.get("cringe_signals"), limit=3)
+    cringe_fixes = _normalize_short_text_list(payload.get("cringe_fixes"), limit=3)
+    if not cringe_fixes:
+        cringe_fixes = _normalize_short_text_list(payload.get("fixes_to_reduce_cringe"), limit=3)
+    production_level = _normalize_production_level(payload.get("production_level"))
+    adult_content_detected = _normalize_optional_bool(payload.get("adult_content_detected"))
+    adult_content_confidence = _clamp_int_0_100(payload.get("adult_content_confidence"))
+
+    if cringe_score is not None:
+        floored_score = enforce_cringe_floor(cringe_score, cringe_signals)
+        if floored_score != cringe_score:
+            logger.info(
+                "[Cringe] Applied cringe floor for media_url=%s score=%s->%s",
+                _sanitize_url_for_logging(media_url),
+                cringe_score,
+                floored_score,
+            )
+        cringe_score = floored_score
+    cringe_label = derive_cringe_label(cringe_score)
+    is_cringe = bool(cringe_score is not None and cringe_score >= 45)
+
+    return {
+        "objects": objects,
+        "primary_objects": objects,
+        "scene_description": scene_description,
+        "detected_text": detected_text,
+        "visual_style": visual_style,
+        "hook_strength_score": clamped_hook_strength_score,
+        "dominant_focus": dominant_focus if isinstance(dominant_focus, str) else None,
+        "dominant_object": dominant_object if isinstance(dominant_object, str) else None,
+        "scene_type": scene_type if isinstance(scene_type, str) else None,
+        "lighting_quality": lighting_quality if isinstance(lighting_quality, (str, int, float)) else None,
+        "subject_clarity": subject_clarity if isinstance(subject_clarity, (str, int, float)) else None,
+        "aesthetic_quality": aesthetic_quality if isinstance(aesthetic_quality, (str, int, float)) else None,
+        "visual_quality_score": normalized_visual_quality,
+        "technical_flaws": technical_flaws,
+        "cringe_score": cringe_score,
+        "cringe_signals": cringe_signals,
+        "cringe_fixes": cringe_fixes,
+        "production_level": production_level,
+        "is_cringe": is_cringe if cringe_score is not None else None,
+        "cringe_label": cringe_label,
+        "adult_content_detected": adult_content_detected,
+        "adult_content_confidence": adult_content_confidence,
+    }
+
+
 async def run_vision_analysis(
     post: SinglePostInsights,
 ) -> dict[str, Any]:
@@ -500,130 +653,38 @@ async def run_vision_analysis(
         return VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
 
     try:
-        raw_text = await _generate_gemini_vision_json(
-            api_key=api_key,
-            instruction=instruction,
-            media_url=media_url,
-        )
-        stripped_raw_text = raw_text.strip()
-        if stripped_raw_text.startswith("```"):
-            lines = stripped_raw_text.splitlines()
-            if len(lines) > 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
-                stripped_raw_text = "\n".join(lines[1:-1]).strip()
-
+        parse_errors: list[str] = []
+        raw_text = await _generate_gemini_vision_json(api_key=api_key, instruction=instruction, media_url=media_url)
         try:
-            if "{" in stripped_raw_text and "}" in stripped_raw_text:
-                start = stripped_raw_text.find("{")
-                end = stripped_raw_text.rfind("}") + 1
-                payload = json.loads(stripped_raw_text[start:end])
-            else:
-                payload = toon_loads(stripped_raw_text)
-        except Exception:
-            payload = toon_loads(stripped_raw_text)
-        if not isinstance(payload, dict):
-            raise ValueError("Gemini output must be a TOON object.")
-
-        objects = payload.get("objects") or []
-        dominant_focus = payload.get("dominant_focus")
-        scene_description = payload.get("scene_description") or ""
-        detected_text = payload.get("detected_text")
-        visual_style = payload.get("visual_style") or "Unknown"
-        scene_type = payload.get("scene_type")
-        visual_quality_score = payload.get("visual_quality_score") or {}
-        technical_flaws = _normalize_short_text_list(payload.get("technical_flaws"), limit=3)
-        hook_strength_score = payload.get("hook_strength_score")
-
-        if not isinstance(objects, list):
-            objects = []
-        if dominant_focus is not None and not isinstance(dominant_focus, str):
-            raise ValueError("Invalid dominant_focus field.")
-        if detected_text is not None and not isinstance(detected_text, str):
-            if isinstance(detected_text, list):
-                detected_text = ", ".join(str(x) for x in detected_text)
-            else:
-                detected_text = str(detected_text)
-        if scene_type is not None and not isinstance(scene_type, str):
-            raise ValueError("Invalid scene_type field.")
-        if not isinstance(visual_quality_score, dict):
-            visual_quality_score = {}
-        if not isinstance(hook_strength_score, (int, float)):
-            hook_strength_score = 0.5
-
-        objects = [
-            item.strip()
-            for item in objects
-            if isinstance(item, str) and item.strip()
-        ]
-        dominant_focus = dominant_focus.strip() if isinstance(dominant_focus, str) else None
-        scene_description = scene_description.strip() if isinstance(scene_description, str) else ""
-        detected_text = detected_text.strip() if detected_text else None
-        visual_style = visual_style.strip() if isinstance(visual_style, str) else "Unknown"
-        scene_type = scene_type.strip() if isinstance(scene_type, str) else None
-        composition_raw = _as_float(visual_quality_score.get("composition"))
-        lighting_raw = _as_float(visual_quality_score.get("lighting"))
-        subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))
-        aesthetic_quality_raw = _as_float(visual_quality_score.get("aesthetic_quality"))
-        if None in {composition_raw, lighting_raw, subject_clarity_raw, aesthetic_quality_raw}:
-            normalized_visual_quality = None
-        else:
-            normalized_visual_quality = {
-                "composition": max(0.0, min(10.0, float(composition_raw))),
-                "lighting": max(0.0, min(10.0, float(lighting_raw))),
-                "subject_clarity": max(0.0, min(10.0, float(subject_clarity_raw))),
-                "aesthetic_quality": max(0.0, min(10.0, float(aesthetic_quality_raw))),
-            }
-        clamped_hook_strength_score = max(0.0, min(1.0, float(hook_strength_score)))
-        dominant_object = payload.get("dominant_object")
-        lighting_quality = normalized_visual_quality.get("lighting") if isinstance(normalized_visual_quality, dict) else None
-        subject_clarity = normalized_visual_quality.get("subject_clarity") if isinstance(normalized_visual_quality, dict) else None
-        aesthetic_quality = normalized_visual_quality.get("aesthetic_quality") if isinstance(normalized_visual_quality, dict) else None
-        cringe_score = _clamp_int_0_100(payload.get("cringe_score"))
-        cringe_signals = _normalize_short_text_list(payload.get("cringe_signals"), limit=3)
-        cringe_fixes = _normalize_short_text_list(payload.get("cringe_fixes"), limit=3)
-        if not cringe_fixes:
-            cringe_fixes = _normalize_short_text_list(payload.get("fixes_to_reduce_cringe"), limit=3)
-        production_level = _normalize_production_level(payload.get("production_level"))
-        adult_content_detected = _normalize_optional_bool(payload.get("adult_content_detected"))
-        adult_content_confidence = _clamp_int_0_100(payload.get("adult_content_confidence"))
-
-        if cringe_score is not None:
-            floored_score = enforce_cringe_floor(cringe_score, cringe_signals)
-            if floored_score != cringe_score:
-                logger.info(
-                    "[Cringe] Applied cringe floor for media_url=%s score=%s->%s",
-                    _sanitize_url_for_logging(media_url),
-                    cringe_score,
-                    floored_score,
+            signal = _build_vision_signal(_parse_gemini_payload(raw_text), media_url=media_url)
+        except Exception as primary_exc:
+            parse_errors.append(f"primary={primary_exc}")
+            signal = None
+            repaired_text = ""
+            if isinstance(raw_text, str) and raw_text.strip():
+                try:
+                    repaired_text = await _repair_gemini_vision_json(api_key=api_key, raw_text=raw_text)
+                    signal = _build_vision_signal(_parse_gemini_payload(repaired_text), media_url=media_url)
+                    logger.info("[Vision] Repaired malformed Gemini output for media_id=%s", post_id)
+                except Exception as repair_exc:
+                    parse_errors.append(f"repair={repair_exc}")
+            if signal is None:
+                retry_raw_text = await _generate_gemini_vision_json(
+                    api_key=api_key,
+                    instruction=_SIMPLIFIED_GEMINI_VISION_PROMPT,
+                    media_url=media_url,
                 )
-            cringe_score = floored_score
-        cringe_label = derive_cringe_label(cringe_score)
-        is_cringe = bool(cringe_score is not None and cringe_score >= 45)
-
-        signal = {
-            "objects": objects,
-            "primary_objects": objects,
-            "scene_description": scene_description,
-            "detected_text": detected_text,
-            "visual_style": visual_style,
-            "hook_strength_score": clamped_hook_strength_score,
-            "dominant_focus": dominant_focus if isinstance(dominant_focus, str) else None,
-            "dominant_object": dominant_object if isinstance(dominant_object, str) else None,
-            "scene_type": scene_type if isinstance(scene_type, str) else None,
-            "lighting_quality": lighting_quality if isinstance(lighting_quality, (str, int, float)) else None,
-            "subject_clarity": subject_clarity if isinstance(subject_clarity, (str, int, float)) else None,
-            "aesthetic_quality": aesthetic_quality if isinstance(aesthetic_quality, (str, int, float)) else None,
-            "visual_quality_score": normalized_visual_quality,
-            "technical_flaws": technical_flaws,
-            "cringe_score": cringe_score,
-            "cringe_signals": cringe_signals,
-            "cringe_fixes": cringe_fixes,
-            "production_level": production_level,
-            "is_cringe": is_cringe if cringe_score is not None else None,
-            "cringe_label": cringe_label,
-            "adult_content_detected": adult_content_detected,
-            "adult_content_confidence": adult_content_confidence,
-        }
-
+                try:
+                    signal = _build_vision_signal(_parse_gemini_payload(retry_raw_text), media_url=media_url)
+                    logger.info("[Vision] Simplified prompt recovered Gemini output for media_id=%s", post_id)
+                except Exception as retry_exc:
+                    parse_errors.append(f"simplified={retry_exc}")
+                    if isinstance(retry_raw_text, str) and retry_raw_text.strip():
+                        repaired_retry = await _repair_gemini_vision_json(api_key=api_key, raw_text=retry_raw_text)
+                        signal = _build_vision_signal(_parse_gemini_payload(repaired_retry), media_url=media_url)
+                        logger.info("[Vision] Simplified prompt + repair recovered Gemini output for media_id=%s", post_id)
+            if signal is None:
+                raise ValueError("; ".join(parse_errors) or "Gemini output could not be parsed.")
         return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
     except Exception as e:
         error_reason = str(e).strip() or e.__class__.__name__
@@ -713,6 +774,12 @@ def _build_gemini_vision_adapter():
                     contents=[instruction, image_part],
                 )
 
+            def generate_text(self, *, model_name: str, prompt: str):
+                return self._client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+
         return _GoogleGenaiVisionAdapter
     except ImportError:
         import google.generativeai as legacy_genai
@@ -774,6 +841,9 @@ def _build_gemini_vision_adapter():
                         mime_type=mime_type,
                     )
 
+            def generate_text(self, *, model_name: str, prompt: str):
+                return legacy_genai.GenerativeModel(model_name).generate_content(prompt)
+
         return _LegacyGenaiVisionAdapter
 
 
@@ -817,6 +887,22 @@ def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -
         raise
 
 
+def _call_gemini_text_api(*, api_key: str, prompt: str) -> str:
+    model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
+    try:
+        gemini_adapter_cls = _build_gemini_vision_adapter()
+        with _GENAI_LOCK:
+            client = gemini_adapter_cls(api_key=api_key)
+            response = client.generate_text(model_name=model_name, prompt=prompt)
+        text = getattr(response, "text", None)
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Gemini repair response did not include text output.")
+        return text
+    except Exception as e:
+        logger.warning("[Vision] Gemini text repair failed: %s", e)
+        raise
+
+
 async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
     try:
         # Wrap the threaded call in asyncio.wait_for to prevent infinite hang.
@@ -831,6 +917,17 @@ async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_
             _sanitize_url_for_logging(media_url),
         )
         raise
+
+
+async def _repair_gemini_vision_json(*, api_key: str, raw_text: str) -> str:
+    return await asyncio.wait_for(
+        asyncio.to_thread(
+            _call_gemini_text_api,
+            api_key=api_key,
+            prompt=_GEMINI_VISION_REPAIR_PROMPT + raw_text.strip(),
+        ),
+        timeout=30.0,
+    )
 
 
 def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, Any]:
