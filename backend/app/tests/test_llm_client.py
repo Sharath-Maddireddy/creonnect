@@ -89,12 +89,37 @@ def test_generate_fails_fast_for_missing_prompt_key_without_retry() -> None:
     assert create_mock.call_count == 0
 
 
+def test_generate_does_not_log_finetune_dataset_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    create_mock = Mock(return_value=_mock_response("hello"))
+    append_mock = Mock()
+    llm = _build_llm_client_with_create_mock(create_mock=create_mock, max_retries=0)
+    monkeypatch.delenv("LLM_LOG_FINETUNE_DATASET", raising=False)
+    monkeypatch.setattr("backend.app.ai.llm_client._append_finetune_dataset_record", append_mock)
+
+    output = llm.generate({"system": "sys", "user": "usr"})
+
+    assert output == "hello"
+    append_mock.assert_not_called()
+
+
+def test_generate_logs_finetune_dataset_when_explicitly_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    create_mock = Mock(return_value=_mock_response("hello"))
+    append_mock = Mock()
+    llm = _build_llm_client_with_create_mock(create_mock=create_mock, max_retries=0)
+    monkeypatch.setenv("LLM_LOG_FINETUNE_DATASET", "true")
+    monkeypatch.setattr("backend.app.ai.llm_client._append_finetune_dataset_record", append_mock)
+
+    output = llm.generate({"system": "sys", "user": "usr"})
+
+    assert output == "hello"
+    append_mock.assert_called_once()
+
+
 def test_init_uses_env_model_name_when_model_not_provided(monkeypatch: pytest.MonkeyPatch) -> None:
     openai_stub = SimpleNamespace(OpenAI=lambda **kwargs: SimpleNamespace(kwargs=kwargs))
     monkeypatch.setitem(sys.modules, "openai", openai_stub)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL_NAME", "ft:test-model")
-
     client = LLMClient()
 
     assert client.model_name == "ft:test-model"
@@ -105,7 +130,6 @@ def test_init_falls_back_to_default_model_when_env_missing(monkeypatch: pytest.M
     monkeypatch.setitem(sys.modules, "openai", openai_stub)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.delenv("LLM_MODEL_NAME", raising=False)
-
     client = LLMClient()
 
     assert client.model_name == LLMClient.DEFAULT_MODEL

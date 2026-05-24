@@ -2,11 +2,60 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
+import json
+import os
 
+from backend.app.ai import toon
+from backend.app.ai.llm_client import LLMClient
 from backend.app.domain.account_models import CreatorBrandFit, CreatorIntelligence
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.utils.logger import logger
+
+_DEFAULT_CREATOR_TUNING_MODEL = LLMClient.DEFAULT_MODEL
+_CREATOR_INTELLIGENCE_SYSTEM_PROMPT = """
+You are a senior creator-strategy analyst producing labeled training data for a fine-tuned creator intelligence model.
+Return ONLY valid TOON (Token-Oriented Object Notation).
+
+Formatting rules:
+- Use plain keys and values only. Do not use JSON, braces, brackets, or quotes.
+- Use 2-space indentation for nested fields.
+- For list items, put "-" on its own line item line.
+- Omit fields only when truly unknown, but prefer best-effort inference from the creator data.
+- Keep every value concise, specific, and evidence-based from the supplied posts.
+
+Schema mapped exactly to CreatorIntelligence:
+creator_persona value_or_null
+content_style_summary value_or_null
+audience_hypothesis value_or_null
+creator_strengths
+  - value
+improvement_areas
+  - value
+sponsorship_potential HIGH|MEDIUM|LOW
+notable_formats
+  - value
+top_performing_themes
+  - value
+brand_fit
+  fit_categories
+    - value
+  red_flags
+    - value
+
+Field guidance:
+- creator_persona: one-sentence summary of who this creator is and what niche they occupy.
+- content_style_summary: one-sentence summary of tone, structure, and production style.
+- audience_hypothesis: who likely watches or follows this creator.
+- creator_strengths: 2 to 5 concise strengths.
+- improvement_areas: 1 to 5 concise opportunities to improve.
+- sponsorship_potential: choose HIGH, MEDIUM, or LOW based on consistency, safety, clarity, and commercial fit.
+- notable_formats: recurring content formats that stand out.
+- top_performing_themes: themes that appear to drive traction or define the account.
+- brand_fit.fit_categories: categories of sponsors that fit naturally.
+- brand_fit.red_flags: brand-safety or partnership concerns only when supported by the data.
+""".strip()
 
 
 def _clean_text(value: object, *, limit: int = 160) -> str | None:
@@ -149,6 +198,54 @@ def _infer_red_flags(posts: list[SinglePostInsights]) -> list[str]:
     return red_flags[:5]
 
 
+def _build_creator_prompt_payload(
+    posts: list[SinglePostInsights],
+    *,
+    account_id: str | None,
+    username: str | None,
+    bio: str | None,
+    niche_tags: list[str] | None,
+    creator_dominant_category: str | None,
+    follower_count: int | None,
+) -> dict[str, object]:
+    compact_posts: list[dict[str, object]] = []
+    for post in posts:
+        first_signal = post.vision_analysis.signals[0] if post.vision_analysis and post.vision_analysis.signals else None
+        compact_posts.append(
+            {
+                "media_type": post.media_type,
+                "likes": getattr(post.core_metrics, "likes", None),
+                "comments": getattr(post.core_metrics, "comments", None),
+                "caption_text": _clean_text(post.caption_text, limit=400),
+                "cringe_score": getattr(first_signal, "cringe_score", None) if first_signal else None,
+                "scene_description": _clean_text(getattr(first_signal, "scene_description", None), limit=180) if first_signal else None,
+                "adult_content": getattr(first_signal, "adult_content_detected", None) if first_signal else None,
+            }
+        )
+    return {
+        "creator_data": {
+            "account_id": account_id,
+            "username": username,
+            "bio": _clean_text(bio, limit=400),
+            "niche_tags": niche_tags or [],
+            "creator_dominant_category": creator_dominant_category,
+            "follower_count": follower_count,
+            "post_count": len(compact_posts),
+            "posts": compact_posts,
+        }
+    }
+
+
+def _resolve_creator_intelligence_model_name() -> str:
+    configured = os.getenv("CREATOR_TUNING_MODEL")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    fallback = os.getenv("LLM_MODEL_NAME")
+    if isinstance(fallback, str) and fallback.strip():
+        return fallback.strip()
+    return _DEFAULT_CREATOR_TUNING_MODEL
+
+
 async def generate_creator_intelligence(
     posts: list[SinglePostInsights],
     account_id: str | None = None,
@@ -158,9 +255,7 @@ async def generate_creator_intelligence(
     creator_dominant_category: str | None = None,
     follower_count: int | None = None,
 ) -> CreatorIntelligence:
-    """Build a lightweight creator-intelligence rollup without external model calls."""
-
-    del account_id, bio
+    """Build creator intelligence with an LLM-first path and resilient heuristic fallback."""
 
     logger.info(
         "[CreatorIntelligence] Start username=%s post_count=%d category=%s niche_tag_count=%d",
@@ -178,7 +273,7 @@ async def generate_creator_intelligence(
         fit_categories,
         red_flags,
     )
-    result = CreatorIntelligence(
+    fallback_result = CreatorIntelligence(
         creator_persona=_infer_persona(username, creator_dominant_category, niche_tags, follower_count),
         content_style_summary=_infer_content_style(posts),
         top_performing_themes=top_words[:5],
@@ -187,10 +282,65 @@ async def generate_creator_intelligence(
             red_flags=red_flags,
         ),
     )
-    logger.info(
-        "[CreatorIntelligence] Completed username=%s theme_count=%d red_flag_count=%d",
-        username,
-        len(result.top_performing_themes or []),
-        len(result.brand_fit.red_flags or []),
-    )
-    return result
+
+    try:
+        prompt = {
+            "system": _CREATOR_INTELLIGENCE_SYSTEM_PROMPT,
+            "user": json.dumps(
+                _build_creator_prompt_payload(
+                    posts,
+                    account_id=account_id,
+                    username=username,
+                    bio=bio,
+                    niche_tags=niche_tags,
+                    creator_dominant_category=creator_dominant_category,
+                    follower_count=follower_count,
+                ),
+                ensure_ascii=False,
+            ),
+        }
+        llm = LLMClient(model_name=_resolve_creator_intelligence_model_name(), temperature=0.2, max_tokens=700)
+        raw_response = await asyncio.to_thread(llm.generate, prompt)
+        if not isinstance(raw_response, str) or not raw_response.strip():
+            raise ValueError("LLM returned empty creator intelligence response.")
+        parsed = toon.loads(raw_response)
+        if not isinstance(parsed, dict) or not parsed.get("creator_persona"):
+            raise ValueError("LLM creator intelligence response missing creator_persona.")
+
+        brand_fit = parsed.get("brand_fit")
+        brand_fit_dict = brand_fit if isinstance(brand_fit, dict) else {}
+        result = CreatorIntelligence(
+            creator_persona=parsed.get("creator_persona"),
+            content_style_summary=parsed.get("content_style_summary"),
+            audience_hypothesis=parsed.get("audience_hypothesis"),
+            creator_strengths=parsed.get("creator_strengths") or [],
+            improvement_areas=parsed.get("improvement_areas") or [],
+            sponsorship_potential=parsed.get("sponsorship_potential"),
+            notable_formats=parsed.get("notable_formats") or [],
+            top_performing_themes=parsed.get("top_performing_themes") or [],
+            brand_fit=CreatorBrandFit(
+                fit_categories=brand_fit_dict.get("fit_categories") or [],
+                red_flags=brand_fit_dict.get("red_flags") or [],
+            ),
+        )
+        logger.info(
+            "[CreatorIntelligence] Completed via LLM username=%s theme_count=%d red_flag_count=%d",
+            username,
+            len(result.top_performing_themes or []),
+            len(result.brand_fit.red_flags or []),
+        )
+        return result
+    except Exception as exc:
+        logger.warning(
+            "[CreatorIntelligence] LLM generation failed for username=%s account_id=%s: %s",
+            username,
+            account_id,
+            exc,
+        )
+        logger.info(
+            "[CreatorIntelligence] Falling back to heuristics username=%s theme_count=%d red_flag_count=%d",
+            username,
+            len(fallback_result.top_performing_themes or []),
+            len(fallback_result.brand_fit.red_flags or []),
+        )
+        return fallback_result

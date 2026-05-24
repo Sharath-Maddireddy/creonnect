@@ -45,6 +45,30 @@ class LLMClientError(Exception):
     pass
 
 
+def _should_log_finetune_dataset() -> bool:
+    raw = os.getenv("LLM_LOG_FINETUNE_DATASET", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _append_finetune_dataset_record(prompt: Dict[str, Any], content: str) -> None:
+    import json
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    artifact_dir = repo_root / "internal_tools" / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    dataset_path = artifact_dir / "finetune_dataset.jsonl"
+    record = {
+        "messages": [
+            {"role": "system", "content": prompt.get("system", "")},
+            {"role": "user", "content": prompt.get("user", "")},
+            {"role": "assistant", "content": content},
+        ]
+    }
+    with open(dataset_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 class LLMClient:
     """
     Thin abstraction over an LLM provider.
@@ -140,7 +164,14 @@ class LLMClient:
                 duration = time.time() - start_time
                 logger.info(f"[LLM] Request completed in {duration:.2f}s")
 
-                return response.choices[0].message.content.strip()
+                content = response.choices[0].message.content.strip()
+                try:
+                    if _should_log_finetune_dataset():
+                        _append_finetune_dataset_record(prompt, content)
+                except Exception as log_err:
+                    logger.warning(f"[LLM] Failed to write fine-tuning dataset: {log_err}")
+                
+                return content
 
             except Exception as e:
                 last_error = e
