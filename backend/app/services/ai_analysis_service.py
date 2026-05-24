@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import socket
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from ipaddress import ip_address
 from typing import Any, Literal, NotRequired, TypedDict
 from urllib.parse import urlparse, urlunparse
 
-from google.genai import types as genai_types
+import httpx
 
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
 from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_RELEVANCE_PROMPT, format_user_text_block
@@ -529,7 +530,7 @@ async def run_vision_analysis(
         visual_style = payload.get("visual_style") or "Unknown"
         scene_type = payload.get("scene_type")
         visual_quality_score = payload.get("visual_quality_score") or {}
-        technical_flaws = payload.get("technical_flaws") or []
+        technical_flaws = _normalize_short_text_list(payload.get("technical_flaws"), limit=3)
         hook_strength_score = payload.get("hook_strength_score")
 
         if not isinstance(objects, list):
@@ -558,7 +559,6 @@ async def run_vision_analysis(
         detected_text = detected_text.strip() if detected_text else None
         visual_style = visual_style.strip() if isinstance(visual_style, str) else "Unknown"
         scene_type = scene_type.strip() if isinstance(scene_type, str) else None
-        technical_flaws = [item.strip() for item in technical_flaws if isinstance(item, str) and item.strip()][:3]
         composition_raw = _as_float(visual_quality_score.get("composition"))
         lighting_raw = _as_float(visual_quality_score.get("lighting"))
         subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))
@@ -693,20 +693,102 @@ def _infer_mime_type(url: str) -> str:
     return "image/jpeg"
 
 
-def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
-    import google.generativeai as genai
-
-    # Use gemini-flash-latest for better compatibility with this SDK and free-tier quota.
-    model_name = "gemini-flash-latest"
+def _build_gemini_vision_adapter():
+    """Return a small adapter over whichever Gemini SDK is installed."""
     try:
-        # google.generativeai.configure() mutates global state, so guard configure+request.
+        from google import genai
+        from google.genai import types as genai_types
+
+        if not hasattr(genai, "Client"):
+            raise ImportError("google.genai.Client is unavailable")
+
+        class _GoogleGenaiVisionAdapter:
+            def __init__(self, api_key: str) -> None:
+                self._client = genai.Client(api_key=api_key)
+
+            def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
+                image_part = genai_types.Part.from_uri(file_uri=media_url, mime_type=mime_type)
+                return self._client.models.generate_content(
+                    model=model_name,
+                    contents=[instruction, image_part],
+                )
+
+        return _GoogleGenaiVisionAdapter
+    except ImportError:
+        import google.generativeai as legacy_genai
+
+        class _LegacyGenaiVisionAdapter:
+            def __init__(self, api_key: str) -> None:
+                legacy_genai.configure(api_key=api_key)
+
+            def _generate_with_uploaded_file(
+                self,
+                *,
+                model_name: str,
+                instruction: str,
+                media_url: str,
+                mime_type: str,
+            ):
+                uploaded = None
+                temp_path = None
+                try:
+                    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                        response = client.get(media_url)
+                        response.raise_for_status()
+                    suffix = ".mp4" if mime_type == "video/mp4" else ".jpg"
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                        tmp.write(response.content)
+                        temp_path = tmp.name
+                    uploaded = legacy_genai.upload_file(temp_path, mime_type=mime_type)
+                    return legacy_genai.GenerativeModel(model_name).generate_content([instruction, uploaded])
+                finally:
+                    if uploaded is not None and getattr(uploaded, "name", None):
+                        try:
+                            legacy_genai.delete_file(uploaded.name)
+                        except Exception:
+                            logger.debug("[Vision] Legacy Gemini cleanup failed for uploaded file.")
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except OSError:
+                            logger.debug("[Vision] Temporary Gemini upload file cleanup failed: %s", temp_path)
+
+            def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
+                model = legacy_genai.GenerativeModel(model_name)
+                try:
+                    return model.generate_content(
+                        [
+                            instruction,
+                            {
+                                "mime_type": mime_type,
+                                "file_uri": media_url,
+                            },
+                        ]
+                    )
+                except Exception:
+                    # Older SDKs may require a local uploaded file instead of a remote URI part.
+                    return self._generate_with_uploaded_file(
+                        model_name=model_name,
+                        instruction=instruction,
+                        media_url=media_url,
+                        mime_type=mime_type,
+                    )
+
+        return _LegacyGenaiVisionAdapter
+
+
+def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
+    model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
+    try:
+        gemini_adapter_cls = _build_gemini_vision_adapter()
         with _GENAI_LOCK:
-            client = genai.Client(api_key=api_key)
+            client = gemini_adapter_cls(api_key=api_key)
             mime = _infer_mime_type(media_url)
-            image_part = genai_types.Part.from_uri(file_uri=media_url, mime_type=mime)
-            response = client.models.generate_content(
-                model=model_name,
-                contents=[instruction, image_part]
+            response = client.generate_content(
+                model_name=model_name,
+                instruction=instruction,
+                media_url=media_url,
+                mime_type=mime,
             )
         text = getattr(response, "text", None)
         if not isinstance(text, str):

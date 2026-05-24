@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import sys
+import types
 from datetime import datetime, timezone
 
 from backend.app.domain.post_models import (
@@ -132,6 +134,7 @@ def test_run_vision_analysis_reads_gemini_key(monkeypatch) -> None:
                 "scene_description": "Person presenting",
                 "detected_text": None,
                 "visual_style": "clean",
+                "technical_flaws": "Slight blur on subject edges",
                 "hook_strength_score": 0.75,
             }
         )
@@ -148,3 +151,52 @@ def test_run_vision_analysis_reads_gemini_key(monkeypatch) -> None:
 
     assert result["status"] == "ok"
     assert isinstance(result["signals"], list)
+    assert result["signals"][0]["technical_flaws"] == ["Slight blur on subject edges"]
+
+
+def test_call_gemini_vision_api_falls_back_when_google_genai_client_is_missing(monkeypatch) -> None:
+    class FakeLegacyModel:
+        def __init__(self, model_name: str) -> None:
+            self.model_name = model_name
+
+        def generate_content(self, contents: list[object]):
+            assert contents[0]
+            assert contents[1]["mime_type"] == "image/jpeg"
+            assert contents[1]["file_uri"] == "https://example.com/post.jpg"
+            return types.SimpleNamespace(
+                text=json.dumps(
+                    {
+                        "objects": ["person"],
+                        "scene_description": "Person presenting",
+                        "detected_text": None,
+                        "visual_style": "clean",
+                        "hook_strength_score": 0.75,
+                    }
+                )
+            )
+
+    fake_genai_module = types.ModuleType("google.genai")
+    fake_genai_types_module = types.ModuleType("google.genai.types")
+    fake_genai_module.types = fake_genai_types_module
+
+    fake_legacy_genai = types.ModuleType("google.generativeai")
+    fake_legacy_genai.configure = lambda **_kwargs: None
+    fake_legacy_genai.GenerativeModel = FakeLegacyModel
+
+    fake_google_module = types.ModuleType("google")
+    fake_google_module.__path__ = []
+    fake_google_module.genai = fake_genai_module
+
+    monkeypatch.setitem(sys.modules, "google", fake_google_module)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai_module)
+    monkeypatch.setitem(sys.modules, "google.genai.types", fake_genai_types_module)
+    monkeypatch.setitem(sys.modules, "google.generativeai", fake_legacy_genai)
+
+    text = ai_analysis_service._call_gemini_vision_api(
+        api_key="test-key",
+        instruction="Describe this image",
+        media_url="https://example.com/post.jpg",
+    )
+
+    payload = json.loads(text)
+    assert payload["scene_description"] == "Person presenting"
