@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -151,6 +152,13 @@ class _CacheEntry:
 
 
 _ANALYSIS_CACHE: dict[str, _CacheEntry] = {}
+
+
+@dataclass
+class _VisionTextResponse:
+    """Minimal response wrapper to mimic SDK objects that expose `.text`."""
+
+    text: str
 
 
 def _hash_cache_hint(value: Any) -> str:
@@ -686,11 +694,11 @@ async def run_vision_analysis(
             if signal is None:
                 raise ValueError("; ".join(parse_errors) or "Gemini output could not be parsed.")
         return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
-    except Exception as e:
-        error_reason = str(e).strip() or e.__class__.__name__
-        
-        if "SAFETY_BLOCK" in error_reason:
-            logger.warning("[Vision] Caught safety block for %s: %s", post_id, error_reason)
+    except Exception as gemini_exc:
+        gemini_error_reason = str(gemini_exc).strip() or gemini_exc.__class__.__name__
+
+        if "SAFETY_BLOCK" in gemini_error_reason:
+            logger.warning("[Vision] Caught safety block for %s: %s", post_id, gemini_error_reason)
             synthetic_signal = {
                 "objects": [],
                 "primary_objects": [],
@@ -716,16 +724,41 @@ async def run_vision_analysis(
                 "adult_content_confidence": 100,
             }
             return VisionAnalysis(provider="gemini", status="ok", signals=[synthetic_signal]).model_dump(mode="python")
-            
-        logger.error(
-            "[Vision] Gemini vision analysis failed for media_id=%s media_url=%s: %s",
+
+        logger.warning(
+            "[Vision] Gemini vision failed; attempting OpenAI fallback media_id=%s media_url=%s reason=%s",
             post_id,
             _sanitize_url_for_logging(media_url),
-            error_reason,
+            gemini_error_reason,
         )
+
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        mime_type = _infer_mime_type(media_url)
+        if isinstance(openai_api_key, str) and openai_api_key.strip() and mime_type.startswith("image/"):
+            try:
+                openai_raw_text = await _generate_openai_vision_json(
+                    api_key=openai_api_key.strip(),
+                    instruction=instruction,
+                    media_url=media_url,
+                )
+                openai_signal = _build_vision_signal(_parse_gemini_payload(openai_raw_text), media_url=media_url)
+                logger.info("[Vision] OpenAI fallback succeeded for media_id=%s", post_id)
+                return VisionAnalysis(provider="openai", status="ok", signals=[openai_signal]).model_dump(mode="python")
+            except Exception as openai_exc:
+                openai_error_reason = str(openai_exc).strip() or openai_exc.__class__.__name__
+                logger.error(
+                    "[Vision] OpenAI fallback failed for media_id=%s media_url=%s: %s",
+                    post_id,
+                    _sanitize_url_for_logging(media_url),
+                    openai_error_reason,
+                )
+                combined_reason = f"gemini={gemini_error_reason}; openai={openai_error_reason}"
+                failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+                failure_payload["error_reason"] = combined_reason[:300]
+                return failure_payload
+
         failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
-        # Keep a compact reason so post summaries can explain exactly why fallback happened.
-        failure_payload["error_reason"] = error_reason[:300]
+        failure_payload["error_reason"] = gemini_error_reason[:300]
         return failure_payload
 
 
@@ -896,6 +929,50 @@ def _build_gemini_vision_adapter():
         return _LegacyGenaiVisionAdapter
 
 
+class _OpenAIVisionAdapter:
+    """Small adapter for GPT-4o vision responses with a `.text` payload."""
+
+    def __init__(self, api_key: str) -> None:
+        from openai import OpenAI
+
+        self._client = OpenAI(api_key=api_key)
+
+    def _build_image_url_part(self, *, media_url: str, mime_type: str) -> dict[str, Any]:
+        if mime_type.startswith("image/"):
+            return {"type": "image_url", "image_url": {"url": media_url}}
+
+        if mime_type.startswith("video/"):
+            raise ValueError("OpenAI vision fallback currently supports images only.")
+
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            response = client.get(media_url)
+            response.raise_for_status()
+        content_type = response.headers.get("content-type", "") or mime_type or "image/jpeg"
+        encoded = base64.b64encode(response.content).decode("utf-8")
+        data_url = f"data:{content_type};base64,{encoded}"
+        return {"type": "image_url", "image_url": {"url": data_url}}
+
+    def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str) -> _VisionTextResponse:
+        image_part = self._build_image_url_part(media_url=media_url, mime_type=mime_type)
+        response = self._client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": instruction},
+                        image_part,
+                    ],
+                }
+            ],
+            temperature=0,
+        )
+        text = (response.choices[0].message.content or "").strip() if response.choices else ""
+        if not text:
+            raise ValueError("OpenAI response did not include text output.")
+        return _VisionTextResponse(text=text)
+
+
 def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
     model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
     try:
@@ -936,6 +1013,31 @@ def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -
         raise
 
 
+def _call_openai_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
+    model_name = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
+    try:
+        client = _OpenAIVisionAdapter(api_key=api_key)
+        mime = _infer_mime_type(media_url)
+        response = client.generate_content(
+            model_name=model_name,
+            instruction=instruction,
+            media_url=media_url,
+            mime_type=mime,
+        )
+        text = getattr(response, "text", None)
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("OpenAI response did not include text output.")
+        return text
+    except Exception as e:
+        logger.error(
+            "[Vision] OpenAI %s failed for media_url=%s: %s",
+            model_name,
+            _sanitize_url_for_logging(media_url),
+            e,
+        )
+        raise
+
+
 def _call_gemini_text_api(*, api_key: str, prompt: str) -> str:
     model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
     try:
@@ -963,6 +1065,20 @@ async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_
     except asyncio.TimeoutError:
         logger.error(
             "[Vision] Gemini vision analysis timed out for media_url=%s",
+            _sanitize_url_for_logging(media_url),
+        )
+        raise
+
+
+async def _generate_openai_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_call_openai_vision_api, api_key=api_key, instruction=instruction, media_url=media_url),
+            timeout=120.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "[Vision] OpenAI vision analysis timed out for media_url=%s",
             _sanitize_url_for_logging(media_url),
         )
         raise
