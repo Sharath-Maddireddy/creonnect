@@ -657,10 +657,10 @@ async def run_vision_analysis(
 
 
     api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
 
     try:
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise ValueError("GEMINI_API_KEY missing")
         parse_errors: list[str] = []
         raw_text = await _generate_gemini_vision_json(api_key=api_key, instruction=instruction, media_url=media_url)
         try:
@@ -1787,14 +1787,17 @@ async def analyze_single_post_ai(
     score, band = _score_payload(post)
     post_id = post.media_id if isinstance(post.media_id, str) else None
     gemini_api_key = os.getenv("GEMINI_API_KEY")
-    vision_enabled = bool(isinstance(gemini_api_key, str) and gemini_api_key.strip())
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    gemini_enabled = bool(isinstance(gemini_api_key, str) and gemini_api_key.strip())
+    openai_enabled = bool(isinstance(openai_api_key, str) and openai_api_key.strip())
+    vision_enabled = gemini_enabled or openai_enabled
     warnings: list[AIWarning] = []
     vision_error_reason: str | None = None
-    if not vision_enabled:
+    if not gemini_enabled:
         warnings.append(
             _build_ai_warning(
                 code="GEMINI_API_KEY_MISSING",
-                message="Gemini vision is disabled because GEMINI_API_KEY is not set.",
+                message="Gemini vision is disabled because GEMINI_API_KEY is not set. OpenAI fallback may be used if configured.",
                 post_id=post_id,
             )
         )
