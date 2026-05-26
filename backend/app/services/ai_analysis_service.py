@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import json
 import os
@@ -940,17 +939,6 @@ class _OpenAIVisionAdapter:
             http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
         )
 
-    def _build_base64_image_part(self, *, media_url: str, mime_type: str) -> dict[str, Any]:
-        if mime_type.startswith("video/"):
-            raise ValueError("OpenAI vision fallback currently supports images only.")
-        with httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False) as client:
-            response = client.get(media_url)
-            response.raise_for_status()
-        content_type = response.headers.get("content-type", "") or mime_type or "image/jpeg"
-        encoded = base64.b64encode(response.content).decode("utf-8")
-        data_url = f"data:{content_type};base64,{encoded}"
-        return {"type": "image_url", "image_url": {"url": data_url}}
-
     def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str) -> _VisionTextResponse:
         if mime_type.startswith("video/"):
             raise ValueError("OpenAI vision fallback currently supports images only.")
@@ -970,15 +958,7 @@ class _OpenAIVisionAdapter:
                 temperature=0,
             )
 
-        try:
-            response = _call_with_part({"type": "image_url", "image_url": {"url": media_url}})
-        except Exception as url_exc:
-            logger.warning(
-                "[Vision] OpenAI direct image_url failed; retrying with base64 media_url=%s reason=%s",
-                _sanitize_url_for_logging(media_url),
-                url_exc,
-            )
-            response = _call_with_part(self._build_base64_image_part(media_url=media_url, mime_type=mime_type))
+        response = _call_with_part({"type": "image_url", "image_url": {"url": media_url}})
 
         text = (response.choices[0].message.content or "").strip() if response.choices else ""
         if not text:
