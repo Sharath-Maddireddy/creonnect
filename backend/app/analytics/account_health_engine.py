@@ -5,12 +5,15 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 from statistics import mean, median, pstdev
+from typing import Any
 
 from backend.app.domain.account_models import (
     AccountEngagementSignals,
     AccountHealthMetadata,
     AccountHealthScore,
     AccountVisionSummary,
+    ContentTypeBreakdownEntry,
+    ContentTypePerformance,
     DeterministicDriver,
     DeterministicRecommendation,
     PillarScore,
@@ -922,3 +925,104 @@ def compute_content_quality_breakdown(
             "content_clarity": {},
             "engagement_potential": {},
         }
+
+
+def compute_content_type_performance(posts: list[SinglePostInsights]) -> ContentTypePerformance:
+    """Build deterministic per-content-type performance summary."""
+    if not posts:
+        return ContentTypePerformance(notes=["No posts available for content type analysis."])
+
+    groups: dict[str, list[SinglePostInsights]] = {}
+    for post in posts:
+        raw_type = post.media_type if isinstance(post.media_type, str) else "UNKNOWN"
+        content_type = raw_type.strip().upper() or "UNKNOWN"
+        groups.setdefault(content_type, []).append(post)
+
+    total_posts = len(posts)
+    total_views_all_types = 0.0
+    breakdown_rows: list[dict[str, Any]] = []
+
+    for content_type, typed_posts in groups.items():
+        views_values = [
+            _safe_float(getattr(post.core_metrics, "reach", None))
+            for post in typed_posts
+        ]
+        views_values = [value for value in views_values if value is not None]
+        total_views = sum(views_values) if views_values else 0.0
+        total_views_all_types += total_views
+
+        engagement_rates = [
+            _safe_float(getattr(post.derived_metrics, "engagement_rate", None))
+            for post in typed_posts
+        ]
+        engagement_rates = [value for value in engagement_rates if value is not None]
+
+        likes = [_safe_float(getattr(post.core_metrics, "likes", None)) for post in typed_posts]
+        comments = [_safe_float(getattr(post.core_metrics, "comments", None)) for post in typed_posts]
+        saves = [_safe_float(getattr(post.core_metrics, "saves", None)) for post in typed_posts]
+        shares = [_safe_float(getattr(post.core_metrics, "shares", None)) for post in typed_posts]
+        weighted_scores = [_safe_float(getattr(post.weighted_post_score, "score", None)) for post in typed_posts]
+
+        def _avg_clean(values: list[float | None]) -> float | None:
+            filtered = [value for value in values if value is not None]
+            return round(mean(filtered), 2) if filtered else None
+
+        breakdown_rows.append(
+            {
+                "content_type": content_type,
+                "post_count": len(typed_posts),
+                "percentage_of_total": round((len(typed_posts) / total_posts) * 100.0, 2),
+                "avg_views": round(mean(views_values), 2) if views_values else None,
+                "total_views": int(round(total_views)) if views_values else None,
+                "avg_engagement_rate": round(mean(engagement_rates), 4) if engagement_rates else None,
+                "avg_likes": _avg_clean(likes),
+                "avg_comments": _avg_clean(comments),
+                "avg_saves": _avg_clean(saves),
+                "avg_shares": _avg_clean(shares),
+                "avg_weighted_score": _avg_clean(weighted_scores),
+            }
+        )
+
+    for row in breakdown_rows:
+        total_views = row.get("total_views")
+        if isinstance(total_views, (int, float)) and total_views_all_types > 0:
+            row["views_share_percent"] = round((float(total_views) / total_views_all_types) * 100.0, 2)
+        else:
+            row["views_share_percent"] = None
+
+    breakdown_rows.sort(
+        key=lambda row: (
+            row["avg_views"] is None,
+            -(row["avg_views"] or 0.0),
+            row["content_type"],
+        )
+    )
+    breakdown = [ContentTypeBreakdownEntry.model_validate(row) for row in breakdown_rows]
+
+    by_views = max(
+        breakdown,
+        key=lambda row: (row.avg_views if row.avg_views is not None else -1.0),
+        default=None,
+    )
+    by_engagement = max(
+        breakdown,
+        key=lambda row: (row.avg_engagement_rate if row.avg_engagement_rate is not None else -1.0),
+        default=None,
+    )
+    best_for_views = by_views.content_type if by_views is not None else None
+    best_for_engagement = by_engagement.content_type if by_engagement is not None else None
+
+    insight: str | None = None
+    if best_for_views and best_for_engagement:
+        if best_for_views == best_for_engagement:
+            insight = f"{best_for_views} leads both views and engagement."
+        else:
+            insight = f"{best_for_views} leads views, while {best_for_engagement} leads engagement."
+
+    return ContentTypePerformance(
+        breakdown=breakdown,
+        best_for_views=best_for_views,
+        best_for_engagement=best_for_engagement,
+        insight=insight,
+        notes=[],
+    )

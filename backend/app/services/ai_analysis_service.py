@@ -937,13 +937,9 @@ class _OpenAIVisionAdapter:
 
         self._client = OpenAI(api_key=api_key)
 
-    def _build_image_url_part(self, *, media_url: str, mime_type: str) -> dict[str, Any]:
-        if mime_type.startswith("image/"):
-            return {"type": "image_url", "image_url": {"url": media_url}}
-
+    def _build_base64_image_part(self, *, media_url: str, mime_type: str) -> dict[str, Any]:
         if mime_type.startswith("video/"):
             raise ValueError("OpenAI vision fallback currently supports images only.")
-
         with httpx.Client(timeout=30.0, follow_redirects=True) as client:
             response = client.get(media_url)
             response.raise_for_status()
@@ -953,20 +949,34 @@ class _OpenAIVisionAdapter:
         return {"type": "image_url", "image_url": {"url": data_url}}
 
     def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str) -> _VisionTextResponse:
-        image_part = self._build_image_url_part(media_url=media_url, mime_type=mime_type)
-        response = self._client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": instruction},
-                        image_part,
-                    ],
-                }
-            ],
-            temperature=0,
-        )
+        if mime_type.startswith("video/"):
+            raise ValueError("OpenAI vision fallback currently supports images only.")
+
+        def _call_with_part(image_part: dict[str, Any]):
+            return self._client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": instruction},
+                            image_part,
+                        ],
+                    }
+                ],
+                temperature=0,
+            )
+
+        try:
+            response = _call_with_part({"type": "image_url", "image_url": {"url": media_url}})
+        except Exception as url_exc:
+            logger.warning(
+                "[Vision] OpenAI direct image_url failed; retrying with base64 media_url=%s reason=%s",
+                _sanitize_url_for_logging(media_url),
+                url_exc,
+            )
+            response = _call_with_part(self._build_base64_image_part(media_url=media_url, mime_type=mime_type))
+
         text = (response.choices[0].message.content or "").strip() if response.choices else ""
         if not text:
             raise ValueError("OpenAI response did not include text output.")

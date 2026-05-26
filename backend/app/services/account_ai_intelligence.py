@@ -9,7 +9,7 @@ import os
 
 from backend.app.ai import toon
 from backend.app.ai.llm_client import LLMClient
-from backend.app.domain.account_models import CreatorBrandFit, CreatorIntelligence
+from backend.app.domain.account_models import BrandFitSignals, CreatorIntelligence
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.utils.logger import logger
 
@@ -277,7 +277,7 @@ async def generate_creator_intelligence(
         creator_persona=_infer_persona(username, creator_dominant_category, niche_tags, follower_count),
         content_style_summary=_infer_content_style(posts),
         top_performing_themes=top_words[:5],
-        brand_fit=CreatorBrandFit(
+        brand_fit=BrandFitSignals(
             fit_categories=fit_categories,
             red_flags=red_flags,
         ),
@@ -318,7 +318,7 @@ async def generate_creator_intelligence(
             sponsorship_potential=parsed.get("sponsorship_potential"),
             notable_formats=parsed.get("notable_formats") or [],
             top_performing_themes=parsed.get("top_performing_themes") or [],
-            brand_fit=CreatorBrandFit(
+            brand_fit=BrandFitSignals(
                 fit_categories=brand_fit_dict.get("fit_categories") or [],
                 red_flags=brand_fit_dict.get("red_flags") or [],
             ),
