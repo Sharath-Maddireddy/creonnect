@@ -123,11 +123,16 @@ class LLMClient:
                 )
             else:
                 # ── Direct OpenAI fallback ──
+                import httpx
                 from openai import OpenAI
                 api_key = os.getenv("OPENAI_API_KEY")
                 if not api_key:
                     logger.warning("[LLM] OPENAI_API_KEY not set in environment")
-                self._client = OpenAI(api_key=api_key, timeout=timeout)
+                self._client = OpenAI(
+                    api_key=api_key,
+                    timeout=timeout,
+                    http_client=httpx.Client(timeout=timeout, trust_env=False),
+                )
                 logger.info("[LLM] Initialized direct OpenAI client (model: %s)", self.model_name)
         except Exception as e:
             logger.error(f"[LLM] Failed to initialize OpenAI client: {e}")

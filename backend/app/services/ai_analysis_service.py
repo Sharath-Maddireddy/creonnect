@@ -807,7 +807,7 @@ def _build_gemini_vision_adapter():
                 uploaded = None
                 temp_path = None
                 try:
-                    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                    with httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False) as client:
                         response = client.get(media_url)
                         response.raise_for_status()
                     suffix = ".mp4" if mime_type == "video/mp4" else ".jpg"
@@ -881,7 +881,7 @@ def _build_gemini_vision_adapter():
                 uploaded = None
                 temp_path = None
                 try:
-                    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                    with httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False) as client:
                         response = client.get(media_url)
                         response.raise_for_status()
                     suffix = ".mp4" if mime_type == "video/mp4" else ".jpg"
@@ -935,12 +935,15 @@ class _OpenAIVisionAdapter:
     def __init__(self, api_key: str) -> None:
         from openai import OpenAI
 
-        self._client = OpenAI(api_key=api_key)
+        self._client = OpenAI(
+            api_key=api_key,
+            http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
+        )
 
     def _build_base64_image_part(self, *, media_url: str, mime_type: str) -> dict[str, Any]:
         if mime_type.startswith("video/"):
             raise ValueError("OpenAI vision fallback currently supports images only.")
-        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+        with httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False) as client:
             response = client.get(media_url)
             response.raise_for_status()
         content_type = response.headers.get("content-type", "") or mime_type or "image/jpeg"

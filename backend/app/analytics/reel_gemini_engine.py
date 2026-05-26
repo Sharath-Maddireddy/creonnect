@@ -88,7 +88,7 @@ def _build_genai_adapter():
 def _download_reel(media_url: str) -> bytes | None:
     """Download reel bytes with a strict max-size cap."""
     try:
-        with httpx.Client(timeout=REEL_DOWNLOAD_TIMEOUT_SEC, follow_redirects=True) as client:
+        with httpx.Client(timeout=REEL_DOWNLOAD_TIMEOUT_SEC, follow_redirects=True, trust_env=False) as client:
             with client.stream("GET", media_url) as response:
                 response.raise_for_status()
                 chunks: list[bytes] = []

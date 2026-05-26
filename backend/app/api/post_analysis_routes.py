@@ -427,14 +427,29 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
 
 
 @legacy_router.post("/single-post-analysis")
-async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str, str]:
+async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
     """Enqueue single-post analysis as a background job."""
     payload = request.model_dump(mode="python")
     try:
         return await enqueue_single_post_analysis_job_async(payload)
     except Exception as exc:
-        logger.exception("[SinglePostJob] Failed to enqueue single-post analysis job: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to enqueue single-post analysis job.") from exc
+        logger.exception("[SinglePostJob] Failed to enqueue single-post analysis job; falling back to inline run: %s", exc)
+        try:
+            inline_result = await post_analysis(request)
+            post_id = request.post_id or _stable_post_id(
+                media_url=request.media_url,
+                post_type=request.post_type,
+                caption_text=request.caption_text,
+            )
+            return {
+                "job_id": f"inline_{post_id}",
+                "status": "succeeded",
+                "mode": "inline_fallback",
+                "result": inline_result,
+            }
+        except Exception as inline_exc:
+            logger.exception("[SinglePostJob] Inline fallback also failed: %s", inline_exc)
+            raise HTTPException(status_code=500, detail="Failed to start single post analysis.") from inline_exc
 
 
 @legacy_router.get("/single-post-analysis/{job_id}")
