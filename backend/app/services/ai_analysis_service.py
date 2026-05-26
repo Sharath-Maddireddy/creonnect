@@ -767,12 +767,61 @@ def _build_gemini_vision_adapter():
             def __init__(self, api_key: str) -> None:
                 self._client = genai.Client(api_key=api_key)
 
+            def _generate_with_uploaded_file(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
+                import httpx
+                import tempfile
+                import os
+                uploaded = None
+                temp_path = None
+                try:
+                    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                        response = client.get(media_url)
+                        response.raise_for_status()
+                    suffix = ".mp4" if mime_type == "video/mp4" else ".jpg"
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                        tmp.write(response.content)
+                        temp_path = tmp.name
+                    try:
+                        # google-genai >= 0.8 uses config= for upload metadata
+                        from google.genai import types as _genai_types
+                        uploaded = self._client.files.upload(
+                            file=temp_path,
+                            config=_genai_types.UploadFileConfig(mime_type=mime_type),
+                        )
+                    except (TypeError, AttributeError):
+                        # Fallback for SDKs that accept mime_type directly
+                        uploaded = self._client.files.upload(file=temp_path, mime_type=mime_type)  # type: ignore[call-arg]
+                    return self._client.models.generate_content(
+                        model=model_name,
+                        contents=[instruction, uploaded],
+                    )
+                finally:
+                    if uploaded is not None and hasattr(uploaded, "name"):
+                        try:
+                            self._client.files.delete(name=uploaded.name)
+                        except Exception:
+                            logger.debug("[Vision] Gemini cleanup failed for uploaded file.")
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except OSError:
+                            pass
+
             def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
-                image_part = genai_types.Part.from_uri(file_uri=media_url, mime_type=mime_type)
-                return self._client.models.generate_content(
-                    model=model_name,
-                    contents=[instruction, image_part],
-                )
+                try:
+                    image_part = genai_types.Part.from_uri(file_uri=media_url, mime_type=mime_type)
+                    return self._client.models.generate_content(
+                        model=model_name,
+                        contents=[instruction, image_part],
+                    )
+                except Exception as e:
+                    logger.debug("[Vision] genai SDK uri fetch failed (%s), falling back to local download/upload.", e)
+                    return self._generate_with_uploaded_file(
+                        model_name=model_name,
+                        instruction=instruction,
+                        media_url=media_url,
+                        mime_type=mime_type
+                    )
 
             def generate_text(self, *, model_name: str, prompt: str):
                 return self._client.models.generate_content(

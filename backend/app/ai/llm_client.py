@@ -72,6 +72,12 @@ def _append_finetune_dataset_record(prompt: Dict[str, Any], content: str) -> Non
 class LLMClient:
     """
     Thin abstraction over an LLM provider.
+    Supports both Azure OpenAI and direct OpenAI API.
+
+    Provider selection (automatic):
+      - If AZURE_OPENAI_ENDPOINT is set → uses Azure OpenAI (credits pay)
+      - Otherwise → falls back to direct OpenAI API
+
     Can be swapped with QLoRA / local models later.
     Includes timeout and retry logic for production reliability.
     """
@@ -82,7 +88,7 @@ class LLMClient:
         self,
         model_name: str | None = None,
         temperature: float = 0.4,
-        max_tokens: int = 400,
+        max_tokens: int = 1200,
         timeout: int = 30,
         max_retries: int = 1
     ):
@@ -91,14 +97,38 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.max_retries = max_retries
+        self._is_azure = False
 
         # Lazy import so this file doesn't hard-depend on OpenAI
         try:
-            from openai import OpenAI
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                logger.warning("[LLM] OPENAI_API_KEY not set in environment")
-            self._client = OpenAI(api_key=api_key, timeout=timeout)
+            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+
+            if azure_endpoint:
+                # ── Azure OpenAI path (uses Azure credits) ──
+                from openai import AzureOpenAI
+                azure_key = os.getenv("AZURE_OPENAI_API_KEY")
+                api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
+                if not azure_key:
+                    logger.warning("[LLM] AZURE_OPENAI_API_KEY not set in environment")
+                self._client = AzureOpenAI(
+                    api_key=azure_key,
+                    api_version=api_version,
+                    azure_endpoint=azure_endpoint,
+                    timeout=timeout,
+                )
+                self._is_azure = True
+                logger.info(
+                    "[LLM] Initialized Azure OpenAI client → %s (model: %s)",
+                    azure_endpoint, self.model_name,
+                )
+            else:
+                # ── Direct OpenAI fallback ──
+                from openai import OpenAI
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    logger.warning("[LLM] OPENAI_API_KEY not set in environment")
+                self._client = OpenAI(api_key=api_key, timeout=timeout)
+                logger.info("[LLM] Initialized direct OpenAI client (model: %s)", self.model_name)
         except Exception as e:
             logger.error(f"[LLM] Failed to initialize OpenAI client: {e}")
             self._client = None
@@ -113,7 +143,7 @@ class LLMClient:
         if self._client is None:
             raise LLMClientError(
                 "LLM client not initialized. "
-                "Ensure OPENAI_API_KEY is set or replace this client."
+                "Ensure OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT is set."
             )
 
         if not isinstance(prompt, dict):
@@ -163,7 +193,7 @@ class LLMClient:
 
                 duration = time.time() - start_time
                 logger.info(f"[LLM] Request completed in {duration:.2f}s")
-
+                
                 content = response.choices[0].message.content.strip()
                 try:
                     if _should_log_finetune_dataset():
@@ -190,12 +220,19 @@ class LLMClient:
             logger.error("[LLM] Embedding request failed: client not initialized")
             return None
 
+        # On Azure, use the embedding deployment name; on direct OpenAI, use the model name
+        embedding_model = (
+            os.getenv("AZURE_EMBEDDING_DEPLOYMENT", CREATOR_EMBEDDING_MODEL_NAME)
+            if self._is_azure
+            else CREATOR_EMBEDDING_MODEL_NAME
+        )
+
         start_time = time.time()
         try:
-            logger.info("[LLM] Embedding request start")
+            logger.info("[LLM] Embedding request start (model: %s)", embedding_model)
             response = self._client.embeddings.create(
                 input=text,
-                model=CREATOR_EMBEDDING_MODEL_NAME,
+                model=embedding_model,
             )
             duration = time.time() - start_time
             logger.info(f"[LLM] Embedding request completed in {duration:.2f}s")
@@ -204,7 +241,7 @@ class LLMClient:
                 logger.error(
                     "[LLM] Embedding dimension mismatch: expected %s values from %s, received %s",
                     EMBEDDING_DIMENSION,
-                    CREATOR_EMBEDDING_MODEL_NAME,
+                    embedding_model,
                     len(embedding),
                 )
                 return None
@@ -213,6 +250,3 @@ class LLMClient:
             duration = time.time() - start_time
             logger.warning(f"[LLM] Embedding request failed after {duration:.2f}s: {e}")
             return None
-
-
-

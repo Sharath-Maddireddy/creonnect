@@ -30,6 +30,7 @@ from backend.app.infra.rq_queue import (
 from backend.app.analytics.account_health_engine import (
     compute_account_engagement_signals,
     compute_account_vision_summary,
+    compute_content_type_performance,
 )
 from backend.app.analytics.reel_analysis_service import compute_reel_analysis
 from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
@@ -129,7 +130,7 @@ def _sanitize_posts_summary(result: dict[str, Any]) -> dict[str, Any]:
         return result
 
     bounded: list[dict[str, Any]] = []
-    for item in posts_summary:
+    for item in posts_summary[:30]:
         if not isinstance(item, dict):
             continue
         sanitized = _strip_signals(item)
@@ -331,7 +332,7 @@ def _normalize_post_limit(value: Any) -> int:
         post_limit = int(value)
     except (TypeError, ValueError):
         post_limit = 30
-    return max(1, post_limit)
+    return max(1, min(30, post_limit))
 
 
 def _normalize_job_id(value: Any) -> str:
@@ -366,7 +367,7 @@ def _normalize_include_posts_summary_max(value: Any) -> int:
         parsed = int(value)
     except (TypeError, ValueError):
         parsed = 30
-    return max(1, parsed)
+    return max(1, min(30, parsed))
 
 
 def _status_value(job_id: str) -> str | None:
@@ -678,12 +679,6 @@ def _fetch_posts_from_source(payload: dict[str, Any], post_limit: int) -> list[S
 
 
 def _posts_payload_has_precomputed_scores(payload: dict[str, Any]) -> bool:
-
-    return False
-    # source = payload.get("source")
-    # if isinstance(source, str) and source.strip().lower() != "precomputed":
-    #     return False
-
     raw_posts = payload.get("posts")
     if not isinstance(raw_posts, list) or not raw_posts:
         return False
@@ -700,8 +695,11 @@ def _posts_payload_has_precomputed_scores(payload: dict[str, Any]) -> bool:
     for item in raw_posts:
         if isinstance(item, SinglePostInsights):
             return True
-        if isinstance(item, dict) and required_keys.issubset(item.keys()):
-            return True
+        if isinstance(item, dict):
+            has_all_keys = all(key in item for key in required_keys)
+            has_no_none = all(item.get(key) is not None for key in required_keys)
+            if has_all_keys and has_no_none:
+                return True
     return False
 
 
@@ -1132,6 +1130,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
     job_id = current_job_id or raw_job_id or str(uuid4())
     account_id = _normalize_account_id(payload.get("account_id"))
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
+    include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
     include_posts_summary_max = _normalize_include_posts_summary_max(payload.get("include_posts_summary_max", 30))
     vision_enabled = bool((os.getenv("GEMINI_API_KEY") or "").strip())
     warnings_global: list[dict[str, Any]] = []
@@ -1275,9 +1274,20 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             creator_intelligence = CreatorIntelligence()
 
         try:
+            content_type_performance = compute_content_type_performance(processed_posts)
+        except Exception as ctp_exc:
+            logger.warning(
+                "[AccountAnalysisJob] Non-fatal: content type performance failed for %s: %s",
+                account_id,
+                ctp_exc,
+            )
+            content_type_performance = None
+
+        try:
             result.creator_intelligence = creator_intelligence
             result.vision_summary = vision_summary
             result.engagement_signals = engagement_signals
+            result.content_type_performance = content_type_performance
         except Exception as attach_exc:
             logger.warning(
                 "[AccountAnalysisJob] Non-fatal: failed attaching account signals for %s: %s",
@@ -1309,7 +1319,8 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             logger.warning("[AccountAnalysisJob] Non-fatal: failed to enqueue embedding ingestion for %s: %s", account_id, embed_exc)
 
         try:
-            result_payload["posts_summary"] = _bounded_posts_summary(
+            if include_posts_summary:
+                result_payload["posts_summary"] = _bounded_posts_summary(
                 processed_posts,
                 include_posts_summary_max=include_posts_summary_max,
                 vision_enabled=vision_enabled,

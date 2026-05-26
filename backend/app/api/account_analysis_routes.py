@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Literal
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.app.domain.account_models import AccountHealthScore
 from backend.app.utils.logger import logger
 from backend.app.services.account_analysis_jobs import (
     AccountAnalysisRateLimitError,
@@ -29,7 +32,7 @@ class AccountAnalysisRequest(BaseModel):
     follower_count: int | None = None
     creator_dominant_category: str | None = None
     niche_tags: list[str] | None = None
-    post_limit: int = Field(default=30, ge=1)
+    post_limit: int = Field(default=30, ge=1, le=30)
     account_avg_engagement_rate: float | None = None
     niche_avg_engagement_rate: float | None = None
     follower_band: str | None = None
@@ -42,15 +45,81 @@ class AccountAnalysisRequest(BaseModel):
     actor_user_id: str | None = None
     actor_user_email: str | None = None
     include_posts_summary: bool = False
-    include_posts_summary_max: int = Field(default=30, ge=1)
+    include_posts_summary_max: int = Field(default=30, ge=1, le=30)
 
 
-@router.post("/account-analysis")
-async def enqueue_account_analysis(request: AccountAnalysisRequest) -> dict[str, str]:
+class AccountAnalysisEnqueueResponse(BaseModel):
+    """Response payload for the enqueue endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: str
+
+
+class AccountAnalysisProgressResponse(BaseModel):
+    """Progress counters for a running account-analysis job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage: str
+    done: int
+    total: int
+
+
+class AccountAnalysisErrorResponse(BaseModel):
+    """Structured error payload returned for failed jobs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    message: str
+
+
+class AccountAnalysisWarningResponse(BaseModel):
+    """Structured warning emitted during account-analysis execution."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class AccountAnalysisQualityResponse(BaseModel):
+    """Execution quality metadata returned with account-analysis results."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class AccountAnalysisResultResponse(AccountHealthScore):
+    """Frontend-facing account health payload returned by the polling endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    posts_summary: list[dict[str, Any]] | None = None
+
+
+class AccountAnalysisStatusResponse(BaseModel):
+    """Polling response payload for account-analysis jobs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: Literal["queued", "started", "succeeded", "failed"]
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    progress: AccountAnalysisProgressResponse | None = None
+    error: AccountAnalysisErrorResponse | None = None
+    result: AccountAnalysisResultResponse | None = None
+    warnings: list[AccountAnalysisWarningResponse] = Field(default_factory=list)
+    quality: AccountAnalysisQualityResponse | None = None
+
+
+@router.post("/account-analysis", response_model=AccountAnalysisEnqueueResponse)
+async def enqueue_account_analysis(request: AccountAnalysisRequest) -> AccountAnalysisEnqueueResponse:
     """Enqueue account analysis background job and return job_id."""
     payload = request.model_dump(mode="python")
     try:
-        return await enqueue_account_analysis_job_async(payload)
+        response = await enqueue_account_analysis_job_async(payload)
+        return AccountAnalysisEnqueueResponse.model_validate(response)
     except AccountAnalysisRateLimitError as exc:
         detail: dict[str, Any] = {"message": exc.message}
         if exc.job_id is not None:
@@ -61,10 +130,12 @@ async def enqueue_account_analysis(request: AccountAnalysisRequest) -> dict[str,
         raise HTTPException(status_code=500, detail="Failed to enqueue account analysis job") from exc
 
 
-@router.get("/account-analysis/{job_id}")
-def get_account_analysis_status(job_id: str) -> dict[str, Any]:
+@router.get("/account-analysis/{job_id}", response_model=AccountAnalysisStatusResponse)
+def get_account_analysis_status(job_id: str) -> AccountAnalysisStatusResponse:
     """Poll account analysis job status/result from Redis."""
     status = get_account_analysis_job_status(job_id)
     if status is None:
         raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
-    return status
+    return AccountAnalysisStatusResponse.model_validate(status)
+
+AccountAnalysisStatusResponse.model_rebuild()

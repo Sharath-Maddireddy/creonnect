@@ -44,9 +44,22 @@ def _build_genai_adapter():
                 self._client.files.delete(name=name)
 
             def generate_content(self, model_name: str, contents: list[object]):
+                resolved = []
+                for item in contents:
+                    if isinstance(item, str):
+                        resolved.append(item)
+                    elif hasattr(item, "uri"):
+                        resolved.append(
+                            genai_types.Part.from_uri(
+                                file_uri=item.uri,
+                                media_type=getattr(item, "mime_type", "video/mp4"),
+                            )
+                        )
+                    else:
+                        resolved.append(item)
                 return self._client.models.generate_content(
                     model=model_name,
-                    contents=contents,
+                    contents=resolved,
                 )
 
         return _GoogleGenaiAdapter
@@ -139,7 +152,7 @@ def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
             raise TimeoutError("Gemini file never reached ACTIVE state.")
 
         # Run analysis — retry once on 429 rate-limit with 30s backoff
-        _MODELS_TO_TRY = ["gemini-2.0-flash-lite", "gemini-flash-lite-latest"]
+        _MODELS_TO_TRY = ["gemini-2.5-flash-lite", "gemini-flash-lite-latest"]
         last_exc: Exception | None = None
         response = None
         for model_name in _MODELS_TO_TRY:

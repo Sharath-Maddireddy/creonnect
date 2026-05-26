@@ -62,12 +62,15 @@ def _cache_key(
     account_avg_engagement_rate: float | None,
     niche_avg_engagement_rate: float | None,
     follower_band: str | None,
+    now_ts: datetime | None,
 ) -> str:
     account_id = posts[0].account_id if posts and isinstance(posts[0].account_id, str) else "unknown_account"
     fingerprint = _stable_post_fingerprint(posts)
+    now_str = now_ts.isoformat() if isinstance(now_ts, datetime) else ""
     return (
         f"{account_id}:{fingerprint}:"
-        f"{_format_rate(account_avg_engagement_rate)}:{_format_rate(niche_avg_engagement_rate)}:{follower_band or ''}"
+        f"{_format_rate(account_avg_engagement_rate)}:{_format_rate(niche_avg_engagement_rate)}:{follower_band or ''}:"
+        f"{now_str}"
     )
 
 
@@ -116,7 +119,7 @@ def analyze_account_health(
     affect scoring or caching at present.
     """
 
-    key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band)
+    key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band, now_ts)
     account_id = posts[0].account_id if posts and isinstance(posts[0].account_id, str) else "unknown_account"
     logger.info(
         "[AccountHealth] Start account_id=%s post_count=%d use_cache=%s follower_band=%s",
