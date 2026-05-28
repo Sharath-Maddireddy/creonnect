@@ -104,48 +104,6 @@ class AccountHealthMetadata(BaseModel):
     time_window_days: int | None = Field(default=None, ge=1)
 
 
-class AccountEngagementSignals(BaseModel):
-    """Aggregate engagement-health signals computed across account posts."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    avg_save_rate: float | None = Field(default=None, ge=0.0)
-    avg_share_rate: float | None = Field(default=None, ge=0.0)
-    avg_watch_through_rate: float | None = Field(default=None, ge=0.0)
-    avg_profile_visit_rate: float | None = Field(default=None, ge=0.0)
-    audience_trust_index: float | None = Field(default=None, ge=0.0, le=100.0)
-    virality_potential: float | None = Field(default=None, ge=0.0, le=100.0)
-    consistency_score: float | None = Field(default=None, ge=0.0, le=100.0)
-
-
-class AccountVisionSummary(BaseModel):
-    """Aggregate vision-analysis summary computed across account posts."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    avg_cringe_score: float | None = Field(default=None, ge=0.0, le=100.0)
-    avg_hook_strength: float | None = Field(default=None, ge=0.0, le=1.0)
-    avg_production_level: Literal["low", "medium", "high"] | None = Field(default=None)
-    flagged_posts_count: int = Field(default=0, ge=0)
-    common_technical_flaws: list[str] = Field(default_factory=list)
-
-    @field_validator("common_technical_flaws", mode="before")
-    @classmethod
-    def _sanitize_technical_flaws(cls, value: list[str] | str | None) -> list[str]:
-        if value is None:
-            return []
-        values = value if isinstance(value, list) else [value]
-        sanitized: list[str] = []
-        for item in values:
-            if not isinstance(item, str):
-                continue
-            text = " ".join(item.strip().split())
-            if not text:
-                continue
-            sanitized.append(text[:160])
-        return sanitized[:5]
-
-
 class ContentTypeBreakdownEntry(BaseModel):
     """Performance metrics for a single content type (e.g. IMAGE or REEL)."""
 
@@ -420,6 +378,37 @@ class FakeFollowerSignals(BaseModel):
     dead_audience: bool = False
 
 
+class AIFeaturePredictions(BaseModel):
+    viral_probability: float = Field(default=0.0, description="0.0 to 1.0 probability of going viral")
+    campaign_roi_prediction: str | None = Field(default=None, description="Predicted ROI band (e.g., '2x - 3x')")
+    best_posting_time: list[str] = Field(
+        default_factory=list,
+        description="List of optimal posting times (e.g. ['Wednesday 4PM EST'])",
+    )
+    audience_authenticity_score: float = Field(default=0.0, description="0 to 100 authenticity score")
+    spam_detected_count: int = Field(default=0, description="Number of suspected spam comments")
+    sentiment_score: float = Field(default=0.0, description="-1.0 (negative) to 1.0 (positive) comment sentiment")
+    prediction_status: Literal["ok", "degraded"] = Field(default="ok", description="Whether AI prediction used normal or fallback path.")
+    degraded_reason: str | None = Field(default=None, description="Reason for degraded fallback when prediction_status is 'degraded'.")
+
+
+class AnalysisCoverage(BaseModel):
+    """Coverage details for creator-score computations."""
+
+    posts_considered: int = Field(default=0, ge=0)
+    posts_with_reach: int = Field(default=0, ge=0)
+    zero_denominator_events: int = Field(default=0, ge=0)
+    missing_metric_events: int = Field(default=0, ge=0)
+
+
+class AnalysisConfidence(BaseModel):
+    """Confidence indicators for creator-score outputs."""
+
+    confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    status: Literal["ok", "degraded"] = Field(default="ok")
+    reasons: list[str] = Field(default_factory=list)
+
+
 class CreatorScore(BaseModel):
     final_score: float
     interpretation: Literal[
@@ -434,3 +423,6 @@ class CreatorScore(BaseModel):
     retention_metrics: CreatorRetentionMetrics
     growth_metrics: CreatorGrowthMetrics
     fake_follower_signals: FakeFollowerSignals
+    ai_predictions: AIFeaturePredictions | None = None
+    coverage: AnalysisCoverage | None = None
+    confidence: AnalysisConfidence | None = None

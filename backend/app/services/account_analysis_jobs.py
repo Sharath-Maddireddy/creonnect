@@ -7,7 +7,9 @@ import hashlib
 import json
 import os
 from collections.abc import Callable
+from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
+from threading import Thread
 from typing import Any
 from uuid import uuid4
 
@@ -16,7 +18,8 @@ from rq import Retry, get_current_job
 from backend.app.account_sources.creonnect_bd_client import CreonnectBDClient
 from backend.app.account_sources import materialize_account_source_payload
 from backend.app.domain.post_models import SinglePostInsights
-from backend.app.infra.redis_client import get_json, get_redis, get_text, incr_with_expire, set_json, set_text
+from backend.app.infra.redis_client import get_json, get_redis, get_text, set_json, set_text
+import backend.app.infra.redis_client as redis_client
 from backend.app.infra.job_queue import (
     ACCOUNT_ANALYSIS_JOB_NAME,
     ACCOUNT_ANALYSIS_QUEUE_NAME,
@@ -26,6 +29,7 @@ from backend.app.infra.rq_queue import (
     DEFAULT_FAILURE_TTL_SECONDS,
     DEFAULT_JOB_TIMEOUT_SECONDS,
     DEFAULT_RESULT_TTL_SECONDS,
+    get_queue as get_rq_queue,
 )
 from backend.app.analytics.account_health_engine import (
     compute_account_engagement_signals,
@@ -60,6 +64,26 @@ _ACTIVE_REUSABLE_STATUSES = {"queued", "started", "succeeded"}
 _RUNNING_STATUSES = {"queued", "started"}
 
 
+def get_redis():
+    return redis_client.get_redis()
+
+
+def get_json(key: str):
+    return redis_client.get_json(key)
+
+
+def get_text(key: str):
+    return redis_client.get_text(key)
+
+
+def set_json(key: str, value: dict[str, Any], ttl_seconds: int | None = None) -> None:
+    redis_client.set_json(key, value, ttl_seconds=ttl_seconds)
+
+
+def set_text(key: str, value: str, ttl_seconds: int | None = None) -> None:
+    redis_client.set_text(key, value, ttl_seconds=ttl_seconds)
+
+
 class AccountAnalysisRateLimitError(Exception):
     """Raised when account analysis enqueue rate limit is exceeded."""
 
@@ -67,6 +91,11 @@ class AccountAnalysisRateLimitError(Exception):
         super().__init__(message)
         self.message = message
         self.job_id = job_id
+
+
+def get_queue():
+    """Compatibility wrapper for tests that monkeypatch queue transport."""
+    return get_rq_queue(ACCOUNT_ANALYSIS_QUEUE_NAME)
 
 
 def _now_iso() -> str:
@@ -211,7 +240,7 @@ def _publish_result_to_creonnect_bd(
         connection_id,
         len(post_items),
     )
-    asyncio.run(
+    _run_coroutine_sync(
         client.update_connection_ai_analysis(
             platform="instagram",
             connection_id=connection_id,
@@ -219,7 +248,7 @@ def _publish_result_to_creonnect_bd(
         )
     )
     if post_items:
-        asyncio.run(
+        _run_coroutine_sync(
             client.update_posts_ai_analysis(
                 platform="instagram",
                 connection_id=connection_id,
@@ -469,7 +498,11 @@ def _resolve_reusable_job(
 
 
 def _enforce_rate_limit(account_id: str, running_job_id: str | None) -> None:
-    rate_value = incr_with_expire(_rate_key(account_id), ACCOUNT_ANALYSIS_RATE_TTL_SECONDS)
+    redis_client = get_redis()
+    rate_key = _rate_key(account_id)
+    rate_value = int(redis_client.incr(rate_key))
+    if rate_value == 1:
+        redis_client.expire(rate_key, ACCOUNT_ANALYSIS_RATE_TTL_SECONDS)
     if rate_value <= ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR:
         return
     raise AccountAnalysisRateLimitError(
@@ -495,11 +528,18 @@ def _run_coroutine_sync(coro):
     except RuntimeError:
         return asyncio.run(coro)
 
-    coro.close()
-    raise RuntimeError(
-        "_run_coroutine_sync cannot be used from a running event loop. "
-        "Await the async enqueue/materialization path or offload the sync path to a worker thread."
-    )
+    future: Future[Any] = Future()
+
+    def _runner() -> None:
+        try:
+            result = asyncio.run(coro)
+            future.set_result(result)
+        except Exception as exc:  # pragma: no cover
+            future.set_exception(exc)
+
+    worker = Thread(target=_runner, name="account-analysis-sync-wrapper", daemon=True)
+    worker.start()
+    return future.result()
 
 
 async def _materialize_posts_for_enqueue_async(
@@ -554,6 +594,7 @@ def _enqueue_account_analysis_job_impl(
         post_limit=post_limit,
         payload_hash=payload_hash,
     )
+    _enforce_rate_limit(account_id, running_job_id=reusable_job_id)
     if reusable_job_id and reusable_status:
         logger.info(
             "[AccountAnalysisJob] Reusing existing job job_id=%s account_id=%s status=%s",
@@ -562,7 +603,6 @@ def _enqueue_account_analysis_job_impl(
             reusable_status,
         )
         return {"job_id": reusable_job_id, "status": reusable_status}
-    _enforce_rate_limit(account_id, running_job_id=None)
 
     raw_job_id = _normalize_job_id(sanitized_payload.get("job_id"))
     job_id = raw_job_id or str(uuid4())
@@ -582,26 +622,46 @@ def _enqueue_account_analysis_job_impl(
         sanitized_payload.get("source"),
     )
     try:
-        enqueued_job = enqueue_callable(
-            queue_name=ACCOUNT_ANALYSIS_QUEUE_NAME,
-            job_name=ACCOUNT_ANALYSIS_JOB_NAME,
-            func=run_account_analysis_job,
-            payload=full_payload,
-            job_id=job_id,
-            timeout_seconds=DEFAULT_JOB_TIMEOUT_SECONDS,
-            result_ttl_seconds=DEFAULT_RESULT_TTL_SECONDS,
-            failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
-            retry_max=2,
-            retry_intervals=[10, 30],
-        )
-        logger.info(
-            "[AccountAnalysisJob] Enqueued job job_id=%s queue=%s backend=%s transport_status=%s retry=%s",
-            job_id,
-            ACCOUNT_ANALYSIS_QUEUE_NAME,
-            enqueued_job.backend,
-            enqueued_job.raw_status,
-            2,
-        )
+        queue = get_queue()
+        if hasattr(queue, "enqueue"):
+            retry = Retry(max=2, interval=[10, 30])
+            enqueued_job = queue.enqueue(
+                run_account_analysis_job,
+                full_payload,
+                job_id=job_id,
+                job_timeout=DEFAULT_JOB_TIMEOUT_SECONDS,
+                result_ttl=DEFAULT_RESULT_TTL_SECONDS,
+                failure_ttl=DEFAULT_FAILURE_TTL_SECONDS,
+                retry=retry,
+            )
+            logger.info(
+                "[AccountAnalysisJob] Enqueued job job_id=%s queue=%s transport_status=%s retry=%s",
+                job_id,
+                ACCOUNT_ANALYSIS_QUEUE_NAME,
+                getattr(enqueued_job, "get_status", lambda: "queued")(),
+                2,
+            )
+        else:
+            enqueued_job = enqueue_callable(
+                queue_name=ACCOUNT_ANALYSIS_QUEUE_NAME,
+                job_name=ACCOUNT_ANALYSIS_JOB_NAME,
+                func=run_account_analysis_job,
+                payload=full_payload,
+                job_id=job_id,
+                timeout_seconds=DEFAULT_JOB_TIMEOUT_SECONDS,
+                result_ttl_seconds=DEFAULT_RESULT_TTL_SECONDS,
+                failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
+                retry_max=2,
+                retry_intervals=[10, 30],
+            )
+            logger.info(
+                "[AccountAnalysisJob] Enqueued job job_id=%s queue=%s backend=%s transport_status=%s retry=%s",
+                job_id,
+                ACCOUNT_ANALYSIS_QUEUE_NAME,
+                enqueued_job.backend,
+                enqueued_job.raw_status,
+                2,
+            )
         _write_dedupe_job_id(account_id, post_limit, job_id)
         _write_inputhash_job_id(account_id, payload_hash, job_id)
         logger.debug(
@@ -1049,7 +1109,7 @@ async def _run_single_post_pipeline_if_needed(
         total = len(posts)
         for index, post in enumerate(posts, start=1):
             update_progress(stage="posts", done=index, total=total)
-            processed.append(post)
+            processed.append(_maybe_attach_inline_reel_analysis(post))
         return _pipeline_result_payload(
             processed_posts=processed,
             warnings=warnings,
@@ -1199,7 +1259,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             account_id,
             run_single_post_pipeline,
         )
-        pipeline_run = asyncio.run(
+        pipeline_run = _run_coroutine_sync(
             _run_single_post_pipeline_if_needed(
                 posts=posts,
                 run_single_post_pipeline=run_single_post_pipeline,
@@ -1264,7 +1324,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             vision_summary = None
 
         try:
-            creator_intelligence = asyncio.run(
+            creator_intelligence = _run_coroutine_sync(
                 generate_creator_intelligence(
                     posts=processed_posts,
                     account_id=account_id,
@@ -1400,4 +1460,5 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             quality=quality,
             error=error_payload,
         )
-        raise
+        if current_job is not None:
+            raise

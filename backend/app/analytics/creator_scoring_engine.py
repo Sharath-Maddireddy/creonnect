@@ -3,7 +3,11 @@ from __future__ import annotations
 from statistics import mean
 from typing import Any, Literal
 
+from backend.app.analytics.ai_features_engine import generate_ai_feature_predictions_sync
+from backend.app.analytics.metric_units import safe_percent
 from backend.app.domain.account_models import (
+    AnalysisConfidence,
+    AnalysisCoverage,
     CreatorEngagementMetrics,
     CreatorGrowthMetrics,
     CreatorReachMetrics,
@@ -49,12 +53,6 @@ def _pick_post_or_account_numeric(post: SinglePostInsights, account_data: dict[s
         if numeric > 0:
             return numeric
     return 0.0
-
-
-def _rate_percent(numerator: float, denominator: float) -> tuple[float, bool]:
-    if denominator <= 0:
-        return 0.0, False
-    return (numerator / denominator) * 100.0, True
 
 
 def _avg(values: list[float]) -> float:
@@ -159,6 +157,8 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
     valid_watch_time = False
 
     avg_reach_values: list[float] = []
+    zero_denominator_events = 0
+    missing_metric_events = 0
 
     for post in posts:
         core = post.core_metrics
@@ -173,23 +173,27 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         if reach > 0:
             avg_reach_values.append(reach)
 
-        er, er_ok = _rate_percent(likes + comments + shares + saves, followers)
+        if followers <= 0:
+            zero_denominator_events += 1
+        er, er_ok = safe_percent(likes + comments + shares + saves, followers)
         engagement_rates.append(er)
         valid_engagement = valid_engagement or er_ok
 
-        save_rate, save_ok = _rate_percent(saves, reach)
+        if reach <= 0:
+            zero_denominator_events += 1
+        save_rate, save_ok = safe_percent(saves, reach)
         save_rates.append(save_rate)
         valid_save = valid_save or save_ok
 
-        share_rate, share_ok = _rate_percent(shares, reach)
+        share_rate, share_ok = safe_percent(shares, reach)
         share_rates.append(share_rate)
         valid_share = valid_share or share_ok
 
-        comment_rate, comment_ok = _rate_percent(comments, followers)
+        comment_rate, comment_ok = safe_percent(comments, followers)
         comment_rates.append(comment_rate)
         valid_comment = valid_comment or comment_ok
 
-        reach_eff, reach_eff_ok = _rate_percent(reach, followers)
+        reach_eff, reach_eff_ok = safe_percent(reach, followers)
         reach_efficiency_rates.append(reach_eff)
         valid_reach_eff = valid_reach_eff or reach_eff_ok
 
@@ -204,7 +208,7 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         non_follower_reach = _pick_post_or_account_numeric(
             post, account_data, "non_follower_reach", "reach_non_followers"
         )
-        non_follow_rate, non_follow_ok = _rate_percent(non_follower_reach, reach)
+        non_follow_rate, non_follow_ok = safe_percent(non_follower_reach, reach)
         non_follower_reach_rates.append(non_follow_rate)
         valid_non_follower = valid_non_follower or non_follow_ok
 
@@ -216,21 +220,36 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         avg_watch_time = _pick_post_or_account_numeric(post, account_data, "avg_watch_time", "average_watch_time")
         reel_duration = _pick_post_or_account_numeric(post, account_data, "reel_duration", "duration")
 
-        completion_rate, completion_ok = _rate_percent(completed_views, total_plays)
+        if total_plays <= 0:
+            zero_denominator_events += 1
+        completion_rate, completion_ok = safe_percent(completed_views, total_plays)
         completion_rates.append(completion_rate)
         valid_completion = valid_completion or completion_ok
 
-        replay_rate, replay_ok = _rate_percent(replays, total_plays)
+        replay_rate, replay_ok = safe_percent(replays, total_plays)
         replay_rates.append(replay_rate)
         valid_replay = valid_replay or replay_ok
 
-        hook_rate, hook_ok = _rate_percent(three_sec_views, total_views)
+        if total_views <= 0:
+            zero_denominator_events += 1
+        hook_rate, hook_ok = safe_percent(three_sec_views, total_views)
         hook_efficiency_rates.append(hook_rate)
         valid_hook = valid_hook or hook_ok
 
-        watch_time_rate, watch_ok = _rate_percent(avg_watch_time, reel_duration)
+        if reel_duration <= 0:
+            zero_denominator_events += 1
+        watch_time_rate, watch_ok = safe_percent(avg_watch_time, reel_duration)
         watch_time_ratio_rates.append(watch_time_rate)
         valid_watch_time = valid_watch_time or watch_ok
+
+        if (
+            getattr(core, "likes", None) is None
+            or getattr(core, "comments", None) is None
+            or getattr(core, "shares", None) is None
+            or getattr(core, "saves", None) is None
+            or getattr(core, "reach", None) is None
+        ):
+            missing_metric_events += 1
 
     engagement_rate_avg = _avg(engagement_rates)
     save_rate_avg = _avg(save_rates)
@@ -275,13 +294,14 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         unfollow_rate_flag="Neutral",
     )
 
+    ai_predictions = generate_ai_feature_predictions_sync(posts, account_data)
     avg_reach = _avg(avg_reach_values)
     fake_follower_signals = FakeFollowerSignals(
         poor_audience_quality=(followers_from_account >= 1_000_000 and avg_reach <= 8_000),
         weak_audience_interest=(save_rate_avg < 1.0 and share_rate_avg < 1.0),
-        bot_activity=False,
-        possible_bought_followers=False,
-        inactive_followers=False,
+        bot_activity=(ai_predictions.spam_detected_count > 0),
+        possible_bought_followers=(growth_metrics.follower_growth_flag == "Huge Spikes"),
+        inactive_followers=(valid_story_reach and story_reach_avg < 5.0),
         dead_audience=(followers_from_account > 50_000 and engagement_rate_avg < 1.0),
     )
 
@@ -339,7 +359,27 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         + (0.10 * growth_sub_score)
         + (0.10 * brand_fit_sub_score)
     )
-
+    coverage = AnalysisCoverage(
+        posts_considered=len(posts),
+        posts_with_reach=len(avg_reach_values),
+        zero_denominator_events=zero_denominator_events,
+        missing_metric_events=missing_metric_events,
+    )
+    confidence_reasons: list[str] = []
+    if len(posts) < 5:
+        confidence_reasons.append("low_post_volume")
+    if zero_denominator_events > 0:
+        confidence_reasons.append("zero_denominator_inputs")
+    if missing_metric_events > 0:
+        confidence_reasons.append("missing_post_metrics")
+    if ai_predictions.prediction_status == "degraded":
+        confidence_reasons.append("ai_predictions_degraded")
+    confidence_score = max(0.0, min(1.0, 1.0 - (0.08 * len(confidence_reasons))))
+    confidence = AnalysisConfidence(
+        confidence_score=round(confidence_score, 3),
+        status="degraded" if confidence_reasons else "ok",
+        reasons=confidence_reasons,
+    )
     return CreatorScore(
         final_score=round(final_score, 2),
         interpretation=_interpret(final_score),
@@ -348,6 +388,9 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         retention_metrics=retention_metrics,
         growth_metrics=growth_metrics,
         fake_follower_signals=fake_follower_signals,
+        ai_predictions=ai_predictions,
+        coverage=coverage,
+        confidence=confidence,
     )
 
 

@@ -93,6 +93,7 @@ class AccountAnalysisResultResponse(AccountHealthScore):
 
     model_config = ConfigDict(extra="forbid")
 
+    creator_score: dict[str, Any] | None = None
     posts_summary: list[dict[str, Any]] | None = None
 
 
