@@ -32,6 +32,7 @@ from backend.app.analytics.account_health_engine import (
     compute_account_vision_summary,
     compute_content_type_performance,
 )
+from backend.app.analytics.creator_scoring_engine import calculate_creator_score
 from backend.app.analytics.reel_analysis_service import compute_reel_analysis
 from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
 from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
@@ -1230,6 +1231,17 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             follower_band=payload.get("follower_band"),
             use_cache=True,
         )
+        creator_score = None
+        try:
+            recent_posts = processed_posts
+            account_metadata = payload if isinstance(payload, dict) else {}
+            creator_score = calculate_creator_score(recent_posts, account_metadata)
+        except Exception as e:
+            logger.warning(
+                "[AccountAnalysisJob] Non-fatal: creator scoring failed for %s: %s",
+                account_id,
+                e,
+            )
 
         try:
             engagement_signals = compute_account_engagement_signals(processed_posts)
@@ -1296,6 +1308,8 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             )
 
         result_payload = result.model_dump(mode="python")
+        if creator_score is not None:
+            result_payload["creator_score"] = creator_score.model_dump(mode="python")
 
         try:
             creator_data = {

@@ -381,3 +381,56 @@ class CreatorIntelligence(BaseModel):
 
 
 AccountHealthScore.model_rebuild()
+
+
+class CreatorEngagementMetrics(BaseModel):
+    engagement_rate_flag: Literal["Good", "Bad", "Neutral"]
+    save_rate_flag: Literal["Good", "Bad", "Neutral"]
+    share_rate_flag: Literal["Good", "Bad", "Neutral"]
+    comment_rate_flag: Literal["Good", "Bad", "Neutral"]
+
+
+class CreatorReachMetrics(BaseModel):
+    reach_efficiency_flag: Literal["Healthy", "Weak", "Neutral"]
+    reel_reach_flag: Literal["Healthy", "Weak", "Neutral"]
+    story_reach_flag: Literal["Healthy", "Weak", "Neutral"]
+    non_follower_reach_flag: Literal["Healthy", "Weak", "Neutral"]
+
+
+class CreatorRetentionMetrics(BaseModel):
+    completion_rate_flag: Literal["Good", "Weak", "Neutral"]
+    replay_rate_flag: Literal["Good", "Weak", "Neutral"]
+    hook_efficiency_flag: Literal["Good", "Weak", "Neutral"]
+    watch_time_ratio_flag: Literal["Good", "Weak", "Neutral"]
+
+
+class CreatorGrowthMetrics(BaseModel):
+    follower_growth_flag: Literal["Steady", "Huge Spikes", "Neutral"]
+    net_growth_flag: Literal["Positive", "Negative", "Neutral"]
+    growth_velocity_flag: Literal["Consistent", "Sudden Jumps", "Neutral"]
+    unfollow_rate_flag: Literal["Healthy", "Bad Signal", "Neutral"]
+
+
+class FakeFollowerSignals(BaseModel):
+    poor_audience_quality: bool = False
+    weak_audience_interest: bool = False
+    bot_activity: bool = False
+    possible_bought_followers: bool = False
+    inactive_followers: bool = False
+    dead_audience: bool = False
+
+
+class CreatorScore(BaseModel):
+    final_score: float
+    interpretation: Literal[
+        "Elite Creator",
+        "Strong Creator",
+        "Average Creator",
+        "Weak Audience",
+        "High Risk / Fake Signals",
+    ]
+    engagement_metrics: CreatorEngagementMetrics
+    reach_metrics: CreatorReachMetrics
+    retention_metrics: CreatorRetentionMetrics
+    growth_metrics: CreatorGrowthMetrics
+    fake_follower_signals: FakeFollowerSignals
