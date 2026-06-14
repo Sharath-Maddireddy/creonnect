@@ -32,12 +32,10 @@ def _get_hnsw_ef_search() -> int:
 def _normalize_embedding(value: object) -> list[float] | None:
     if value is None:
         return None
-    if isinstance(value, list):
-        try:
-            return [float(item) for item in value]
-        except (TypeError, ValueError):
-            return None
-    return None
+    try:
+        return [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
 
 
 def _creator_to_dict(meta: CreatorDiscoveryMeta, vector: CreatorVector | None) -> dict:

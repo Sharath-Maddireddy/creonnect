@@ -138,6 +138,11 @@ class LLMClient:
             logger.error(f"[LLM] Failed to initialize OpenAI client: {e}")
             self._client = None
 
+    @property
+    def client(self) -> Any | None:
+        """Expose the underlying OpenAI client for structured-output calls."""
+        return self._client
+
     def generate(self, prompt: Dict[str, Any]) -> Optional[str]:
         """
         Generate text from the LLM.

@@ -17,7 +17,6 @@ from backend.app.utils.env import load_app_env
 load_app_env(override=False)
 
 from backend.app.api.account_analysis_routes import router as account_analysis_router
-from backend.app.api.brand_match_routes import router as brand_match_router
 from backend.app.api.campaign_routes import router as campaign_router
 from backend.app.api.grpc_analysis_server import start_grpc_analysis_server, stop_grpc_analysis_server
 from backend.app.api.post_analysis_routes import router as post_analysis_router
@@ -110,7 +109,6 @@ app.add_middleware(
 # Register routers
 app.include_router(dashboard_router)
 app.include_router(account_analysis_router)
-app.include_router(brand_match_router)
 app.include_router(campaign_router)
 app.include_router(post_analysis_router)
 app.include_router(reel_analysis_router)
