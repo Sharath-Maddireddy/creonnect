@@ -69,7 +69,6 @@ Use this path when a task mentions:
 Start with:
 
 - `backend/app/api/campaign_routes.py`
-- `backend/app/api/brand_match_routes.py`
 
 Then follow into:
 

@@ -1,8 +1,17 @@
 import sys
+import os
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).resolve().parent / "backend" / ".env"
+    load_dotenv(env_path, override=True)
+except ImportError:
+    pass
+
 import json
 from backend.app.ai.llm_client import LLMClient
 from backend.app.services.campaign_prompt_service import parse_campaign_prompt, build_brand_profile_from_parsed
-from backend.app.services.creator_pool_service import get_all_creators, reload_creator_pool, _CREATOR_EMBEDDINGS_CACHE, find_lookalikes
+from backend.app.services.creator_pool_service import get_all_creators, reload_creator_pool, find_lookalikes
 from backend.app.analytics.brand_match_engine import score_creator_against_brand
 
 def run_test(prompt: str, log_file):
@@ -38,7 +47,7 @@ def run_test(prompt: str, log_file):
     results = []
     for c in creators:
         account_id = c.get("account_id", "unknown")
-        creator_embedding = _CREATOR_EMBEDDINGS_CACHE.get(account_id)
+        creator_embedding = c.get("embedding")
 
         score = score_creator_against_brand(
             account_id=account_id,
@@ -87,7 +96,7 @@ def run_lookalike_test(log_file):
     log(f" LOOKALIKE DISCOVERY TEST")
     log(f"{'='*60}\n")
     
-    target_id = "ann.le.do_id"  # Usually fitness/sports
+    target_id = "therawtextures_id"
     log(f"Finding lookalikes for {target_id}...")
     lookalikes = find_lookalikes(target_id, k=3)
     

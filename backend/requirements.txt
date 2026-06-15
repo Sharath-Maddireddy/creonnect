@@ -17,3 +17,5 @@ sqlalchemy>=2.0
 asyncpg
 psycopg2-binary
 pgvector
+pytest
+pytest-asyncio

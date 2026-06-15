@@ -122,7 +122,6 @@ FastAPI route modules.
 
 - [backend/app/api/dashboard.py](../backend/app/api/dashboard.py): creator dashboard and analytics routes
 - [backend/app/api/account_analysis_routes.py](../backend/app/api/account_analysis_routes.py): enqueue and poll account analysis jobs
-- [backend/app/api/brand_match_routes.py](../backend/app/api/brand_match_routes.py): direct brand-to-creator scoring
 - [backend/app/api/campaign_routes.py](../backend/app/api/campaign_routes.py): AI-assisted brand discovery, manual campaign match, lookalikes
 - [backend/app/api/post_analysis_routes.py](../backend/app/api/post_analysis_routes.py): post-analysis and post-insight endpoints
 - [backend/app/api/reel_analysis_routes.py](../backend/app/api/reel_analysis_routes.py): background reel analysis job endpoints
@@ -280,7 +279,7 @@ This means Redis and the worker process are required for the asynchronous analys
 
 There are two related matching surfaces:
 
-- direct scoring via `/api/brand-match`
+- direct scoring via `/api/brand/campaign/match`
 - richer campaign/discovery flows via `/api/brand/campaign/*`
 
 The campaign flow can:
@@ -474,7 +473,7 @@ For common goals, these are the best entry files:
 - Backend boot: [backend/main.py](../backend/main.py)
 - Dashboard flow: [backend/app/services/dashboard_service.py](../backend/app/services/dashboard_service.py)
 - Brand campaign flow: [backend/app/api/campaign_routes.py](../backend/app/api/campaign_routes.py)
-- Direct brand scoring: [backend/app/api/brand_match_routes.py](../backend/app/api/brand_match_routes.py)
+- Brand scoring core: [backend/app/analytics/brand_match_engine.py](../backend/app/analytics/brand_match_engine.py)
 - Background jobs: [backend/app/workers/rq_worker.py](../backend/app/workers/rq_worker.py)
 - Database and pgvector: [backend/app/infra/database.py](../backend/app/infra/database.py) and [backend/app/infra/models.py](../backend/app/infra/models.py)
 - Frontend routes: [frontend/src/App.jsx](../frontend/src/App.jsx)

@@ -66,7 +66,7 @@ flowchart TB
 
 | Layer | File / Module | Responsibility |
 |---|---|---|
-| **API Routers** | `backend/app/api/campaign_routes.py`<br>`backend/app/api/brand_match_routes.py` | FastAPI endpoints for handling HTTP requests. Validates incoming payloads and returns the final JSON responses. |
+| **API Routers** | `backend/app/api/campaign_routes.py` | FastAPI endpoints for handling HTTP requests. Validates incoming payloads and returns the final JSON responses. |
 | **AI Parser (LLM)** | `backend/app/services/campaign_prompt_service.py` | Parses natural language prompts into a structured `BrandProfile` using OpenAI's models. This is the **only** place the LLM is used in the matching flow. |
 | **Data Retrieval** | `backend/app/services/creator_pool_service.py` | Acts as the data access layer. Given baseline requirements (follower range, niche), queries the database to retrieve a subset of eligible creator candidates. |
 | **Scoring Engine** | `backend/app/analytics/brand_match_engine.py` | Pure deterministic Python logic. Takes a list of creators, calculates their `total_match_score` (0-100) based on 5 pillars, and flags any disqualifications. |
