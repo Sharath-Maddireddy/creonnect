@@ -130,12 +130,15 @@ def test_run_vision_analysis_reads_gemini_key(monkeypatch) -> None:
         assert media_url == "https://example.com/post.jpg"
         return json.dumps(
             {
-                "objects": ["person"],
-                "scene_description": "Person presenting",
+                "visual_quality_score": 7,
+                "primary_objects": ["person"],
                 "detected_text": None,
-                "visual_style": "clean",
-                "technical_flaws": "Slight blur on subject edges",
                 "hook_strength_score": 0.75,
+                "lighting_feedback": "Subject is slightly underexposed",
+                "composition_feedback": "Good rule of thirds, but background is cluttered",
+                "aesthetic_fixes": ["Increase brightness by 10%", "Crop closer to the main subject"],
+                "is_cringe": False,
+                "adult_content_detected": False,
             }
         )
 
@@ -151,7 +154,15 @@ def test_run_vision_analysis_reads_gemini_key(monkeypatch) -> None:
 
     assert result["status"] == "ok"
     assert isinstance(result["signals"], list)
-    assert result["signals"][0]["technical_flaws"] == ["Slight blur on subject edges"]
+    assert result["signals"][0]["technical_flaws"] == [
+        "Subject is slightly underexposed",
+        "Good rule of thirds, but background is cluttered",
+    ]
+    assert result["signals"][0]["aesthetic_fixes"] == [
+        "Increase brightness by 10%",
+        "Crop closer to the main subject",
+    ]
+    assert result["signals"][0]["visual_quality_score"]["composition"] == 7.0
 
 
 def test_call_gemini_vision_api_falls_back_when_google_genai_client_is_missing(monkeypatch) -> None:
@@ -215,12 +226,15 @@ def test_run_vision_analysis_repairs_malformed_output(monkeypatch) -> None:
         assert "broken indentation" in raw_text
         return json.dumps(
             {
-                "objects": ["person"],
-                "scene_description": "Person presenting",
+                "visual_quality_score": 6,
+                "primary_objects": ["person"],
                 "detected_text": None,
-                "visual_style": "clean",
-                "technical_flaws": ["Slight blur"],
                 "hook_strength_score": 0.75,
+                "lighting_feedback": "Light is a little flat",
+                "composition_feedback": "Center framing feels static",
+                "aesthetic_fixes": ["Add contrast", "Reframe slightly off-center"],
+                "is_cringe": True,
+                "adult_content_detected": False,
             }
         )
 
@@ -231,8 +245,52 @@ def test_run_vision_analysis_repairs_malformed_output(monkeypatch) -> None:
     result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
 
     assert result["status"] == "ok"
-    assert result["signals"][0]["scene_description"] == "Person presenting"
-    assert result["signals"][0]["technical_flaws"] == ["Slight blur"]
+    assert result["signals"][0]["primary_objects"] == ["person"]
+    assert result["signals"][0]["technical_flaws"] == [
+        "Light is a little flat",
+        "Center framing feels static",
+    ]
+    assert result["signals"][0]["is_cringe"] is True
+
+
+def test_run_vision_analysis_repairs_malformed_openai_fallback_output(monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+
+    async def fake_generate_openai_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
+        assert api_key == "openai-test-key"
+        assert media_url == "https://example.com/post.jpg"
+        assert isinstance(instruction, str) and instruction
+        return "scene_description Person presenting\n  broken indentation"
+
+    async def fake_repair_openai_vision_json(*, api_key: str, raw_text: str) -> str:
+        assert api_key == "openai-test-key"
+        assert "broken indentation" in raw_text
+        return json.dumps(
+            {
+                "visual_quality_score": 8,
+                "primary_objects": ["person", "laptop"],
+                "detected_text": "Build in public",
+                "hook_strength_score": 0.8,
+                "lighting_feedback": "Clean lighting",
+                "composition_feedback": "Balanced framing",
+                "aesthetic_fixes": ["Tighten crop"],
+                "is_cringe": False,
+                "adult_content_detected": False,
+            }
+        )
+
+    monkeypatch.setattr(ai_analysis_service, "_generate_openai_vision_json", fake_generate_openai_vision_json)
+    monkeypatch.setattr(ai_analysis_service, "_repair_openai_vision_json", fake_repair_openai_vision_json)
+
+    post = _build_post("m_openai_repair", reach=1000, engagement_rate=0.05, media_url="https://example.com/post.jpg")
+    result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
+
+    assert result["provider"] == "openai"
+    assert result["status"] == "ok"
+    assert result["signals"][0]["primary_objects"] == ["person", "laptop"]
+    assert result["signals"][0]["technical_flaws"] == ["Clean lighting", "Balanced framing"]
+    assert result["signals"][0]["aesthetic_fixes"] == ["Tighten crop"]
 
 
 def test_run_vision_analysis_retries_with_simplified_prompt(monkeypatch) -> None:
@@ -248,12 +306,15 @@ def test_run_vision_analysis_retries_with_simplified_prompt(monkeypatch) -> None
         assert instruction == ai_analysis_service._SIMPLIFIED_GEMINI_VISION_PROMPT
         return json.dumps(
             {
-                "objects": ["person"],
-                "scene_description": "Recovered on retry",
+                "visual_quality_score": 5,
+                "primary_objects": ["person"],
                 "detected_text": None,
-                "visual_style": "clean",
-                "technical_flaws": [],
                 "hook_strength_score": 0.55,
+                "lighting_feedback": "Acceptable lighting but slightly dim",
+                "composition_feedback": "Subject is clear but framing is generic",
+                "aesthetic_fixes": [],
+                "is_cringe": False,
+                "adult_content_detected": False,
             }
         )
 
@@ -267,5 +328,5 @@ def test_run_vision_analysis_retries_with_simplified_prompt(monkeypatch) -> None
     result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
 
     assert result["status"] == "ok"
-    assert result["signals"][0]["scene_description"] == "Recovered on retry"
+    assert result["signals"][0]["visual_quality_score"]["lighting"] == 5.0
     assert len(calls) == 2

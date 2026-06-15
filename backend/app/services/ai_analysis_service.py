@@ -51,22 +51,19 @@ _SIMPLIFIED_GEMINI_VISION_PROMPT = (
     "Analyze the provided Instagram media and return ONLY valid JSON. "
     "Do not include markdown fences or commentary. "
     "Return exactly one JSON object with keys: "
-    "objects (array of strings), dominant_focus (string or null), scene_description (string), "
-    "visual_style (string or null), scene_type (string or null), "
-    "visual_quality_score (object with composition, lighting, subject_clarity, aesthetic_quality as numbers 0..10), "
-    "technical_flaws (array of strings), detected_text (string or null), hook_strength_score (number 0..1), "
-    "cringe_score (number 0..100), cringe_signals (array of strings), cringe_fixes (array of strings), "
-    "production_level (low, medium, or high), adult_content_detected (boolean), adult_content_confidence (number 0..100). "
-    "If unsure about a field, use null or an empty array. Keep scene_description to at most 2 sentences."
+    "visual_quality_score (integer 0..10), hook_strength_score (number 0..1), "
+    "primary_objects (array of strings), detected_text (string or null), lighting_feedback (string), "
+    "composition_feedback (string), aesthetic_fixes (array of strings), is_cringe (boolean), "
+    "adult_content_detected (boolean). If unsure about a field, use null or an empty array."
 )
 _GEMINI_VISION_REPAIR_PROMPT = (
     "Convert the following malformed model output into a single valid JSON object only. "
     "Do not include markdown fences, commentary, or extra keys. "
-    "Use exactly these keys: objects, dominant_focus, scene_description, visual_style, scene_type, "
-    "visual_quality_score, technical_flaws, detected_text, hook_strength_score, cringe_score, cringe_signals, "
-    "cringe_fixes, production_level, adult_content_detected, adult_content_confidence. "
+    "Use exactly these keys: visual_quality_score, hook_strength_score, primary_objects, detected_text, "
+    "lighting_feedback, composition_feedback, aesthetic_fixes, is_cringe, adult_content_detected. "
     "If a value is missing or unclear, use null or an empty array.\n\nMalformed output:\n"
 )
+_OPENAI_VISION_REPAIR_PROMPT = _GEMINI_VISION_REPAIR_PROMPT
 
 
 def _parse_timeout(env_key: str, default: float) -> float:
@@ -407,6 +404,15 @@ def _normalize_short_text_list(value: Any, limit: int = 3) -> list[str]:
     return sanitized
 
 
+def _normalize_optional_text(value: Any, limit: int = 160) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return text[:limit]
+
+
 def _normalize_optional_bool(value: Any) -> bool | None:
     if value is None:
         return None
@@ -473,14 +479,23 @@ def _parse_gemini_payload(raw_text: str) -> dict[str, Any]:
 
 
 def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str, Any]:
-    objects = payload.get("objects") or []
+    primary_objects_raw = payload.get("primary_objects")
+    objects = primary_objects_raw if isinstance(primary_objects_raw, list) and primary_objects_raw else payload.get("objects") or []
     dominant_focus = payload.get("dominant_focus")
     scene_description = payload.get("scene_description") or ""
     detected_text = payload.get("detected_text")
     visual_style = payload.get("visual_style") or "Unknown"
     scene_type = payload.get("scene_type")
     visual_quality_score = payload.get("visual_quality_score") or {}
+    lighting_feedback = _normalize_optional_text(payload.get("lighting_feedback"))
+    composition_feedback = _normalize_optional_text(payload.get("composition_feedback"))
+    aesthetic_fixes = _normalize_short_text_list(payload.get("aesthetic_fixes"), limit=3)
     technical_flaws = _normalize_short_text_list(payload.get("technical_flaws"), limit=3)
+    if lighting_feedback:
+        technical_flaws.append(lighting_feedback)
+    if composition_feedback:
+        technical_flaws.append(composition_feedback)
+    technical_flaws = technical_flaws[:3]
     hook_strength_score = payload.get("hook_strength_score")
 
     if not isinstance(objects, list):
@@ -494,7 +509,8 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
             detected_text = str(detected_text)
     if scene_type is not None and not isinstance(scene_type, str):
         raise ValueError("Invalid scene_type field.")
-    if not isinstance(visual_quality_score, dict):
+    numeric_visual_quality = _as_float(visual_quality_score)
+    if numeric_visual_quality is None and not isinstance(visual_quality_score, dict):
         visual_quality_score = {}
     if not isinstance(hook_strength_score, (int, float)):
         hook_strength_score = 0.5
@@ -505,19 +521,28 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
     detected_text = detected_text.strip() if detected_text else None
     visual_style = visual_style.strip() if isinstance(visual_style, str) else "Unknown"
     scene_type = scene_type.strip() if isinstance(scene_type, str) else None
-    composition_raw = _as_float(visual_quality_score.get("composition"))
-    lighting_raw = _as_float(visual_quality_score.get("lighting"))
-    subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))
-    aesthetic_quality_raw = _as_float(visual_quality_score.get("aesthetic_quality"))
-    if None in {composition_raw, lighting_raw, subject_clarity_raw, aesthetic_quality_raw}:
-        normalized_visual_quality = None
-    else:
+    if numeric_visual_quality is not None:
+        clamped_visual_quality = max(0.0, min(10.0, float(numeric_visual_quality)))
         normalized_visual_quality = {
-            "composition": max(0.0, min(10.0, float(composition_raw))),
-            "lighting": max(0.0, min(10.0, float(lighting_raw))),
-            "subject_clarity": max(0.0, min(10.0, float(subject_clarity_raw))),
-            "aesthetic_quality": max(0.0, min(10.0, float(aesthetic_quality_raw))),
+            "composition": clamped_visual_quality,
+            "lighting": clamped_visual_quality,
+            "subject_clarity": clamped_visual_quality,
+            "aesthetic_quality": clamped_visual_quality,
         }
+    else:
+        composition_raw = _as_float(visual_quality_score.get("composition"))
+        lighting_raw = _as_float(visual_quality_score.get("lighting"))
+        subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))
+        aesthetic_quality_raw = _as_float(visual_quality_score.get("aesthetic_quality"))
+        if None in {composition_raw, lighting_raw, subject_clarity_raw, aesthetic_quality_raw}:
+            normalized_visual_quality = None
+        else:
+            normalized_visual_quality = {
+                "composition": max(0.0, min(10.0, float(composition_raw))),
+                "lighting": max(0.0, min(10.0, float(lighting_raw))),
+                "subject_clarity": max(0.0, min(10.0, float(subject_clarity_raw))),
+                "aesthetic_quality": max(0.0, min(10.0, float(aesthetic_quality_raw))),
+            }
     clamped_hook_strength_score = max(0.0, min(1.0, float(hook_strength_score)))
     dominant_object = payload.get("dominant_object")
     lighting_quality = normalized_visual_quality.get("lighting") if isinstance(normalized_visual_quality, dict) else None
@@ -532,9 +557,12 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
     cringe_fixes = _normalize_short_text_list(payload.get("cringe_fixes"), limit=3)
     if not cringe_fixes:
         cringe_fixes = _normalize_short_text_list(payload.get("fixes_to_reduce_cringe"), limit=3)
+    if not cringe_fixes and aesthetic_fixes:
+        cringe_fixes = aesthetic_fixes[:]
     production_level = _normalize_production_level(payload.get("production_level"))
     adult_content_detected = _normalize_optional_bool(payload.get("adult_content_detected"))
     adult_content_confidence = _clamp_int_0_100(payload.get("adult_content_confidence"))
+    is_cringe_raw = _normalize_optional_bool(payload.get("is_cringe"))
 
     if cringe_score is not None:
         floored_score = enforce_cringe_floor(cringe_score, cringe_signals)
@@ -546,8 +574,12 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
                 floored_score,
             )
         cringe_score = floored_score
+    elif is_cringe_raw is True:
+        cringe_score = 60
+    elif is_cringe_raw is False:
+        cringe_score = 20
     cringe_label = derive_cringe_label(cringe_score)
-    is_cringe = bool(cringe_score is not None and cringe_score >= 45)
+    is_cringe = bool(cringe_score is not None and cringe_score >= 45) if is_cringe_raw is None else is_cringe_raw
 
     return {
         "objects": objects,
@@ -562,6 +594,9 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
         "lighting_quality": lighting_quality if isinstance(lighting_quality, (str, int, float)) else None,
         "subject_clarity": subject_clarity if isinstance(subject_clarity, (str, int, float)) else None,
         "aesthetic_quality": aesthetic_quality if isinstance(aesthetic_quality, (str, int, float)) else None,
+        "lighting_feedback": lighting_feedback,
+        "composition_feedback": composition_feedback,
+        "aesthetic_fixes": aesthetic_fixes,
         "visual_quality_score": normalized_visual_quality,
         "technical_flaws": technical_flaws,
         "cringe_score": cringe_score,
@@ -584,53 +619,28 @@ async def run_vision_analysis(
     post_id = post.media_id if isinstance(post.media_id, str) else None
 
     instruction = (
-        "You are an expert Social Media Art Director and Computer Vision analysis engine. "
-        "Analyze the provided Instagram media (image or video) strictly through the lens of technical visual quality "
-        "and compositional structure. If the media is a video, you MUST watch it from beginning to end. "
-        "Your analysis and scene_description must account for the entire duration, including any scene changes, "
-        "unexpected twists, or different content in the second half. "
-        "Keep the scene_description VERY CONCISE (maximum 2 sentences). Focus only on the core actions and twists. "
-        "Return ONLY valid TOON format (Token-Oriented Object Notation). "
-        "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes.\n\n"
-        "You must evaluate the image objectively on the following deterministic rules to calculate S1 sub-scores:\n"
-        "1) COMPOSITION (0-10): Rule of Thirds/symmetry (+3), dominant_focus present (+4), >4 primary objects (-3), "
-        "awkward crops (-3), remaining points (0-3) for depth-of-field/subject isolation.\n"
-        "2) LIGHTING_QUALITY (0-10): subject illumination/contrast (+4), blown highlights or crushed blacks (-3), "
-        "intentional depth (rim/softbox/golden hour +3) vs flat lighting (+1), poor white balance (-2), "
-        "remaining points for cinematic/aesthetic lighting.\n"
-        "3) SUBJECT_CLARITY (0-10): subject in focus (+5), clear separation (+3), visible expressive face if human (+2).\n"
-        "4) AESTHETIC_QUALITY (0-10): pro color grade (+3), harmonious palette (+2), "
-        "heavy text overlays (-3) or very heavy (-5), remaining points for premium visual feel.\n\n"
-        "Output TOON must include exactly these keys:\n"
-        "objects\n"
-        "  - string\n"
-        "dominant_focus value_or_null\n"
-        "scene_description value\n"
-        "visual_style value\n"
-        "scene_type value_or_null\n"
-        "visual_quality_score\n"
-        "  composition 0.0-10.0\n"
-        "  lighting 0.0-10.0\n"
-        "  subject_clarity 0.0-10.0\n"
-        "  aesthetic_quality 0.0-10.0\n"
-        "technical_flaws\n"
-        "  - string\n"
-        "detected_text value_or_null\n"
-        "hook_strength_score 0.0-1.0\n"
-        "cringe_score 0-100\n"
-        "cringe_signals\n"
-        "  - string\n"
-        "cringe_fixes\n"
-        "  - string\n"
-        "production_level low|medium|high\n"
-        "adult_content_detected true|false\n"
-        "adult_content_confidence 0-100\n\n"
-        "Cringe rubric (EXTREMELY FORGIVING): "
-        "0-40: Normal social media behavior. Includes gym selfies, mirror selfies, typical flexing, slightly awkward posing, filters, and standard candids. DO NOT penalize these. "
-        "41-60: Very awkward, but still borderline acceptable. "
-        "61-80: Undeniable cringe. Deeply uncomfortable, bizarrely out of touch, or severely forced interactions. "
-        "81-100: Extreme cringe. Nonsensical, absolutely horrible execution, socially oblivious. "
-        "Floor rules: ONLY apply cringe scores > 50 to the absolute worst, most egregiously awful content."
+        "You are an expert visual content analyst for social media. "
+        "Analyze the provided image/video draft that the creator is planning to post. "
+        "Identify the visual strengths and weaknesses, and provide actionable recommendations to improve its visual quality or aesthetic before they publish. "
+        "If the media is a video, you MUST watch it from beginning to end before scoring.\n\n"
+        "Return plain TOON only.\n"
+        "Do not return JSON.\n"
+        "Do not use braces.\n"
+        "Do not wrap keys or values in quotes unless absolutely required for spaces.\n\n"
+        "Output schema (all keys required):\n"
+        "visual_quality_score <int> (0 to 10)\n"
+        "hook_strength_score <float> (0.0 to 1.0)\n"
+        "primary_objects\n"
+        "  - <str>\n"
+        "  - <str>\n"
+        "detected_text <str> (Any text overlaid on the media)\n"
+        "lighting_feedback <str>\n"
+        "composition_feedback <str>\n"
+        "aesthetic_fixes\n"
+        "  - <str>\n"
+        "  - <str>\n"
+        "is_cringe <bool> (True or False)\n"
+        "adult_content_detected <bool> (True or False)\n"
     )
 
     media_url = post.media_url
@@ -735,12 +745,43 @@ async def run_vision_analysis(
         mime_type = _infer_mime_type(media_url)
         if isinstance(openai_api_key, str) and openai_api_key.strip() and mime_type.startswith("image/"):
             try:
+                openai_api_key = openai_api_key.strip()
+                parse_errors: list[str] = []
                 openai_raw_text = await _generate_openai_vision_json(
-                    api_key=openai_api_key.strip(),
+                    api_key=openai_api_key,
                     instruction=instruction,
                     media_url=media_url,
                 )
-                openai_signal = _build_vision_signal(_parse_gemini_payload(openai_raw_text), media_url=media_url)
+                try:
+                    openai_signal = _build_vision_signal(_parse_gemini_payload(openai_raw_text), media_url=media_url)
+                except Exception as primary_exc:
+                    parse_errors.append(f"primary={primary_exc}")
+                    openai_signal = None
+                    repaired_text = ""
+                    if isinstance(openai_raw_text, str) and openai_raw_text.strip():
+                        try:
+                            repaired_text = await _repair_openai_vision_json(api_key=openai_api_key, raw_text=openai_raw_text)
+                            openai_signal = _build_vision_signal(_parse_gemini_payload(repaired_text), media_url=media_url)
+                            logger.info("[Vision] Repaired malformed OpenAI output for media_id=%s", post_id)
+                        except Exception as repair_exc:
+                            parse_errors.append(f"repair={repair_exc}")
+                    if openai_signal is None:
+                        retry_raw_text = await _generate_openai_vision_json(
+                            api_key=openai_api_key,
+                            instruction=_SIMPLIFIED_GEMINI_VISION_PROMPT,
+                            media_url=media_url,
+                        )
+                        try:
+                            openai_signal = _build_vision_signal(_parse_gemini_payload(retry_raw_text), media_url=media_url)
+                            logger.info("[Vision] Simplified prompt recovered OpenAI output for media_id=%s", post_id)
+                        except Exception as retry_exc:
+                            parse_errors.append(f"simplified={retry_exc}")
+                            if isinstance(retry_raw_text, str) and retry_raw_text.strip():
+                                repaired_retry = await _repair_openai_vision_json(api_key=openai_api_key, raw_text=retry_raw_text)
+                                openai_signal = _build_vision_signal(_parse_gemini_payload(repaired_retry), media_url=media_url)
+                                logger.info("[Vision] Simplified prompt + repair recovered OpenAI output for media_id=%s", post_id)
+                    if openai_signal is None:
+                        raise ValueError("; ".join(parse_errors) or "OpenAI output could not be parsed.")
                 logger.info("[Vision] OpenAI fallback succeeded for media_id=%s", post_id)
                 return VisionAnalysis(provider="openai", status="ok", signals=[openai_signal]).model_dump(mode="python")
             except Exception as openai_exc:
@@ -752,11 +793,11 @@ async def run_vision_analysis(
                     openai_error_reason,
                 )
                 combined_reason = f"gemini={gemini_error_reason}; openai={openai_error_reason}"
-                failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+                failure_payload = VisionAnalysis(provider="openai", status="error", signals=[]).model_dump(mode="python")
                 failure_payload["error_reason"] = combined_reason[:300]
                 return failure_payload
 
-        failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+        failure_payload = VisionAnalysis(provider="openai", status="error", signals=[]).model_dump(mode="python")
         failure_payload["error_reason"] = gemini_error_reason[:300]
         return failure_payload
 
@@ -1031,6 +1072,34 @@ def _call_openai_vision_api(*, api_key: str, instruction: str, media_url: str) -
         raise
 
 
+def _call_openai_text_api(*, api_key: str, prompt: str) -> str:
+    model_name = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=api_key,
+            http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
+        )
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            temperature=0,
+        )
+        text = (response.choices[0].message.content or "").strip() if response.choices else ""
+        if not text:
+            raise ValueError("OpenAI repair response did not include text output.")
+        return text
+    except Exception as e:
+        logger.warning("[Vision] OpenAI text repair failed: %s", e)
+        raise
+
+
 def _call_gemini_text_api(*, api_key: str, prompt: str) -> str:
     model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
     try:
@@ -1083,6 +1152,17 @@ async def _repair_gemini_vision_json(*, api_key: str, raw_text: str) -> str:
             _call_gemini_text_api,
             api_key=api_key,
             prompt=_GEMINI_VISION_REPAIR_PROMPT + raw_text.strip(),
+        ),
+        timeout=30.0,
+    )
+
+
+async def _repair_openai_vision_json(*, api_key: str, raw_text: str) -> str:
+    return await asyncio.wait_for(
+        asyncio.to_thread(
+            _call_openai_text_api,
+            api_key=api_key,
+            prompt=_OPENAI_VISION_REPAIR_PROMPT + raw_text.strip(),
         ),
         timeout=30.0,
     )
