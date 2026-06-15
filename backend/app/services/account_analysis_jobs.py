@@ -1004,6 +1004,18 @@ def _bounded_posts_summary(
     return summaries[:include_posts_summary_max]
 
 
+def _draft_optimizer_history(posts: list[SinglePostInsights], limit: int = 12) -> list[dict[str, Any]]:
+    ordered_posts = sorted(
+        posts,
+        key=lambda post: (
+            post.published_at.isoformat() if post.published_at is not None else "",
+            str(post.media_id or ""),
+        ),
+        reverse=True,
+    )
+    return [post.model_dump(mode="json") for post in ordered_posts[:limit]]
+
+
 def _warning_code(warning: dict[str, Any]) -> str | None:
     code = warning.get("code")
     return code if isinstance(code, str) else None
@@ -1370,6 +1382,8 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         result_payload = result.model_dump(mode="python")
         if creator_score is not None:
             result_payload["creator_score"] = creator_score.model_dump(mode="python")
+        persisted_result_payload = dict(result_payload)
+        persisted_result_payload["draft_optimizer_history"] = _draft_optimizer_history(processed_posts)
 
         try:
             creator_data = {
@@ -1432,7 +1446,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             username=payload.get("username") if isinstance(payload.get("username"), str) else None,
             payload=payload,
             status="succeeded",
-            result=result_payload,
+            result=persisted_result_payload,
             warnings=warnings_global,
             quality=quality,
             error=None,

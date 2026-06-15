@@ -71,3 +71,5 @@ def test_run_account_analysis_job_persists_result_row(db_setup, monkeypatch) -> 
     assert row.status == "succeeded"
     assert isinstance(row.result_json, dict)
     assert "ahs_score" in row.result_json
+    assert isinstance(row.result_json.get("draft_optimizer_history"), list)
+    assert len(row.result_json["draft_optimizer_history"]) == 2

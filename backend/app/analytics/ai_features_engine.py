@@ -17,28 +17,35 @@ from backend.app.utils.logger import logger
 
 
 _AI_FEATURES_SYSTEM_PROMPT = """
-You are an analytics prediction engine.
+You are an expert Instagram growth strategist and AI post optimizer.
+The user is providing a draft caption for an upcoming post, along with their account's historical performance data.
+Your goal is to optimize their draft caption (focusing on hooks and CTAs), predict its potential reach, suggest optimal posting times, and flag any safety risks.
+DO NOT generate or suggest hashtags.
+
 Return plain TOON only.
 Do not return JSON.
 Do not use braces.
 Do not wrap keys or values in quotes unless absolutely required for spaces.
 
 Output schema (all keys required):
-viral_probability <float>
-campaign_roi_prediction <str>
-best_posting_time
+optimized_caption_options
   - <str>
   - <str>
-audience_authenticity_score <float>
-spam_detected_count <int>
-sentiment_score <float>
+predicted_reach_band <str>
+optimal_posting_times
+  - <str>
+  - <str>
+safety_flags
+  - <str>
+content_format_recommendation <str>
+tone_alignment_warning <str>
 
 Constraints:
-- viral_probability must be in range 0.0 to 1.0
-- audience_authenticity_score must be in range 0 to 100
-- sentiment_score must be in range -1.0 to 1.0
-- spam_detected_count must be a non-negative integer
-- best_posting_time should be specific, containing the exact day of the week and an hourly time range, based on analyzing the provided published_at timestamps correlated with high engagement (e.g., 'Tuesdays 4:00 PM - 6:00 PM', 'Sundays 9:00 AM - 11:00 AM'). Avoid vague terms like 'Weekday' or 'Afternoon'.
+- You must analyze the 'historical_posts' provided to base your 'predicted_reach_band' and 'optimal_posting_times' on actual past performance.
+- 'optimized_caption_options' should preserve the creator's core message but make it more engaging.
+- 'predicted_reach_band' must be exactly one of: High, Average, Low.
+- 'optimal_posting_times' should be specific, containing the exact day of the week and an hourly time range based on high-performing historical posts (e.g., 'Tuesdays 4:00 PM - 6:00 PM').
+- Never output hashtags in your caption options.
 """.strip()
 
 _CACHE_TTL_SECONDS = 900
@@ -68,12 +75,46 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
 
+def _safe_text(value: Any, default: str | None = None, *, limit: int = 280) -> str | None:
+    if not isinstance(value, str):
+        return default
+    text = value.strip()
+    if not text:
+        return default
+    return text[:limit]
+
+
+def _safe_string_list(value: Any, *, limit: int = 160, max_items: int = 6) -> list[str]:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return [normalized[:limit]] if normalized else []
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text:
+            continue
+        items.append(text[:limit])
+        if len(items) >= max_items:
+            break
+    return items
+
+
 def _build_prompt_payload(posts: list[SinglePostInsights], account_data: dict[str, Any]) -> dict[str, Any]:
     follower_count = account_data.get("follower_count")
     if follower_count is None:
         follower_count = account_data.get("followers")
     if follower_count is None and posts:
         follower_count = posts[0].follower_count
+    draft_caption = (
+        _safe_text(account_data.get("draft_caption"), limit=600)
+        or _safe_text(account_data.get("upcoming_caption"), limit=600)
+        or _safe_text(account_data.get("caption_text"), limit=600)
+        or ""
+    )
 
     compact_posts: list[dict[str, Any]] = []
     captions: list[str] = []
@@ -107,10 +148,21 @@ def _build_prompt_payload(posts: list[SinglePostInsights], account_data: dict[st
             "creator_dominant_category": account_data.get("creator_dominant_category"),
             "niche_tags": account_data.get("niche_tags") or [],
         },
-        "post_count": len(posts),
-        "recent_posts": compact_posts,
+        "draft_caption": draft_caption,
+        "historical_posts": compact_posts,
+        "historical_post_count": len(posts),
         "recent_captions": captions[:8],
     }
+
+
+def _prediction_cache_key(payload: dict[str, Any], *, model_name: str) -> str:
+    cache_payload = {
+        "model_name": model_name,
+        "prompt_payload": payload,
+    }
+    return hashlib.sha256(
+        json.dumps(cache_payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
+    ).hexdigest()
 
 
 async def generate_ai_feature_predictions(posts: list[SinglePostInsights], account_data: dict[str, Any]) -> AIFeaturePredictions:
@@ -122,6 +174,12 @@ async def generate_ai_feature_predictions(posts: list[SinglePostInsights], accou
     }
 
     fallback = AIFeaturePredictions(
+        optimized_caption_options=[],
+        predicted_reach_band="Average",
+        optimal_posting_times=[],
+        safety_flags=[],
+        content_format_recommendation="Keep the current format and strengthen the opening line.",
+        tone_alignment_warning="",
         viral_probability=0.05,
         campaign_roi_prediction="Unknown",
         best_posting_time=[],
@@ -140,31 +198,38 @@ async def generate_ai_feature_predictions(posts: list[SinglePostInsights], accou
         raw_response = await asyncio.to_thread(llm.generate, prompt)
         parsed = toon.loads(raw_response or "")
 
-        best_posting_time_raw = parsed.get("best_posting_time")
-        best_posting_time: list[str] = []
-        if isinstance(best_posting_time_raw, list):
-            for item in best_posting_time_raw:
-                if isinstance(item, str):
-                    text = item.strip()
-                    if text:
-                        best_posting_time.append(text[:120])
-        elif isinstance(best_posting_time_raw, str):
-            text = best_posting_time_raw.strip()
-            if text:
-                best_posting_time.append(text[:120])
+        optimized_caption_options = _safe_string_list(parsed.get("optimized_caption_options"), limit=500, max_items=2)
+        optimal_posting_times = _safe_string_list(parsed.get("optimal_posting_times"), limit=120, max_items=4)
+        safety_flags = _safe_string_list(parsed.get("safety_flags"), limit=200, max_items=6)
+        predicted_reach_band_raw = _safe_text(parsed.get("predicted_reach_band"), default="Average", limit=20) or "Average"
+        predicted_reach_band = predicted_reach_band_raw.title()
+        if predicted_reach_band not in {"High", "Average", "Low"}:
+            predicted_reach_band = "Average"
 
-        campaign_roi_raw = parsed.get("campaign_roi_prediction")
-        campaign_roi_prediction = campaign_roi_raw.strip() if isinstance(campaign_roi_raw, str) else None
+        content_format_recommendation = _safe_text(
+            parsed.get("content_format_recommendation"),
+            default="Keep the current format and strengthen the opening line.",
+            limit=240,
+        )
+        tone_alignment_warning = _safe_text(parsed.get("tone_alignment_warning"), default="", limit=240)
 
         return AIFeaturePredictions(
+            optimized_caption_options=optimized_caption_options,
+            predicted_reach_band=predicted_reach_band,
+            optimal_posting_times=optimal_posting_times,
+            safety_flags=safety_flags,
+            content_format_recommendation=content_format_recommendation,
+            tone_alignment_warning=tone_alignment_warning,
             viral_probability=_clamp(_safe_float(parsed.get("viral_probability"), 0.05), 0.0, 1.0),
-            campaign_roi_prediction=campaign_roi_prediction,
-            best_posting_time=best_posting_time,
+            campaign_roi_prediction=predicted_reach_band,
+            best_posting_time=optimal_posting_times,
             audience_authenticity_score=_clamp(
                 _safe_float(parsed.get("audience_authenticity_score"), 50.0), 0.0, 100.0
             ),
-            spam_detected_count=max(0, _safe_int(parsed.get("spam_detected_count"), 0)),
-            sentiment_score=_clamp(_safe_float(parsed.get("sentiment_score"), 0.0), -1.0, 1.0),
+            spam_detected_count=sum(
+                1 for flag in safety_flags if "spam" in flag.lower() or "bot" in flag.lower()
+            ),
+            sentiment_score=0.0,
             prediction_status="ok",
             degraded_reason=None,
         )
@@ -175,18 +240,11 @@ async def generate_ai_feature_predictions(posts: list[SinglePostInsights], accou
 
 def generate_ai_feature_predictions_sync(posts: list[SinglePostInsights], account_data: dict[str, Any]) -> AIFeaturePredictions:
     """Loop-safe sync wrapper for async AI feature prediction."""
-    cache_payload = {
-        "account_id": account_data.get("account_id"),
-        "follower_count": account_data.get("follower_count"),
-        "post_count": len(posts),
-        "recent_media_ids": [post.media_id for post in posts[:12]],
-        "recent_published_at": [
-            post.published_at.isoformat() if post.published_at else None for post in posts[:12]
-        ],
-    }
-    cache_key = hashlib.sha256(
-        json.dumps(cache_payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    prompt_payload = _build_prompt_payload(posts, account_data)
+    cache_key = _prediction_cache_key(
+        prompt_payload,
+        model_name=os.getenv("LLM_MODEL_NAME") or LLMClient.DEFAULT_MODEL,
+    )
     now = time.time()
     with _PREDICTION_CACHE_LOCK:
         cached = _PREDICTION_CACHE.get(cache_key)

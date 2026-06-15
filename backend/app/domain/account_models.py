@@ -379,6 +379,30 @@ class FakeFollowerSignals(BaseModel):
 
 
 class AIFeaturePredictions(BaseModel):
+    optimized_caption_options: list[str] = Field(
+        default_factory=list,
+        description="Two optimized caption variants for the upcoming post.",
+    )
+    predicted_reach_band: Literal["High", "Average", "Low"] = Field(
+        default="Average",
+        description="Predicted reach band for the upcoming post.",
+    )
+    optimal_posting_times: list[str] = Field(
+        default_factory=list,
+        description="List of optimal posting windows based on historical post performance.",
+    )
+    safety_flags: list[str] = Field(
+        default_factory=list,
+        description="Safety or distribution risks detected in the caption strategy.",
+    )
+    content_format_recommendation: str | None = Field(
+        default=None,
+        description="Suggested content format adjustment to improve reach.",
+    )
+    tone_alignment_warning: str | None = Field(
+        default=None,
+        description="Warning when the proposed caption tone diverges from the creator's historical voice.",
+    )
     viral_probability: float = Field(default=0.0, description="0.0 to 1.0 probability of going viral")
     campaign_roi_prediction: str | None = Field(default=None, description="Predicted ROI band (e.g., '2x - 3x')")
     best_posting_time: list[str] = Field(

@@ -222,6 +222,18 @@ class VisionSignal(BaseModel):
         default=None,
         description="Optional aesthetic quality signal as numeric or categorical value.",
     )
+    lighting_feedback: str | None = Field(
+        default=None,
+        description="Human-readable lighting feedback for the draft media.",
+    )
+    composition_feedback: str | None = Field(
+        default=None,
+        description="Human-readable composition feedback for the draft media.",
+    )
+    aesthetic_fixes: list[str] = Field(
+        default_factory=list,
+        description="Actionable visual fixes recommended before publishing.",
+    )
     cringe_score: int | None = Field(
         default=None,
         ge=0,
@@ -276,7 +288,7 @@ class VisionSignal(BaseModel):
             return None
         return int(max(0.0, min(100.0, round(numeric))))
 
-    @field_validator("cringe_signals", "cringe_fixes", mode="before")
+    @field_validator("cringe_signals", "cringe_fixes", "aesthetic_fixes", mode="before")
     @classmethod
     def _sanitize_cringe_list(cls, value: list[str] | str | None) -> list[str]:
         if value is None:
