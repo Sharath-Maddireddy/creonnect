@@ -225,3 +225,30 @@ class BackgroundJob(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class CreatorTrendResult(Base):
+    """Stores the latest trend analysis result per account."""
+
+    __tablename__ = "creator_trend_results"
+    __table_args__ = (
+        Index("ix_creator_trend_results_updated_at", "updated_at"),
+    )
+
+    account_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("creator_vectors.account_id"),
+        primary_key=True,
+    )
+    niche_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    global_trends_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    recommendations_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+

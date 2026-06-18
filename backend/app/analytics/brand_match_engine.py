@@ -205,8 +205,8 @@ def _match_band(score: float) -> Literal["EXCELLENT", "GOOD", "MODERATE", "POOR"
     return "POOR"
 
 
-def _has_engagement_data(avg_views: int, avg_likes: int, avg_comments: int) -> bool:
-    return any(metric > 0 for metric in (avg_views, avg_likes, avg_comments))
+def _has_engagement_data(avg_views: int | None, avg_likes: int | None, avg_comments: int | None) -> bool:
+    return any((metric or 0) > 0 for metric in (avg_views, avg_likes, avg_comments))
 
 
 def score_creator_against_brand(
@@ -230,8 +230,8 @@ def score_creator_against_brand(
     notes: list[str] = []
     disqualify_reasons: list[str] = []
 
-    visual_quality = _clamp(float(visual_quality_score_total or 0.0), 0.0, 50.0)
-    brand_safety = _clamp(float(brand_safety_score_total_0_50 or 0.0), 0.0, 50.0)
+    visual_quality = _clamp(float(visual_quality_score_total if visual_quality_score_total is not None else 0.0), 0.0, 50.0)
+    brand_safety = _clamp(float(brand_safety_score_total_0_50 if brand_safety_score_total_0_50 is not None else 50.0), 0.0, 50.0)
     has_engagement_data = _has_engagement_data(avg_views, avg_likes, avg_comments)
     authenticity_score = calculate_authenticity_score(
         follower_count=int(follower_count or 0),

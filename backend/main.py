@@ -23,6 +23,7 @@ from backend.app.api.post_analysis_routes import router as post_analysis_router
 from backend.app.api.reel_analysis_routes import router as reel_analysis_router
 from backend.app.api.dashboard import router as dashboard_router
 from backend.app.api.instagram_auth_routes import router as instagram_auth_router
+from backend.app.api.trend_routes import router as trend_router
 from backend.app.infra.database import init_db, initialize_database_engines
 from backend.app.utils.logger import logger
 
@@ -113,6 +114,7 @@ app.include_router(campaign_router)
 app.include_router(post_analysis_router)
 app.include_router(reel_analysis_router)
 app.include_router(instagram_auth_router)
+app.include_router(trend_router)
 
 
 @app.get("/health")
