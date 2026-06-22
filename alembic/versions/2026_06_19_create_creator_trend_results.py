@@ -19,7 +19,7 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         'creator_trend_results',
-        sa.Column('account_id', sa.Text(), sa.ForeignKey('creator_vectors.account_id'), primary_key=True),
+        sa.Column('account_id', sa.Text(), primary_key=True),
         sa.Column('niche_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('global_trends_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('recommendations_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True),

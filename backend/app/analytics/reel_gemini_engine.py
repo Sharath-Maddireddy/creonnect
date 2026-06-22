@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from backend.app.ai.gemini_constants import FALLBACK_GEMINI_MODEL, PRIMARY_GEMINI_MODEL
 from backend.app.ai.prompts import REEL_VISION_EVALUATION_PROMPT
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.utils.logger import logger
@@ -19,6 +20,8 @@ REEL_DOWNLOAD_TIMEOUT_SEC = 30.0
 MAX_VIDEO_BYTES = 100 * 1024 * 1024
 GEMINI_FILE_POLL_MAX_ATTEMPTS = 20
 GEMINI_FILE_POLL_INTERVAL_SEC = 2.0
+PRIMARY_REEL_MODEL = PRIMARY_GEMINI_MODEL
+FALLBACK_REEL_MODEL = FALLBACK_GEMINI_MODEL
 
 
 def _build_genai_adapter():
@@ -152,7 +155,7 @@ def _upload_and_analyse(api_key: str, video_bytes: bytes) -> dict[str, Any]:
             raise TimeoutError("Gemini file never reached ACTIVE state.")
 
         # Run analysis — retry once on 429 rate-limit with 30s backoff
-        _MODELS_TO_TRY = ["gemini-2.5-flash-lite", "gemini-flash-lite-latest"]
+        _MODELS_TO_TRY = [PRIMARY_REEL_MODEL, FALLBACK_REEL_MODEL]
         last_exc: Exception | None = None
         response = None
         for model_name in _MODELS_TO_TRY:
@@ -228,3 +231,4 @@ def run_reel_gemini_analysis(media_url: str) -> dict[str, Any]:
     except Exception as exc:
         logger.error("[ReelGemini] Analysis failed: %s", exc)
         return {"status": "error", "signals": {}, "error": str(exc)}
+

@@ -2,7 +2,7 @@
 -- Run on PostgreSQL (psql) or via your DB migration tooling.
 
 CREATE TABLE IF NOT EXISTS creator_trend_results (
-    account_id TEXT PRIMARY KEY REFERENCES creator_vectors(account_id),
+    account_id TEXT PRIMARY KEY,
     niche_json JSONB NULL,
     global_trends_json JSONB NULL,
     recommendations_json JSONB NULL,

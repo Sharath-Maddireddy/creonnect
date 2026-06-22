@@ -1,0 +1,12 @@
+name: s3-intelligent-tiering-default
+purpose: default-bucket-storage-posture
+storage_class_default: INTELLIGENT_TIERING
+apply_from_day_one: true
+lifecycle:
+  transition_to_intelligent_tiering: immediate
+  expire_noncurrent_versions_days: 90
+  abort_incomplete_multipart_upload_days: 7
+notes:
+  - This manifest exists because the repo has no S3 provisioning IaC yet.
+  - Use this as the default bucket posture when adding S3 buckets in external deployment code.
+  - Keep lifecycle rules focused on storage-class efficiency only.

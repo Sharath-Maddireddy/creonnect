@@ -18,6 +18,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from backend.app.ai.cringe_analysis import derive_cringe_label, enforce_cringe_floor
+from backend.app.ai.gemini_constants import PRIMARY_GEMINI_MODEL
 from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_RELEVANCE_PROMPT, format_user_text_block
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.ai.llm_client import LLMClient
@@ -46,7 +47,7 @@ from backend.app.utils.logger import logger
 CACHE_TTL_SECONDS = 86400
 MIN_REGEN_SECONDS = 1
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
-_DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+_DEFAULT_GEMINI_MODEL = PRIMARY_GEMINI_MODEL
 _SIMPLIFIED_GEMINI_VISION_PROMPT = (
     "Analyze the provided Instagram media and return ONLY valid JSON. "
     "Do not include markdown fences or commentary. "
@@ -2122,3 +2123,4 @@ async def analyze_single_post_ai(
         fallback_used,
     )
     return result
+

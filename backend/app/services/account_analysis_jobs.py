@@ -341,9 +341,13 @@ def _update_status(job_id: str, **updates: Any) -> dict[str, Any]:
 
 
 def initialize_job_status(job_id: str) -> dict[str, Any]:
+    existing = get_account_analysis_job_status(job_id)
+    if existing:
+        return existing
     payload = _base_status(job_id)
     _write_status(job_id, payload)
     return payload
+
 
 
 def get_account_analysis_job_status(job_id: str) -> dict[str, Any] | None:
@@ -594,7 +598,7 @@ def _enqueue_account_analysis_job_impl(
         post_limit=post_limit,
         payload_hash=payload_hash,
     )
-    _enforce_rate_limit(account_id, running_job_id=reusable_job_id)
+    # Return the existing active job immediately — no rate-limit charge for a reuse.
     if reusable_job_id and reusable_status:
         logger.info(
             "[AccountAnalysisJob] Reusing existing job job_id=%s account_id=%s status=%s",
@@ -603,6 +607,8 @@ def _enqueue_account_analysis_job_impl(
             reusable_status,
         )
         return {"job_id": reusable_job_id, "status": reusable_status}
+
+    _enforce_rate_limit(account_id, running_job_id=None)
 
     raw_job_id = _normalize_job_id(sanitized_payload.get("job_id"))
     job_id = raw_job_id or str(uuid4())
@@ -613,7 +619,6 @@ def _enqueue_account_analysis_job_impl(
     full_payload["include_posts_summary"] = include_posts_summary
     full_payload["include_posts_summary_max"] = include_posts_summary_max
 
-    initialize_job_status(job_id)
     logger.info(
         "[AccountAnalysisJob] Queueing job job_id=%s account_id=%s post_limit=%s source=%s",
         job_id,
@@ -662,6 +667,8 @@ def _enqueue_account_analysis_job_impl(
                 enqueued_job.raw_status,
                 2,
             )
+        # Write Redis state only after the transport has accepted the job.
+        initialize_job_status(job_id)
         _write_dedupe_job_id(account_id, post_limit, job_id)
         _write_inputhash_job_id(account_id, payload_hash, job_id)
         logger.debug(
@@ -675,6 +682,7 @@ def _enqueue_account_analysis_job_impl(
         _restore_rate_limit_counter(account_id)
         raise
     return {"job_id": job_id, "status": "queued"}
+
 
 
 def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:

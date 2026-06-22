@@ -235,14 +235,10 @@ class CreatorTrendResult(Base):
         Index("ix_creator_trend_results_updated_at", "updated_at"),
     )
 
-    account_id: Mapped[str] = mapped_column(
-        Text,
-        ForeignKey("creator_vectors.account_id"),
-        primary_key=True,
-    )
+    account_id: Mapped[str] = mapped_column(Text, primary_key=True)
     niche_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    global_trends_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    recommendations_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    global_trends_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    recommendations_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

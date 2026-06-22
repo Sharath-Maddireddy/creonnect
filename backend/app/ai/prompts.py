@@ -278,86 +278,41 @@ VISION_SIGNALS_JSON_END
 
 
 REEL_VISION_EVALUATION_PROMPT = """
-You are an expert short-form video creative strategist analyzing an Instagram Reel.
-Watch the full video before scoring. Evaluate what is actually visible and audible in the clip.
-Do not invent details that are not present.
+Analyze this Reel as data only.
 
-Return ONLY valid TOON format (Token-Oriented Object Notation, YAML-like indentation, no braces, no quotes). Use 2-space indentation for nesting and '-' for list items. Do not include markdown, commentary, or extra keys.
+Return ONLY TOON. No markdown. No prose. No reasoning. No filler. Use the shortest possible labels, especially for enums, while keeping output parseable by backend models.
 
-Return exactly these keys:
-- hook_frame_score (float 0-1): how visually arresting the first 3 seconds are
-- hook_text_overlay (string or null): any text shown in the first 3 seconds that acts as a hook
-- pacing_label (fast|medium|slow)
-- cut_count_estimate (integer): estimated total scene cuts
-- dominant_emotion (string): primary emotional tone such as excitement, curiosity, calm, humour
-- retention_signal (float 0-1): estimated likelihood viewers keep watching
-- audio_visual_sync (float 0-1): how well visuals, cuts, gestures, and motion match the audio beat/mood/message
-- objects (array of strings): main visible subjects or objects
-- scene_description (string): concise summary of what happens in the reel
-- detected_text (string or null): notable on-screen text
-- visual_style (string): style such as talking-head, b-roll, cinematic, tutorial, animation, vlog
-- hook_strength_score (float 0-1): overall hook quality across visual motion, framing, text, face presence, and opening energy
-- cringe_score (integer 0-100): 0 polished, 100 extreme cringe
-- cringe_signals (array of strings, max 3)
-- cringe_fixes (array of strings, max 3)
-- production_level (low|medium|high)
-- adult_content_detected (boolean)
+Rules:
+- Watch the full video before scoring.
+- Do not invent unseen or unheard details.
+- Use 2-space indentation.
+- Keep strings as short as possible.
+- Prefer null over explanatory text when a field is absent.
 
-Scoring rubric for hook_strength_score (0-1):
-- 0.90-1.00: elite hook; first 2 seconds contain multiple strong hook signals such as immediate motion, high-contrast framing, clear subject, compelling text or payoff, and the opening feels impossible to ignore. If spoken/audio-led, the audio hook is strong immediately. Face or clear subject is typically visible early.
-- 0.75-0.89: strong hook; opening is engaging and clear with noticeable motion, a clear subject, and at least one strong attention device such as text, expression, surprise, or dramatic visual change.
-- 0.50-0.74: decent hook; opening is understandable and somewhat engaging, but lacks exceptional urgency, novelty, or stopping power.
-- 0.30-0.49: weak hook; opening is slow, generic, poorly framed, visually flat, or does not make the viewer curious quickly.
-- 0.10-0.29: very weak hook; slow pacing, low energy, poor lighting, no meaningful text, unclear subject, or the reel takes too long to reveal what it is about.
-- 0.00-0.09: failed hook; opening is confusing, static, dark, empty, or likely to cause immediate scroll-away.
+Output keys:
+hook_frame_score float 0-1
+hook_text_overlay string|null
+pacing_label fast|medium|slow
+cut_count_estimate int
+dominant_emotion string
+retention_signal float 0-1
+audio_visual_sync float 0-1
+objects list[string]
+scene_description string
+detected_text string|null
+visual_style string
+hook_strength_score float 0-1
+cringe_score int 0-100
+cringe_signals list[string] max 3
+cringe_fixes list[string] max 3
+production_level low|medium|high
+adult_content_detected bool
 
-Hard constraints for hook_strength_score:
-- Do not score above 0.90 unless the opening shows clear early stopping power, not just a nice-looking frame.
-- Do not score above 0.80 if the first 2-3 seconds are visually static and offer no strong curiosity trigger.
-- Do not score above 0.70 if the main subject is unclear in the opening.
-- Slow pacing, dark lighting, no text, and no clear motion should generally land in 0.10-0.30.
+Scoring:
+- hook_strength_score: be conservative; no >0.90 unless the opening is immediately strong.
+- audio_visual_sync: no >0.85 unless timed cuts, gestures, text reveals, or motion beats clearly match audio.
 
-Scoring rubric for audio_visual_sync (0-1):
-- 0.90-1.00: visuals are tightly synchronized to the audio beat, spoken emphasis, or mood; cuts, gestures, captions, and action feel intentionally timed.
-- 0.75-0.89: strong sync; most transitions and visual moments fit the audio well with only minor drift.
-- 0.50-0.74: moderate sync; audio and visuals broadly fit, but timing is inconsistent or only loosely coordinated.
-- 0.30-0.49: weak sync; visuals often feel disconnected from the audio tone, rhythm, or message.
-- 0.10-0.29: poor sync; cuts, pacing, and subject action noticeably clash with the audio.
-- 0.00-0.09: no meaningful sync; audio and visuals feel unrelated or actively conflicting.
-
-Hard constraints for audio_visual_sync:
-- If there is little or no usable audio, score based on whether the visuals still align with any spoken or rhythmic structure present; otherwise keep the score conservative.
-- Do not score above 0.85 unless there are clear timed cuts, gestures, text reveals, or motion beats matching the audio.
-- If the audio mood and the visuals feel mismatched, keep the score below 0.50.
-
-Additional guidance:
-- Prefer conservative scoring over generous scoring.
-- Keep cringe_signals and cringe_fixes specific and actionable.
-- If on-screen text is absent, return null for hook_text_overlay or detected_text where appropriate.
-- adult_content_detected must be true only when sexual nudity or explicit adult sexual framing is actually present.
-
-OUTPUT EXAMPLE (STRICT TOON ONLY):
-hook_frame_score 0.72
-hook_text_overlay Stop scrolling
-pacing_label fast
-cut_count_estimate 11
-dominant_emotion curiosity
-retention_signal 0.68
-audio_visual_sync 0.74
-objects
-  - creator
-  - phone
-scene_description Creator points at text callouts while demonstrating a quick workflow
-detected_text 3 editing mistakes
-visual_style talking-head tutorial
-hook_strength_score 0.78
-cringe_score 18
-cringe_signals
-  - Slightly generic thumbnail pose
-cringe_fixes
-  - Start with the strongest payoff frame
-production_level medium
-adult_content_detected false
+Return a bare TOON object only.
 """
 
 
@@ -389,5 +344,4 @@ INPUT DATA:
 Creator Dominant Niche: "{creator_category}"
 Current Post Topic: "{post_category}"
 """
-
 

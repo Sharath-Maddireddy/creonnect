@@ -4,6 +4,7 @@ import time
 
 from backend.app.infra.models import CREATOR_EMBEDDING_MODEL_NAME, EMBEDDING_DIMENSION
 from backend.app.utils.logger import logger
+from backend.app.ai.circuit_breaker import openai_circuit_breaker, CircuitBreakerOpen
 
 
 # ------------------------------------------------
@@ -147,7 +148,7 @@ class LLMClient:
         """
         Generate text from the LLM.
         Expects prompt = {"system": "...", "user": "..."}
-        Includes timeout and retry logic.
+        Includes timeout and retry logic, plus circuit breaker for resilience.
         """
 
         if self._client is None:
@@ -169,37 +170,46 @@ class LLMClient:
                 logger.info(f"[LLM] Request start (attempt {attempt + 1}/{self.max_retries + 1})")
                 start_time = time.time()
 
-                request_payload: dict[str, Any] = {
-                    "model": self.model_name,
-                    "messages": [
-                        {"role": "system", "content": prompt["system"]},
-                        {"role": "user", "content": prompt["user"]}
-                    ],
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens,
-                }
-                response_format = prompt.get("response_format")
-                if isinstance(response_format, dict) and not skip_response_format:
-                    request_payload["response_format"] = response_format
+                # Wrap API call with circuit breaker
+                def _make_api_call():
+                    nonlocal skip_response_format
+                    request_payload: dict[str, Any] = {
+                        "model": self.model_name,
+                        "messages": [
+                            {"role": "system", "content": prompt["system"]},
+                            {"role": "user", "content": prompt["user"]}
+                        ],
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens,
+                    }
+                    response_format = prompt.get("response_format")
+                    if isinstance(response_format, dict) and not skip_response_format:
+                        request_payload["response_format"] = response_format
+
+                    try:
+                        return self._client.chat.completions.create(**request_payload)
+                    except Exception as request_error:
+                        # Retry without response_format only for explicit unsupported-format errors.
+                        if (
+                            "response_format" in request_payload
+                            and _is_response_format_unsupported_error(request_error)
+                        ):
+                            logger.warning(
+                                "[LLM] response_format unsupported; retrying request without it: %s",
+                                request_error,
+                            )
+                            skip_response_format = True
+                            retry_payload = dict(request_payload)
+                            retry_payload.pop("response_format", None)
+                            return self._client.chat.completions.create(**retry_payload)
+                        else:
+                            raise
 
                 try:
-                    response = self._client.chat.completions.create(**request_payload)
-                except Exception as request_error:
-                    # Retry without response_format only for explicit unsupported-format errors.
-                    if (
-                        "response_format" in request_payload
-                        and _is_response_format_unsupported_error(request_error)
-                    ):
-                        logger.warning(
-                            "[LLM] response_format unsupported; retrying request without it: %s",
-                            request_error,
-                        )
-                        skip_response_format = True
-                        retry_payload = dict(request_payload)
-                        retry_payload.pop("response_format", None)
-                        response = self._client.chat.completions.create(**retry_payload)
-                    else:
-                        raise
+                    response = openai_circuit_breaker.call(_make_api_call)
+                except CircuitBreakerOpen as cb_error:
+                    logger.error(f"[LLM] Circuit breaker rejected request: {cb_error}")
+                    raise LLMClientError(str(cb_error))
 
                 duration = time.time() - start_time
                 logger.info(f"[LLM] Request completed in {duration:.2f}s")
@@ -223,6 +233,7 @@ class LLMClient:
 
         # All retries exhausted
         raise LLMClientError(f"LLM request failed after {self.max_retries + 1} attempts: {last_error}")
+
 
     def embed(self, text: str) -> list[float] | None:
         """Generate a creator-pool embedding vector for the given text."""
@@ -260,3 +271,5 @@ class LLMClient:
             duration = time.time() - start_time
             logger.warning(f"[LLM] Embedding request failed after {duration:.2f}s: {e}")
             return None
+
+

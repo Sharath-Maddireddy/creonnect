@@ -1,0 +1,14 @@
+name: ec2-autoscaling-option-c
+purpose: default-worker-capacity-plan
+strategy: option_c
+workers_at_peak: 8
+peak_window_hours: 4
+cost_position: lowest_cost_among_ec2_strategies
+worker_type: spot
+scaling_signal: queue_depth
+processing_target_seconds: 120
+processing_target_type: typical_load_only
+sla_note: sub_120_seconds_is_not_a_hard_guarantee_at_500_user_peaks
+notes:
+  - This manifest documents the chosen default because no EC2 provisioning IaC exists in the repo.
+  - Use as the baseline when wiring ECS, ASG, or EC2 user-data in external deployment code.

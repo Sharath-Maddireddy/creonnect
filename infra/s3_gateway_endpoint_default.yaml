@@ -1,0 +1,10 @@
+name: s3-gateway-endpoint-default
+purpose: vpc-s3-traffic-cost-control
+endpoint_type: Gateway
+service_name: com.amazonaws.${AWS_REGION}.s3
+route_table_scope: private_subnets
+apply_from_day_one: true
+notes:
+  - This manifest exists because the repo has no VPC/network IaC yet.
+  - Wire this into the VPC route tables when introducing external deployment code.
+  - Keep this endpoint limited to S3; do not use it as a template for unrelated networking changes.

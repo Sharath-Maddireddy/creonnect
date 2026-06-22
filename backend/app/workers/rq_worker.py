@@ -24,7 +24,7 @@ from backend.app.workers import embedding_worker as _embedding_worker  # noqa: F
 def main() -> None:
     print(f"worker vision_enabled={bool((os.getenv('GEMINI_API_KEY') or '').strip())}")
     connection = get_rq_redis()
-    queue_names = ["account-analysis", "single-post-analysis", "embedding-ingestion"]
+    queue_names = ["account-analysis", "single-post-analysis", "embedding-ingestion", "trend-analysis"]
     # macOS and Windows are safer with SimpleWorker because forked work-horses
     # can crash when Objective-C runtime state is already initialized.
     worker_cls = SimpleWorker if platform.system() in {"Windows", "Darwin"} else Worker
