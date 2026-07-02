@@ -36,9 +36,14 @@ jobs:
           pip install -r backend/requirements.txt
 
       - name: Run backend tests
+        # CI does not start a Redis service container in this workflow.
+        # We force in-memory limiter mode for deterministic backend test runs.
         env:
           DATABASE_URL: sqlite+aiosqlite:///:memory:
+          # Placeholder URL retained for compatibility with components reading REDIS_URL.
           REDIS_URL: redis://localhost:6379/0
+          # Explicitly disable Redis-backed limiter in CI unless a Redis service is added.
+          RATE_LIMIT_USE_REDIS: "false"
         run: pytest backend/app/tests -q
 
       - name: Configure AWS credentials

@@ -180,7 +180,7 @@ def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
                 raise LookalikeEmbeddingError(f"Missing embedding for creator '{account_id}'.")
 
             ef_search = int(_get_hnsw_ef_search())
-            session.execute(text(f"SET LOCAL hnsw.ef_search = {ef_search}"))
+            session.execute(text("SET LOCAL hnsw.ef_search = :ef_search"), {"ef_search": ef_search})
 
             result = session.execute(
                 text(

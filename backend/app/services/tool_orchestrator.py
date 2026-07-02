@@ -274,6 +274,7 @@ class ToolOrchestrator:
         if analysis is None:
             return ToolResponse.error("generate_outreach_brief", f"No analysis found for creator '{account_id}'.")
 
+        compact_analysis = self._summarize_analysis_for_prompt(analysis)
         llm = LLMClient()
         outreach_prompt = {
             "system": (
@@ -282,7 +283,7 @@ class ToolOrchestrator:
             ),
             "user": (
                 f"Creator account: {account_id}\n"
-                f"Creator analysis: {json.dumps(analysis, ensure_ascii=True)}\n"
+                f"Creator analysis: {json.dumps(compact_analysis, ensure_ascii=True)}\n"
                 f"Campaign goal: {campaign_goal}\n"
                 f"Brand tone: {brand_tone or 'neutral'}\n"
                 f"Deliverables: {', '.join(deliverables or []) if deliverables else 'not specified'}\n\n"
@@ -339,6 +340,7 @@ class ToolOrchestrator:
         if analysis is None:
             return ToolResponse.error("generate_content_brief", f"No analysis found for creator '{account_id}'.")
 
+        compact_analysis = self._summarize_analysis_for_prompt(analysis)
         llm = LLMClient()
         brief_prompt = {
             "system": (
@@ -348,7 +350,7 @@ class ToolOrchestrator:
             ),
             "user": (
                 f"Creator account: {account_id}\n"
-                f"Creator analysis: {json.dumps(analysis, ensure_ascii=True)}\n"
+                f"Creator analysis: {json.dumps(compact_analysis, ensure_ascii=True)}\n"
                 f"Brand name: {brand_name}\n"
                 f"Key messages: {json.dumps(key_messages, ensure_ascii=True)}\n"
                 f"Preferred format: {content_format or 'Not specified'}\n\n"
@@ -523,6 +525,51 @@ class ToolOrchestrator:
         if isinstance(value, list):
             return [self._redact_embeddings(item) for item in value]
         return value
+
+    def _summarize_analysis_for_prompt(self, analysis: dict[str, Any], *, max_chars: int = 2500) -> dict[str, Any]:
+        summary: dict[str, Any] = {
+            "account_id": analysis.get("account_id"),
+            "username": analysis.get("username"),
+            "creator_dominant_category": analysis.get("creator_dominant_category"),
+            "follower_count": analysis.get("follower_count"),
+            "predicted_engagement_rate": analysis.get("predicted_engagement_rate"),
+            "ahs_score": analysis.get("ahs_score"),
+            "avg_brand_safety_score": analysis.get("avg_brand_safety_score"),
+            "avg_visual_quality_score": analysis.get("avg_visual_quality_score"),
+            "avg_views": analysis.get("avg_views"),
+            "avg_likes": analysis.get("avg_likes"),
+            "avg_comments": analysis.get("avg_comments"),
+            "posts_per_week": analysis.get("posts_per_week"),
+            "bio": analysis.get("bio"),
+            "niche_tags": analysis.get("niche_tags"),
+        }
+
+        for key in (
+            "profile",
+            "overview",
+            "audience_summary",
+            "content_summary",
+            "brand_safety_summary",
+            "engagement_summary",
+        ):
+            value = analysis.get(key)
+            if value is not None:
+                summary[key] = value
+
+        serialized = json.dumps(summary, ensure_ascii=True, default=str)
+        if len(serialized) <= max_chars:
+            return summary
+
+        return {
+            "account_id": summary.get("account_id"),
+            "username": summary.get("username"),
+            "creator_dominant_category": summary.get("creator_dominant_category"),
+            "follower_count": summary.get("follower_count"),
+            "predicted_engagement_rate": summary.get("predicted_engagement_rate"),
+            "ahs_score": summary.get("ahs_score"),
+            "bio": summary.get("bio"),
+            "niche_tags": summary.get("niche_tags"),
+        }
 
     def _as_required_string(self, value: Any, field_name: str) -> str:
         if not isinstance(value, str) or not value.strip():
