@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import math
 from typing import Literal
 
 from backend.app.analytics.audience_quality import calculate_authenticity_score
 from backend.app.domain.brand_models import BrandProfile, CreatorMatchScore
+from backend.app.utils.math_utils import clamp as _clamp
+from backend.app.utils.vector_math import cosine_similarity
 from backend.app.utils.logger import logger
 
 MIN_AUTHENTICITY_THRESHOLD = 40.0
 
-
-def _clamp(value: float, minimum: float, maximum: float) -> float:
-    return max(minimum, min(maximum, value))
 
 
 def _niche_fit(creator_category: str | None, brand_niche: str) -> tuple[float, list[str]]:
@@ -50,18 +48,6 @@ def _niche_fit(creator_category: str | None, brand_niche: str) -> tuple[float, l
     return 3.0, notes
 
 
-def _cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
-    if not vec1 or not vec2 or len(vec1) != len(vec2):
-        return 0.0
-
-    dot_product = sum(a * b for a, b in zip(vec1, vec2))
-    magnitude1 = math.sqrt(sum(a * a for a in vec1))
-    magnitude2 = math.sqrt(sum(b * b for b in vec2))
-    if magnitude1 == 0.0 or magnitude2 == 0.0:
-        return 0.0
-    return dot_product / (magnitude1 * magnitude2)
-
-
 def _semantic_fit(
     creator_category: str | None,
     brand_niche: str,
@@ -74,7 +60,7 @@ def _semantic_fit(
     otherwise fall back to the legacy niche rules.
     """
     if brand_search_embedding is not None and creator_embedding is not None:
-        similarity = _cosine_similarity(brand_search_embedding, creator_embedding)
+        similarity = cosine_similarity(brand_search_embedding, creator_embedding)
         # Use a smooth 3-band interpolation to avoid abrupt score cliffs.
         if similarity <= 0.2:
             low_ratio = _clamp((similarity + 1.0) / 1.2, 0.0, 1.0)
@@ -241,7 +227,7 @@ def score_creator_against_brand(
     )
     predicted_er = (
         _clamp(float(predicted_engagement_rate), 0.0, 1.0)
-        if isinstance(predicted_engagement_rate, float)
+        if isinstance(predicted_engagement_rate, (int, float)) and not isinstance(predicted_engagement_rate, bool)
         else None
     )
 
@@ -283,6 +269,13 @@ def score_creator_against_brand(
             f"Brand safety score {safety_score_0_100:.0f} below required {brand.required_brand_safety_min:.0f}."
         )
 
+    content_quality_score_0_100 = _clamp(visual_quality * 2.0, 0.0, 100.0)
+    if content_quality_score_0_100 < brand.content_quality_min:
+        disqualified = True
+        disqualify_reasons.append(
+            f"Content quality score {content_quality_score_0_100:.0f} below required {brand.content_quality_min:.0f}."
+        )
+
     if (
         brand.min_engagement_rate is not None
         and predicted_er is not None
@@ -321,3 +314,4 @@ def score_creator_against_brand(
         disqualify_reasons=disqualify_reasons,
         notes=notes,
     )
+

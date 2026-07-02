@@ -23,14 +23,15 @@ from backend.app.infra.job_queue import (
     get_sqs_queue_url,
     register_job_handler,
 )
-from backend.app.utils.logger import logger
 from backend.app.services import account_analysis_jobs, reel_analysis_jobs, single_post_analysis_jobs
+from backend.app.utils.env_numbers import get_int_env
+from backend.app.utils.logger import logger
 from backend.app.workers import embedding_worker
 
 
 POLL_WAIT_TIME_SECONDS = 20
 IDLE_SLEEP_SECONDS = 1.0
-MAX_MESSAGES_PER_POLL = 1
+MAX_MESSAGES_PER_POLL = max(1, min(10, get_int_env("SQS_MAX_MESSAGES_PER_POLL", 5)))
 
 
 def _get_sqs_client():
@@ -105,6 +106,7 @@ def main() -> None:
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("[SQSWorker] Failed queue=%s: %s", queue_name, exc)
                     continue
+
                 if isinstance(receipt_handle, str) and receipt_handle:
                     client.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
                     logger.debug("[SQSWorker] Deleted message queue=%s", queue_name)
@@ -114,3 +116,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

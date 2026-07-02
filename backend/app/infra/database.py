@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.utils.env import load_app_env
+from backend.app.utils.env_numbers import get_int_env
 from backend.app.utils.logger import logger
 
 
@@ -59,17 +60,6 @@ def _has_async_driver(database_url: str) -> bool:
     return driver in _ASYNC_DRIVERS
 
 
-def _get_int_env(name: str, default: int) -> int:
-    """Return an integer environment variable with a safe fallback."""
-    raw_value = (os.getenv(name) or "").strip()
-    if not raw_value:
-        return default
-    try:
-        return int(raw_value)
-    except ValueError:
-        logger.warning("Invalid %s=%r; falling back to %s", name, raw_value, default)
-        return default
-
 
 def _get_engine_kwargs(database_url: str, *, is_async: bool) -> dict[str, Any]:
     """Build engine kwargs with production-friendly pooling for network databases."""
@@ -83,13 +73,13 @@ def _get_engine_kwargs(database_url: str, *, is_async: bool) -> dict[str, Any]:
         return kwargs
 
     kwargs.update(
-        pool_size=_get_int_env("DB_POOL_SIZE", 10),
-        max_overflow=_get_int_env("DB_MAX_OVERFLOW", 20),
-        pool_timeout=_get_int_env("DB_POOL_TIMEOUT", 30),
-        pool_recycle=_get_int_env("DB_POOL_RECYCLE", 1800),
+        pool_size=get_int_env("DB_POOL_SIZE", 10),
+        max_overflow=get_int_env("DB_MAX_OVERFLOW", 20),
+        pool_timeout=get_int_env("DB_POOL_TIMEOUT", 30),
+        pool_recycle=get_int_env("DB_POOL_RECYCLE", 1800),
     )
     if is_async and url.drivername == "postgresql+asyncpg":
-        kwargs["connect_args"] = {"command_timeout": _get_int_env("DB_COMMAND_TIMEOUT", 10)}
+        kwargs["connect_args"] = {"command_timeout": get_int_env("DB_COMMAND_TIMEOUT", 10)}
     return kwargs
 
 
@@ -238,3 +228,4 @@ async def reset_database_engines_async() -> None:
         await async_engine.dispose()
     if sync_engine is not None:
         sync_engine.dispose()
+

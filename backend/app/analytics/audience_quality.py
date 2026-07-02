@@ -9,7 +9,12 @@ def calculate_authenticity_score(
     avg_likes: int,
     avg_comments: int,
 ) -> float:
-    """Estimate audience authenticity from simple engagement heuristics."""
+    """Estimate audience authenticity as a 0-100 score.
+
+    This function always returns values on a 0-100 scale. Brand campaign matching
+    assumes this same scale when converting authenticity-like signals into
+    `engagement_quality` points.
+    """
     if follower_count == 0:
         return 0.0
 

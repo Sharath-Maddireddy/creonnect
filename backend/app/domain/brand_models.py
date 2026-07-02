@@ -19,6 +19,8 @@ class BrandProfile(BaseModel):
     min_engagement_rate: float | None = Field(default=None, ge=0.0, description="Minimum engagement rate (0.0-1.0).")
     required_brand_safety_min: float = Field(default=70.0, ge=0.0, le=100.0, description="Minimum brand safety score 0-100.")
     content_quality_min: float = Field(default=50.0, ge=0.0, le=100.0, description="Minimum content quality score 0-100.")
+    campaign_goal: str | None = Field(default=None, description="Optional campaign objective extracted from AI brief.")
+    content_type_preference: str | None = Field(default=None, description="Optional preferred content format extracted from AI brief.")
 
     @field_validator("brand_name", "niche", mode="before")
     @classmethod
@@ -33,6 +35,16 @@ class BrandProfile(BaseModel):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("value must be a non-empty string.")
         return value
+
+    @field_validator("campaign_goal", "content_type_preference", mode="before")
+    @classmethod
+    def _optional_short_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.strip().split())[:160]
+        return text or None
 
     @field_validator("min_engagement_rate", mode="before")
     @classmethod

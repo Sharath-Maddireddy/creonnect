@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from backend.app.analytics.draft_optimizer_engine import optimize_draft_post
+from backend.app.api.auth import verify_api_key
 from backend.app.domain.draft_models import DraftPostAnalysisRequest, DraftPostOptimizationResponse
 from backend.app.services.draft_history_service import load_draft_history_context
 from backend.app.utils.logger import logger
@@ -15,7 +17,24 @@ from backend.app.utils.logger import logger
 router = APIRouter(prefix="/api/v1", tags=["Draft Optimization"])
 
 
-@router.post("/draft-optimize", response_model=DraftPostOptimizationResponse)
+def _require_draft_api_key_if_configured(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> str | None:
+    env = (os.getenv("ENV") or "").strip().lower()
+    if env != "production":
+        return None
+
+    expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
+    if not expected_api_key:
+        return None
+    return verify_api_key(x_api_key)
+
+
+@router.post(
+    "/draft-optimize",
+    response_model=DraftPostOptimizationResponse,
+    dependencies=[Depends(_require_draft_api_key_if_configured)],
+)
 async def draft_optimize(request: DraftPostAnalysisRequest) -> DraftPostOptimizationResponse:
     """Optimize a draft caption and optional media using historical account performance."""
     try:
@@ -48,4 +67,3 @@ async def draft_optimize(request: DraftPostAnalysisRequest) -> DraftPostOptimiza
     except Exception as exc:
         logger.exception("[DraftOptimize] Failed optimization for account_id=%s", request.account_id)
         raise HTTPException(status_code=500, detail="Failed to optimize draft post.") from exc
-

@@ -1,6 +1,4 @@
-"""
-Creonnect Backend - FastAPI Application
-"""
+"""Creonnect Backend - FastAPI Application"""
 
 from __future__ import annotations
 
@@ -18,11 +16,12 @@ load_app_env(override=False)
 
 from backend.app.api.account_analysis_routes import router as account_analysis_router
 from backend.app.api.campaign_routes import router as campaign_router
+from backend.app.api.dashboard import router as dashboard_router
+from backend.app.api.draft_analysis_routes import router as draft_analysis_router
 from backend.app.api.grpc_analysis_server import start_grpc_analysis_server, stop_grpc_analysis_server
+from backend.app.api.instagram_auth_routes import router as instagram_auth_router
 from backend.app.api.post_analysis_routes import router as post_analysis_router
 from backend.app.api.reel_analysis_routes import router as reel_analysis_router
-from backend.app.api.dashboard import router as dashboard_router
-from backend.app.api.instagram_auth_routes import router as instagram_auth_router
 from backend.app.api.trend_routes import router as trend_router
 from backend.app.infra.database import init_db, initialize_database_engines
 from backend.app.utils.logger import logger
@@ -57,6 +56,34 @@ def _get_cors_origins() -> list[str]:
 SESSION_SECRET = _resolve_session_secret()
 
 
+def _validate_internal_hmac_secret_configuration() -> bool:
+    secret = (os.getenv("CREONNECT_INTERNAL_HMAC_SECRET") or "").strip()
+    if not secret:
+        message = (
+            "CREONNECT_INTERNAL_HMAC_SECRET is not set. gRPC internal HMAC auth will be disabled "
+            "until this environment variable is configured."
+        )
+        if _is_production_environment():
+            raise RuntimeError(message)
+        logger.error(message)
+        return False
+
+    weak_values = {
+        "a-big-hash-value-to-be-added-not-added-now",
+        "changeme",
+        "change-me",
+        "replace_me",
+        "replace-with-strong-secret",
+    }
+    if secret.lower() in weak_values:
+        message = "CREONNECT_INTERNAL_HMAC_SECRET is set to a placeholder/weak value."
+        if _is_production_environment():
+            raise RuntimeError(message)
+        logger.error(message)
+        return False
+    return True
+
+
 def _validate_brand_api_key_configuration() -> bool:
     brand_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
     if brand_api_key:
@@ -76,6 +103,7 @@ def _validate_brand_api_key_configuration() -> bool:
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
     _app.state.brand_api_key_configured = _validate_brand_api_key_configuration()
+    _app.state.internal_hmac_secret_configured = _validate_internal_hmac_secret_configuration()
     vision_enabled = bool((os.getenv("GEMINI_API_KEY") or "").strip())
     _app.state.vision_enabled = vision_enabled
     logger.info("vision_enabled=%s", vision_enabled)
@@ -84,6 +112,7 @@ async def _app_lifespan(_app: FastAPI):
     await start_grpc_analysis_server()
     yield
     await stop_grpc_analysis_server()
+
 
 app = FastAPI(
     title="Creonnect API",
@@ -113,6 +142,7 @@ app.include_router(account_analysis_router)
 app.include_router(campaign_router)
 app.include_router(post_analysis_router)
 app.include_router(reel_analysis_router)
+app.include_router(draft_analysis_router)
 app.include_router(instagram_auth_router)
 app.include_router(trend_router)
 

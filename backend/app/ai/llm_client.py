@@ -144,6 +144,11 @@ class LLMClient:
         """Expose the underlying OpenAI client for structured-output calls."""
         return self._client
 
+    @property
+    def model(self) -> str:
+        """Return the model name for external inspection."""
+        return self.model_name
+
     def generate(self, prompt: Dict[str, Any]) -> Optional[str]:
         """
         Generate text from the LLM.
@@ -234,6 +239,73 @@ class LLMClient:
         # All retries exhausted
         raise LLMClientError(f"LLM request failed after {self.max_retries + 1} attempts: {last_error}")
 
+
+    def generate_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        tool_choice: str = "auto",
+    ) -> Any:
+        """
+        Call the chat completions API with tool/function definitions.
+        Returns the raw response object so the caller can inspect tool_calls.
+
+        Includes the same circuit breaker and retry logic as generate().
+        """
+        if self._client is None:
+            raise LLMClientError(
+                "LLM client not initialized. "
+                "Ensure OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT is set."
+            )
+
+        if not isinstance(messages, list) or not messages:
+            raise LLMClientError("messages must be a non-empty list.")
+        if not isinstance(tools, list):
+            raise LLMClientError("tools must be a list.")
+        if not isinstance(tool_choice, str) or not tool_choice.strip():
+            raise LLMClientError("tool_choice must be a non-empty string.")
+
+        last_error = None
+        for attempt in range(self.max_retries + 1):
+            start_time = time.time()
+            try:
+                logger.info(
+                    "[LLM] Tool request start (attempt %s/%s)",
+                    attempt + 1,
+                    self.max_retries + 1,
+                )
+
+                def _make_api_call():
+                    return self._client.chat.completions.create(
+                        model=self.model_name,
+                        messages=messages,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                    )
+
+                try:
+                    response = openai_circuit_breaker.call(_make_api_call)
+                except CircuitBreakerOpen as cb_error:
+                    logger.error("[LLM] Circuit breaker rejected tool request: %s", cb_error)
+                    raise LLMClientError(str(cb_error))
+
+                duration = time.time() - start_time
+                logger.info("[LLM] Tool request completed in %.2fs", duration)
+                return response
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                duration = time.time() - start_time
+                logger.warning("[LLM] Tool request failed after %.2fs: %s", duration, exc)
+                if attempt < self.max_retries:
+                    logger.info("[LLM] Retrying tool request...")
+                    continue
+
+        raise LLMClientError(
+            f"LLM tool request failed after {self.max_retries + 1} attempts: {last_error}"
+        )
 
     def embed(self, text: str) -> list[float] | None:
         """Generate a creator-pool embedding vector for the given text."""

@@ -11,11 +11,12 @@ from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.app.ai.cringe_analysis import build_cringe_section_for_brand_safety
 from backend.app.ai.schemas import CreatorPostAIInput
+from backend.app.api.auth import verify_api_key
 from backend.app.domain.post_models import SinglePostInsights, VisionAnalysis
 from backend.app.infra.redis_client import get_json, set_json
 from backend.app.services.post_insights_service import build_single_post_insights
@@ -25,6 +26,7 @@ from backend.app.services.single_post_analysis_jobs import (
 )
 from backend.app.services.post_snapshot_store import read_post_insights_snapshot
 from backend.app.utils.logger import logger
+from backend.app.utils.number_utils import safe_float as _safe_float
 
 
 router = APIRouter(tags=["Post Analysis"])
@@ -36,6 +38,19 @@ CRINGE_SUMMARY_CACHE_MAX_ENTRIES = 512
 # Best-effort process-local fallback for single-process/dev when Redis is unavailable.
 _CRINGE_SUMMARY_CACHE: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
 _CRINGE_SUMMARY_CACHE_LOCK = threading.Lock()
+
+
+def _require_post_analysis_api_key_if_configured(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> str | None:
+    env = (os.getenv("ENV") or "").strip().lower()
+    if env != "production":
+        return None
+
+    expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
+    if not expected_api_key:
+        return None
+    return verify_api_key(x_api_key)
 
 
 class PostAnalysisRequest(BaseModel):
@@ -91,7 +106,7 @@ def _stable_post_id(*, media_url: str, post_type: str, caption_text: str) -> str
         separators=(",", ":"),
         ensure_ascii=True,
     ).encode("utf-8")
-    digest = hashlib.sha1(payload).hexdigest()[:16]
+    digest = hashlib.sha256(payload).hexdigest()[:24]
     return f"auto_{digest}"
 
 
@@ -163,15 +178,6 @@ def _read_cringe_summary(post_id: str) -> dict[str, Any] | None:
 
     with _CRINGE_SUMMARY_CACHE_LOCK:
         return _get_local_cringe_summary_cache(normalized_post_id)
-
-
-def _safe_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _post_payload(post: SinglePostInsights, fallback_post_id: str, fallback_media_url: str) -> dict[str, Any]:
@@ -313,10 +319,7 @@ def _ai_payload(ai_analysis: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@v1_router.post("/post-analysis")
-@legacy_router.post("/post-analysis", include_in_schema=False)
-async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
-    """Run single-post analysis and return deterministic normalized API payload."""
+async def _analyze_single_post_inline(request: PostAnalysisRequest) -> dict[str, Any]:
     post_id = request.post_id or _stable_post_id(
         media_url=request.media_url,
         post_type=request.post_type,
@@ -345,8 +348,6 @@ async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
             target_post=creator_post,
             historical_posts=[],
             run_ai=True,
-            run_advanced_caption_ai=True,
-            run_advanced_audience_ai=True,
         )
     except Exception as exc:
         logger.exception("Failed to analyze post: %s", exc)
@@ -384,7 +385,14 @@ async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
     }
 
 
-@v1_router.get("/posts/{post_id}/cringe-summary")
+@v1_router.post("/post-analysis", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
+@legacy_router.post("/post-analysis", include_in_schema=False, dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
+async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
+    """Run single-post analysis and return deterministic normalized API payload."""
+    return await _analyze_single_post_inline(request)
+
+
+@v1_router.get("/posts/{post_id}/cringe-summary", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 def post_cringe_summary(post_id: str) -> dict[str, Any]:
     """Return concise cringe summary for a previously analyzed post."""
     normalized_post_id = post_id.strip()
@@ -401,7 +409,7 @@ def post_cringe_summary(post_id: str) -> dict[str, Any]:
     return payload
 
 
-@v1_router.get("/posts/{post_id}/insights")
+@v1_router.get("/posts/{post_id}/insights", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 def get_post_insights(post_id: str) -> dict[str, Any]:
     """Return cached SinglePostInsights + ai_analysis payload for a previously analyzed post."""
     normalized_post_id = post_id.strip()
@@ -426,7 +434,7 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
     }
 
 
-@legacy_router.post("/single-post-analysis")
+@legacy_router.post("/single-post-analysis", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
     """Enqueue single-post analysis as a background job."""
     payload = request.model_dump(mode="python")
@@ -435,7 +443,7 @@ async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str
     except Exception as exc:
         logger.exception("[SinglePostJob] Failed to enqueue single-post analysis job; falling back to inline run: %s", exc)
         try:
-            inline_result = await post_analysis(request)
+            inline_result = await _analyze_single_post_inline(request)
             post_id = request.post_id or _stable_post_id(
                 media_url=request.media_url,
                 post_type=request.post_type,
@@ -452,7 +460,7 @@ async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str
             raise HTTPException(status_code=500, detail="Failed to start single post analysis.") from inline_exc
 
 
-@legacy_router.get("/single-post-analysis/{job_id}")
+@legacy_router.get("/single-post-analysis/{job_id}", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 def get_single_post_analysis_status(job_id: str) -> dict[str, Any]:
     """Poll single-post analysis background job status."""
     status = get_single_post_analysis_job_status(job_id)

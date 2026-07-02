@@ -84,7 +84,7 @@ def _parse_timeout(env_key: str, default: float) -> float:
 
 
 LLM_TIMEOUT_SECONDS = _parse_timeout("LLM_TIMEOUT_SECONDS", 60.0)
-_GENAI_LOCK = threading.Lock()
+_GEMINI_USE_BATCH = os.getenv("GEMINI_USE_BATCH", "").strip().lower() in {"1", "true", "yes"}
 _ANALYSIS_CACHE_LOCK = threading.Lock()
 
 
@@ -1012,15 +1012,14 @@ def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -
     model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
     try:
         gemini_adapter_cls = _build_gemini_vision_adapter()
-        with _GENAI_LOCK:
-            client = gemini_adapter_cls(api_key=api_key)
-            mime = _infer_mime_type(media_url)
-            response = client.generate_content(
-                model_name=model_name,
-                instruction=instruction,
-                media_url=media_url,
-                mime_type=mime,
-            )
+        client = gemini_adapter_cls(api_key=api_key)
+        mime = _infer_mime_type(media_url)
+        response = client.generate_content(
+            model_name=model_name,
+            instruction=instruction,
+            media_url=media_url,
+            mime_type=mime,
+        )
         text = getattr(response, "text", None)
         if not isinstance(text, str):
             block_reason = None
@@ -1101,13 +1100,52 @@ def _call_openai_text_api(*, api_key: str, prompt: str) -> str:
         raise
 
 
+async def _call_gemini_text_batch(*, api_key: str, prompt: str) -> str:
+    """Call Gemini Batch API for text-only generation.
+
+    TODO: replace with polling once batch job lifecycle handling is implemented.
+    """
+    model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:batchGenerateContent?key={api_key}"
+    payload: dict[str, Any] = {
+        "requests": [
+            {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt},
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, trust_env=False) as client:
+            response = await client.post(endpoint, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        text = data["responses"][0]["candidates"][0]["content"]["parts"][0]["text"]
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Gemini batch response did not include text output.")
+        return text
+    except KeyError as exc:
+        raise ValueError("Unexpected Gemini batch response structure.") from exc
+    except IndexError as exc:
+        raise ValueError("Unexpected Gemini batch response structure.") from exc
+    except TypeError as exc:
+        raise ValueError("Unexpected Gemini batch response structure.") from exc
+
+
 def _call_gemini_text_api(*, api_key: str, prompt: str) -> str:
+    # GEMINI_USE_BATCH=true routes text calls to Batch API (~50% cost, 24h SLA).
     model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
     try:
+        if _GEMINI_USE_BATCH:
+            return asyncio.run(_call_gemini_text_batch(api_key=api_key, prompt=prompt))
         gemini_adapter_cls = _build_gemini_vision_adapter()
-        with _GENAI_LOCK:
-            client = gemini_adapter_cls(api_key=api_key)
-            response = client.generate_text(model_name=model_name, prompt=prompt)
+        client = gemini_adapter_cls(api_key=api_key)
+        response = client.generate_text(model_name=model_name, prompt=prompt)
         text = getattr(response, "text", None)
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Gemini repair response did not include text output.")
@@ -1118,7 +1156,11 @@ def _call_gemini_text_api(*, api_key: str, prompt: str) -> str:
 
 
 async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
+    # GEMINI_USE_BATCH=true routes text calls to Batch API (~50% cost, 24h SLA).
     try:
+        # Vision/media calls remain synchronous SDK-based even when batch mode is enabled.
+        if _GEMINI_USE_BATCH:
+            logger.debug("[Vision] GEMINI_USE_BATCH enabled; keeping vision call on synchronous SDK path.")
         # Wrap the threaded call in asyncio.wait_for to prevent infinite hang.
         # Shortened to 10s for smoke test to avoid long hangs.
         return await asyncio.wait_for(

@@ -28,6 +28,18 @@ def main() -> None:
     # macOS and Windows are safer with SimpleWorker because forked work-horses
     # can crash when Objective-C runtime state is already initialized.
     worker_cls = SimpleWorker if platform.system() in {"Windows", "Darwin"} else Worker
+    
+    if platform.system() == "Windows":
+        from rq.timeouts import BaseDeathPenalty
+        class DummyDeathPenalty(BaseDeathPenalty):
+            def setup_death_penalty(self):
+                pass
+            def cancel_death_penalty(self):
+                pass
+        worker_cls.death_penalty_class = DummyDeathPenalty
+        Worker.death_penalty_class = DummyDeathPenalty
+        SimpleWorker.death_penalty_class = DummyDeathPenalty
+
     logger.info(
         "[RQWorker] Starting worker queues=%s worker_cls=%s vision_enabled=%s",
         queue_names,
@@ -36,7 +48,7 @@ def main() -> None:
     )
     worker = worker_cls(queue_names, connection=connection)
     logger.info("[RQWorker] Worker ready queues=%s", queue_names)
-    worker.work(with_scheduler=False)
+    worker.work(with_scheduler=True)
 
 
 if __name__ == "__main__":

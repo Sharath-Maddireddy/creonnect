@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.app.ai.cringe_analysis import build_cringe_section_for_brand_safety
 from backend.app.domain.post_models import BrandSafetyPenalty, BrandSafetyScore, VisionSignal
+from backend.app.utils.math_utils import clamp as _clamp
 from backend.app.utils.logger import logger
 
 
@@ -35,9 +36,6 @@ _ALCOHOL_TOBACCO_KEYWORDS = {
     "cigar",
 }
 
-
-def _clamp(value: float, minimum: float, maximum: float) -> float:
-    return max(minimum, min(maximum, value))
 
 
 def _normalize_text(value: str | None) -> str:
@@ -117,10 +115,12 @@ def _is_brand_match(mention: str, competitor: str) -> bool:
     if not mention_tokens or not competitor_tokens:
         return False
 
-    shorter_tokens, longer_tokens = sorted(
-        (mention_tokens, competitor_tokens),
-        key=len,
-    )
+    if len(mention_tokens) <= len(competitor_tokens):
+        shorter_tokens = mention_tokens
+        longer_tokens = competitor_tokens
+    else:
+        shorter_tokens = competitor_tokens
+        longer_tokens = mention_tokens
     window_size = len(shorter_tokens)
     return any(
         longer_tokens[index : index + window_size] == shorter_tokens
@@ -335,3 +335,4 @@ def compute_s6_brand_safety(
         flags=flags,
         notes=notes,
     )
+

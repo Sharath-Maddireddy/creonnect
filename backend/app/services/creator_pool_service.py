@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import math
 import os
-from collections.abc import Iterable
 
 from sqlalchemy import Select, select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -12,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.infra.database import get_sync_sessionmaker
 from backend.app.infra.models import CreatorDiscoveryMeta, CreatorVector
 from backend.app.utils.logger import logger
+from backend.app.utils.vector_math import cosine_similarity
 
 
 class LookalikeEmbeddingError(RuntimeError):
@@ -78,20 +77,6 @@ def _run_creator_query(statement: Select) -> list[dict]:
         return []
 
 
-def _cosine_similarity(vec1: Iterable[float], vec2: Iterable[float]) -> float:
-    values1 = list(vec1)
-    values2 = list(vec2)
-    if not values1 or not values2 or len(values1) != len(values2):
-        return 0.0
-
-    dot_product = sum(a * b for a, b in zip(values1, values2))
-    magnitude1 = math.sqrt(sum(a * a for a in values1))
-    magnitude2 = math.sqrt(sum(b * b for b in values2))
-    if magnitude1 == 0.0 or magnitude2 == 0.0:
-        return 0.0
-    return dot_product / (magnitude1 * magnitude2)
-
-
 def reload_creator_pool() -> None:
     """No-op retained for backward compatibility."""
     logger.info("[CreatorPoolService] reload_creator_pool() called; no cache is maintained.")
@@ -107,6 +92,8 @@ def query_creator_pool(
     niche: str | None = None,
     min_followers: int | None = None,
     max_followers: int | None = None,
+    *,
+    limit: int | None = None,
 ) -> list[dict]:
     """Filter creators via database queries while preserving the legacy return shape."""
     statement = _base_creator_query()
@@ -123,6 +110,8 @@ def query_creator_pool(
         statement = statement.where(CreatorDiscoveryMeta.follower_count <= int(max_followers))
 
     statement = statement.order_by(CreatorDiscoveryMeta.follower_count.desc())
+    if isinstance(limit, int) and limit > 0:
+        statement = statement.limit(int(limit))
     return _run_creator_query(statement)
 
 
@@ -136,31 +125,38 @@ def _get_creators_by_ids(account_ids: list[str]) -> list[dict]:
     return [creator_by_id[account_id] for account_id in account_ids if account_id in creator_by_id]
 
 
-def _find_lookalikes_sqlite_fallback(account_id: str, k: int) -> list[dict] | None:
-    creators = get_all_creators()
-    target_creator = next((creator for creator in creators if creator.get("account_id") == account_id), None)
-    if target_creator is None:
-        return None
+def _get_vector_embeddings_by_account_id() -> dict[str, list[float]]:
+    session_factory = get_sync_sessionmaker()
+    try:
+        with session_factory() as session:
+            rows = session.execute(select(CreatorVector.account_id, CreatorVector.embedding)).all()
+    except SQLAlchemyError as exc:
+        logger.warning("[CreatorPoolService] Failed to load embeddings for sqlite fallback: %s", exc)
+        return {}
 
-    target_embedding = target_creator.get("embedding")
-    if not target_embedding:
+    normalized: dict[str, list[float]] = {}
+    for account_id, raw_embedding in rows:
+        embedding = _normalize_embedding(raw_embedding)
+        if account_id and embedding:
+            normalized[str(account_id)] = embedding
+    return normalized
+
+
+def _find_lookalikes_sqlite_fallback(account_id: str, k: int) -> list[dict] | None:
+    embeddings = _get_vector_embeddings_by_account_id()
+    target_embedding = embeddings.get(account_id)
+    if target_embedding is None:
         return None
 
     scored_matches: list[tuple[float, str]] = []
-    for creator in creators:
-        other_account_id = creator.get("account_id")
-        if not other_account_id or other_account_id == account_id:
+    for other_account_id, other_embedding in embeddings.items():
+        if other_account_id == account_id:
             continue
-
-        other_embedding = creator.get("embedding")
-        if not other_embedding:
-            continue
-
-        distance = 1.0 - _cosine_similarity(target_embedding, other_embedding)
+        distance = 1.0 - cosine_similarity(target_embedding, other_embedding)
         scored_matches.append((distance, other_account_id))
 
     scored_matches.sort(key=lambda item: item[0])
-    return _get_creators_by_ids([account_id for _, account_id in scored_matches[:k]])
+    return _get_creators_by_ids([candidate_id for _, candidate_id in scored_matches[:k]])
 
 
 def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
@@ -183,7 +179,7 @@ def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
             if _normalize_embedding(target_embedding) is None:
                 raise LookalikeEmbeddingError(f"Missing embedding for creator '{account_id}'.")
 
-            ef_search = _get_hnsw_ef_search()
+            ef_search = int(_get_hnsw_ef_search())
             session.execute(text(f"SET LOCAL hnsw.ef_search = {ef_search}"))
 
             result = session.execute(

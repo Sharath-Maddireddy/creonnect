@@ -11,17 +11,13 @@ from backend.app.analytics.content_score import compute_content_score
 from backend.app.analytics.derived_metrics import compute_derived_metrics
 from backend.app.analytics.s4_audience_relevance_engine import compute_s4_audience_relevance
 from backend.app.domain.post_models import (
-    AudienceRelevanceScore,
     BenchmarkMetrics,
-    CaptionEffectivenessScore,
     CoreMetrics,
     DerivedMetrics,
     SinglePostInsights,
 )
 from backend.app.services.ai_analysis_service import (
     analyze_single_post_ai,
-    run_audience_relevance_llm,
-    run_caption_analysis_llm,
 )
 from backend.app.services.post_snapshot_store import write_post_insights_snapshot
 from backend.app.utils.logger import logger
@@ -75,8 +71,6 @@ async def build_single_post_insights(
     target_post: SinglePostInsights | CreatorPostAIInput,
     historical_posts: list[SinglePostInsights | CreatorPostAIInput],
     run_ai: bool = False,
-    run_advanced_caption_ai: bool = False,
-    run_advanced_audience_ai: bool = False,
 ) -> SinglePostInsightsResponse:
     """Build a fully populated single-post insights payload.
 
@@ -87,13 +81,11 @@ async def build_single_post_insights(
     target_post_model = _coerce_single_post_insights(target_post)
     historical_models = [_coerce_single_post_insights(post) for post in historical_posts]
     logger.info(
-        "[PostInsights] Start media_id=%s account_id=%s history_count=%d run_ai=%s advanced_caption=%s advanced_audience=%s",
+        "[PostInsights] Start media_id=%s account_id=%s history_count=%d run_ai=%s",
         target_post_model.media_id,
         target_post_model.account_id,
         len(historical_models),
         run_ai,
-        run_advanced_caption_ai,
-        run_advanced_audience_ai,
     )
 
     if target_post_model.core_metrics is None:
@@ -121,54 +113,15 @@ async def build_single_post_insights(
         getattr(derived_metrics, "engagement_rate", None),
     )
 
-    caption_effectiveness_score: CaptionEffectivenessScore | None = None
-    if run_advanced_caption_ai and isinstance(post_copy.caption_text, str) and post_copy.caption_text.strip():
-        logger.debug("[PostInsights] Running advanced caption AI media_id=%s", post_copy.media_id)
-        s2_payload = await run_caption_analysis_llm(post_copy.caption_text)
-        if isinstance(s2_payload, dict):
-            try:
-                caption_effectiveness_score = CaptionEffectivenessScore.model_validate(s2_payload)
-            except Exception:
-                caption_effectiveness_score = None
-    if caption_effectiveness_score is None:
-        logger.debug("[PostInsights] Using deterministic caption scoring media_id=%s", post_copy.media_id)
-        caption_effectiveness_score = compute_s2_caption_effectiveness(post_copy.caption_text)
+    logger.debug("[PostInsights] Using deterministic caption scoring media_id=%s", post_copy.media_id)
+    caption_effectiveness_score = compute_s2_caption_effectiveness(post_copy.caption_text)
     post_copy = post_copy.model_copy(update={"caption_effectiveness_score": caption_effectiveness_score})
 
-    audience_relevance_score: AudienceRelevanceScore | None = None
-    creator_cat = post_copy.creator_dominant_category
-    post_cat = post_copy.post_category
-    if run_advanced_audience_ai and (creator_cat or post_cat):
-        logger.debug(
-            "[PostInsights] Running advanced audience AI media_id=%s creator_category=%s post_category=%s",
-            post_copy.media_id,
-            creator_cat,
-            post_cat,
-        )
-        s4_payload = await run_audience_relevance_llm(creator_cat, post_cat)
-        if isinstance(s4_payload, dict):
-            affinity = s4_payload.get("affinity_band", "UNKNOWN")
-            s4_raw = s4_payload.get("s4_raw_0_100", 50)
-            explanation = s4_payload.get("audience_overlap_explanation")
-            notes = []
-            if isinstance(explanation, str) and explanation.strip():
-                notes.append(explanation.strip()[:160])
-            if isinstance(affinity, str):
-                affinity = affinity.strip().upper()
-            else:
-                affinity = "UNKNOWN"
-            s4_raw_value = float(s4_raw) if isinstance(s4_raw, (int, float)) else 50.0
-            audience_relevance_score = AudienceRelevanceScore(
-                post_category=post_cat,
-                creator_dominant_category=creator_cat,
-                affinity_band=affinity,
-                s4_raw_0_100=int(s4_raw_value),
-                total_0_50=round(s4_raw_value / 2.0, 1),
-                notes=notes,
-            )
-    if audience_relevance_score is None:
-        logger.debug("[PostInsights] Using deterministic audience scoring media_id=%s", post_copy.media_id)
-        audience_relevance_score = compute_s4_audience_relevance(post_cat, creator_cat)
+    logger.debug("[PostInsights] Using deterministic audience scoring media_id=%s", post_copy.media_id)
+    audience_relevance_score = compute_s4_audience_relevance(
+        post_copy.post_category,
+        post_copy.creator_dominant_category,
+    )
     post_copy = post_copy.model_copy(update={"audience_relevance_score": audience_relevance_score})
 
     benchmark_metrics = compute_benchmark_metrics(post_copy, filtered_history)

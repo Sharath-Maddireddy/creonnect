@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import os
+import time
 from typing import Any, Awaitable, Callable
 
 import grpc
@@ -25,6 +28,7 @@ _GRPC_METHOD_START_ACCOUNT = f"/{_GRPC_SERVICE_NAME}/StartAccountAnalysis"
 _GRPC_METHOD_GET_ACCOUNT_STATUS = f"/{_GRPC_SERVICE_NAME}/GetAccountAnalysisStatus"
 _GRPC_METHOD_START_SINGLE_POST = f"/{_GRPC_SERVICE_NAME}/StartSinglePostAnalysis"
 _GRPC_METHOD_GET_SINGLE_POST_STATUS = f"/{_GRPC_SERVICE_NAME}/GetSinglePostAnalysisStatus"
+_GRPC_ALLOWED_SKEW_SECONDS = 300
 
 _grpc_server: grpc.aio.Server | None = None
 
@@ -40,6 +44,38 @@ def _json_loads(data: bytes) -> dict[str, Any]:
 
 def _json_dumps(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def _metadata_value(context: grpc.aio.ServicerContext, key: str) -> str | None:
+    lowered = key.strip().lower()
+    for meta in context.invocation_metadata():
+        if meta.key.strip().lower() == lowered:
+            return meta.value
+    return None
+
+
+def _verify_internal_hmac(context: grpc.aio.ServicerContext, request: bytes) -> None:
+    secret = (os.getenv("CREONNECT_INTERNAL_HMAC_SECRET") or "").strip()
+    if not secret:
+        return
+
+    raw_timestamp = (_metadata_value(context, "x-creonnect-timestamp") or "").strip()
+    signature = (_metadata_value(context, "x-creonnect-signature") or "").strip().lower()
+    if not raw_timestamp or not signature:
+        raise PermissionError("Missing required internal auth metadata")
+
+    try:
+        request_ts = int(raw_timestamp)
+    except ValueError as exc:
+        raise PermissionError("Invalid internal auth timestamp") from exc
+
+    if abs(int(time.time()) - request_ts) > _GRPC_ALLOWED_SKEW_SECONDS:
+        raise PermissionError("Internal auth timestamp outside allowed window")
+
+    payload = raw_timestamp.encode("utf-8") + b"." + request
+    expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise PermissionError("Invalid internal auth signature")
 
 
 async def _start_account_handler(payload: dict[str, Any]) -> dict[str, Any]:
@@ -77,9 +113,14 @@ def _build_unary_unary_handler(
 ) -> grpc.RpcMethodHandler:
     async def _handler(request: bytes, context: grpc.aio.ServicerContext) -> bytes:
         try:
+            _verify_internal_hmac(context, request)
             payload = _json_loads(request)
             response = await func(payload)
             return _json_dumps(response if isinstance(response, dict) else {"ok": False, "error": {"message": "Invalid response"}})
+        except PermissionError as exc:
+            context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+            context.set_details(str(exc))
+            return _json_dumps({"ok": False, "error": {"type": exc.__class__.__name__, "message": str(exc)}})
         except Exception as exc:  # noqa: BLE001
             logger.exception("[gRPCAnalysis] Handler failed: %s", exc)
             return _json_dumps({"ok": False, "error": {"type": exc.__class__.__name__, "message": str(exc)}})
@@ -99,7 +140,7 @@ async def start_grpc_analysis_server() -> None:
     if not enabled:
         logger.info("[gRPCAnalysis] Disabled via PYTHON_GRPC_ENABLED")
         return
-    host = str(os.getenv("PYTHON_GRPC_HOST", "0.0.0.0")).strip() or "0.0.0.0"
+    host = str(os.getenv("PYTHON_GRPC_HOST", "127.0.0.1")).strip() or "127.0.0.1"
     port = int(os.getenv("PYTHON_GRPC_PORT", "50051"))
     server = grpc.aio.server()
     handlers = {

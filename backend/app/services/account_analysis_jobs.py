@@ -6,10 +6,10 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable
-from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
-from threading import Thread
+from threading import Lock, Thread
 from typing import Any
 from uuid import uuid4
 
@@ -18,7 +18,6 @@ from rq import Retry, get_current_job
 from backend.app.account_sources.creonnect_bd_client import CreonnectBDClient
 from backend.app.account_sources import materialize_account_source_payload
 from backend.app.domain.post_models import SinglePostInsights
-from backend.app.infra.redis_client import get_json, get_redis, get_text, set_json, set_text
 import backend.app.infra.redis_client as redis_client
 from backend.app.infra.job_queue import (
     ACCOUNT_ANALYSIS_JOB_NAME,
@@ -45,6 +44,7 @@ from backend.app.services.account_analysis_result_store import persist_account_a
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
 from backend.app.utils.logger import logger
+from backend.app.utils.number_utils import safe_float as _safe_float
 from backend.app.workers.embedding_worker import upsert_creator
 
 
@@ -62,6 +62,12 @@ ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS = max(1800, DEFAULT_JOB_TIMEOUT_SECONDS *
 
 _ACTIVE_REUSABLE_STATUSES = {"queued", "started", "succeeded"}
 _RUNNING_STATUSES = {"queued", "started"}
+_GEMINI_CONCURRENCY_LIMIT = 8
+_ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,120}$")
+
+_ASYNC_BRIDGE_LOOP: asyncio.AbstractEventLoop | None = None
+_ASYNC_BRIDGE_THREAD: Thread | None = None
+_ASYNC_BRIDGE_LOCK = Lock()
 
 
 def get_redis():
@@ -358,8 +364,11 @@ def _normalize_account_id(value: Any) -> str:
     account_id = value.strip() if isinstance(value, str) else ""
     if not account_id:
         raise ValueError("account_id is required for account analysis jobs.")
+    if not _ACCOUNT_ID_PATTERN.fullmatch(account_id):
+        raise ValueError(
+            "account_id must be 1-120 characters and contain only letters, numbers, or underscores."
+        )
     return account_id
-
 
 def _normalize_post_limit(value: Any) -> int:
     try:
@@ -504,9 +513,11 @@ def _resolve_reusable_job(
 def _enforce_rate_limit(account_id: str, running_job_id: str | None) -> None:
     redis_client = get_redis()
     rate_key = _rate_key(account_id)
-    rate_value = int(redis_client.incr(rate_key))
-    if rate_value == 1:
-        redis_client.expire(rate_key, ACCOUNT_ANALYSIS_RATE_TTL_SECONDS)
+    pipe = redis_client.pipeline()
+    pipe.incr(rate_key)
+    pipe.expire(rate_key, ACCOUNT_ANALYSIS_RATE_TTL_SECONDS)
+    rate_value, _ = pipe.execute()
+    rate_value = int(rate_value)
     if rate_value <= ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR:
         return
     raise AccountAnalysisRateLimitError(
@@ -516,7 +527,6 @@ def _enforce_rate_limit(account_id: str, running_job_id: str | None) -> None:
         ),
         job_id=running_job_id,
     )
-
 
 def _restore_rate_limit_counter(account_id: str) -> None:
     rate_key = _rate_key(account_id)
@@ -532,19 +542,39 @@ def _run_coroutine_sync(coro):
     except RuntimeError:
         return asyncio.run(coro)
 
-    future: Future[Any] = Future()
-
-    def _runner() -> None:
-        try:
-            result = asyncio.run(coro)
-            future.set_result(result)
-        except Exception as exc:  # pragma: no cover
-            future.set_exception(exc)
-
-    worker = Thread(target=_runner, name="account-analysis-sync-wrapper", daemon=True)
-    worker.start()
+    loop = _get_async_bridge_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
     return future.result()
 
+
+def _get_async_bridge_loop() -> asyncio.AbstractEventLoop:
+    global _ASYNC_BRIDGE_LOOP, _ASYNC_BRIDGE_THREAD
+    with _ASYNC_BRIDGE_LOCK:
+        if _ASYNC_BRIDGE_LOOP is not None and _ASYNC_BRIDGE_LOOP.is_running():
+            return _ASYNC_BRIDGE_LOOP
+
+        ready = Lock()
+        ready.acquire()
+
+        def _runner() -> None:
+            global _ASYNC_BRIDGE_LOOP
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            _ASYNC_BRIDGE_LOOP = loop
+            ready.release()
+            loop.run_forever()
+
+        _ASYNC_BRIDGE_THREAD = Thread(
+            target=_runner,
+            name="account-analysis-async-bridge",
+            daemon=True,
+        )
+        _ASYNC_BRIDGE_THREAD.start()
+        ready.acquire()
+        ready.release()
+        if _ASYNC_BRIDGE_LOOP is None:
+            raise RuntimeError("Failed to initialize async bridge loop.")
+        return _ASYNC_BRIDGE_LOOP
 
 async def _materialize_posts_for_enqueue_async(
     payload: dict[str, Any],
@@ -598,7 +628,7 @@ def _enqueue_account_analysis_job_impl(
         post_limit=post_limit,
         payload_hash=payload_hash,
     )
-    # Return the existing active job immediately — no rate-limit charge for a reuse.
+    # Return the existing active job immediately - no rate-limit charge for a reuse.
     if reusable_job_id and reusable_status:
         logger.info(
             "[AccountAnalysisJob] Reusing existing job job_id=%s account_id=%s status=%s",
@@ -828,15 +858,6 @@ def _normalize_summary_post_type(value: str | None) -> str | None:
     if normalized in {"IMAGE", "REEL"}:
         return normalized
     return None
-
-
-def _safe_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _bounded_media_url(value: Any) -> str | None:
@@ -1139,59 +1160,66 @@ async def _run_single_post_pipeline_if_needed(
             notes_by_post_id=notes_by_post_id,
         )
 
-    processed_posts: list[SinglePostInsights] = []
-    total = len(posts)
-    for index, post in enumerate(posts, start=1):
-        update_progress(stage="posts", done=index - 1, total=total)
-        appended = False
-        try:
-            historical = [candidate for candidate in posts if candidate.media_id != post.media_id]
-            pipeline_result = await build_single_post_insights(
-                target_post=post,
-                historical_posts=historical,
-                run_ai=True,
-            )
-            processed_post = pipeline_result["post"]
-            processed_post = _maybe_attach_inline_reel_analysis(processed_post)
-            processed_posts.append(processed_post)
-            appended = True
 
+
+    semaphore = asyncio.Semaphore(_GEMINI_CONCURRENCY_LIMIT)
+    total = len(posts)
+
+    async def _analyse_one(post: SinglePostInsights) -> tuple[SinglePostInsights, dict[str, Any], list[dict[str, Any]], bool]:
+        try:
+            async with semaphore:
+                historical = [candidate for candidate in posts if candidate.media_id != post.media_id]
+                pipeline_result = await build_single_post_insights(
+                    target_post=post,
+                    historical_posts=historical,
+                    run_ai=True,
+                )
+            processed_post = _maybe_attach_inline_reel_analysis(pipeline_result["post"])
             ai_analysis = pipeline_result.get("ai_analysis")
             ai_warnings = _extract_ai_warnings(ai_analysis if isinstance(ai_analysis, dict) else None)
             notes = _extract_ai_notes(ai_analysis if isinstance(ai_analysis, dict) else None, vision_enabled=vision_enabled)
-            post_id = post.media_id if isinstance(post.media_id, str) else ""
-            notes_by_post_id[post_id] = notes
-
-            for warning in ai_warnings:
-                _append_unique_warning(warnings, warning)
-                code = _warning_code(warning)
-                if _is_vision_warning(code):
-                    vision_error_count += 1
-                _increment_post_warning_count(per_post_warnings_count, _warning_post_id(warning), 1)
-
-            if notes.get("fallback_used") is True:
-                ai_fallback_count += 1
+            fallback_used = notes.get("fallback_used") is True
+            return processed_post, notes, ai_warnings, fallback_used
         except Exception as exc:
             logger.warning(
                 "[AccountAnalysisJob] Failed per-post analysis for media_id=%s: %s",
                 getattr(post, "media_id", None),
                 exc,
             )
-            if not appended:
-                processed_posts.append(post)
             post_id = post.media_id if isinstance(post.media_id, str) else ""
-            notes_by_post_id[post_id] = {"vision_status": "error", "fallback_used": True}
-            _append_unique_warning(
-                warnings,
-                _build_warning(
-                    code="POST_PIPELINE_ERROR",
-                    message="Per-post analysis failed; using raw post output.",
-                    post_id=post_id,
-                ),
+            return (
+                post,
+                {"vision_status": "error", "fallback_used": True},
+                [
+                    _build_warning(
+                        code="POST_PIPELINE_ERROR",
+                        message="Per-post analysis failed; using raw post output.",
+                        post_id=post_id,
+                    )
+                ],
+                False,
             )
-            _increment_post_warning_count(per_post_warnings_count, post_id, 1)
-        finally:
-            update_progress(stage="posts", done=index, total=total)
+
+    results = await asyncio.gather(*[_analyse_one(post) for post in posts], return_exceptions=False)
+
+    processed_posts: list[SinglePostInsights] = []
+    for post, result in zip(posts, results, strict=False):
+        processed_post, notes, ai_warnings, fallback_used = result
+        processed_posts.append(processed_post)
+        post_id = post.media_id if isinstance(post.media_id, str) else ""
+        notes_by_post_id[post_id] = notes
+
+        for warning in ai_warnings:
+            _append_unique_warning(warnings, warning)
+            code = _warning_code(warning)
+            if _is_vision_warning(code):
+                vision_error_count += 1
+            _increment_post_warning_count(per_post_warnings_count, _warning_post_id(warning), 1)
+
+        if fallback_used:
+            ai_fallback_count += 1
+
+    update_progress(stage="posts", done=total, total=total)
     return _pipeline_result_payload(
         processed_posts=processed_posts,
         warnings=warnings,
@@ -1417,11 +1445,11 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         try:
             if include_posts_summary:
                 result_payload["posts_summary"] = _bounded_posts_summary(
-                processed_posts,
-                include_posts_summary_max=include_posts_summary_max,
-                vision_enabled=vision_enabled,
-                notes_by_post_id=notes_by_post_id,
-            )
+                    processed_posts,
+                    include_posts_summary_max=include_posts_summary_max,
+                    vision_enabled=vision_enabled,
+                    notes_by_post_id=notes_by_post_id,
+                )
         except Exception as summary_exc:
             logger.warning(
                 "[AccountAnalysisJob] Non-fatal: failed to build posts_summary for %s: %s",

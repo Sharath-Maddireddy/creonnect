@@ -18,7 +18,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON, TypeDecorator
 
-from backend.app.utils.logger import logger
+from backend.app.utils.env_numbers import get_int_env
 
 try:
     from pgvector.sqlalchemy import Vector
@@ -26,21 +26,11 @@ except ImportError:  # pragma: no cover - exercised when dependency is absent lo
     Vector = None
 
 
-def _get_int_env(name: str, default: int) -> int:
-    raw_value = (os.getenv(name) or "").strip()
-    if not raw_value:
-        return default
-    try:
-        return int(raw_value)
-    except ValueError:
-        logger.warning("Invalid %s=%r; falling back to %s", name, raw_value, default)
-        return default
-
 
 CREATOR_EMBEDDING_MODEL_NAME = "text-embedding-3-small"
 EMBEDDING_DIMENSION = 1536
-HNSW_M = _get_int_env("PGVECTOR_HNSW_M", 32)
-HNSW_EF_CONSTRUCTION = _get_int_env("PGVECTOR_HNSW_EF_CONSTRUCTION", 128)
+HNSW_M = get_int_env("PGVECTOR_HNSW_M", 32)
+HNSW_EF_CONSTRUCTION = get_int_env("PGVECTOR_HNSW_EF_CONSTRUCTION", 128)
 
 
 class Base(DeclarativeBase):

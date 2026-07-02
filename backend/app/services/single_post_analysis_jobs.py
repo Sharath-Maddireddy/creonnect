@@ -48,7 +48,7 @@ def _stable_post_id(*, media_url: str, post_type: str, caption_text: str) -> str
         separators=(",", ":"),
         ensure_ascii=True,
     ).encode("utf-8")
-    digest = hashlib.sha1(payload).hexdigest()[:16]
+    digest = hashlib.sha256(payload).hexdigest()[:24]
     return f"auto_{digest}"
 
 
@@ -79,8 +79,6 @@ def _normalize_enqueue_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "audio_name": _normalize_text(payload.get("audio_name")),
         "posted_at": payload.get("posted_at"),
         "connection_id": _normalize_text(payload.get("connection_id")),
-        "run_advanced_caption_ai": bool(payload.get("run_advanced_caption_ai", True)),
-        "run_advanced_audience_ai": bool(payload.get("run_advanced_audience_ai", True)),
     }
     return normalized
 
@@ -174,8 +172,6 @@ def run_single_post_analysis_job(payload: dict[str, Any]) -> None:
                 target_post=creator_post,
                 historical_posts=[],
                 run_ai=True,
-                run_advanced_caption_ai=bool(payload.get("run_advanced_caption_ai", True)),
-                run_advanced_audience_ai=bool(payload.get("run_advanced_audience_ai", True)),
             )
         )
         raw_post = pipeline_result.get("post")

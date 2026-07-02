@@ -67,7 +67,7 @@ def _authenticity_band(score: float) -> str:
     return "low"
 
 
-def build_creator_dashboard(creator_id: str, access_token: str | None = None) -> dict:
+async def build_creator_dashboard_async(creator_id: str, access_token: str | None = None) -> dict:
     """
     Build the full creator dashboard response.
 
@@ -83,7 +83,7 @@ def build_creator_dashboard(creator_id: str, access_token: str | None = None) ->
             )
             return map_instagram_to_ai_inputs(api_profile, api_media)
 
-        profile, posts = asyncio.run(_fetch_instagram_data())
+        profile, posts = await _fetch_instagram_data()
     else:
         profile, posts = load_synthetic()
 
@@ -249,10 +249,10 @@ def build_creator_dashboard(creator_id: str, access_token: str | None = None) ->
     }
 
 
-def build_creator_analytics(creator_id: str, access_token: str | None = None) -> dict:
+async def build_creator_analytics_async(creator_id: str, access_token: str | None = None) -> dict:
     """Build dashboard payload plus account-health analytics and content breakdown."""
 
-    payload = build_creator_dashboard(creator_id, access_token=access_token)
+    payload = await build_creator_dashboard_async(creator_id, access_token=access_token)
     summary = dict(payload.get("summary") or {})
     posts_data = payload.get("posts") if isinstance(payload.get("posts"), list) else []
 
@@ -307,11 +307,10 @@ def build_creator_analytics(creator_id: str, access_token: str | None = None) ->
     vision_summary = compute_account_vision_summary(single_post_models)
     content_quality_breakdown = compute_content_quality_breakdown(single_post_models)
 
-    # AI creator intelligence (uses asyncio.run — safe here since we are in a sync FastAPI endpoint thread)
+    # AI creator intelligence
     try:
         niche = payload.get("summary", {}).get("niche") or {}
-        creator_intelligence = asyncio.run(
-            generate_creator_intelligence(
+        creator_intelligence = await generate_creator_intelligence(
                 posts=single_post_models,
                 account_id=creator_id,
                 username=summary.get("username"),
@@ -320,7 +319,6 @@ def build_creator_analytics(creator_id: str, access_token: str | None = None) ->
                 creator_dominant_category=niche.get("primary_niche"),
                 follower_count=followers_count,
             )
-        )
     except Exception:
         from backend.app.domain.account_models import CreatorIntelligence
         creator_intelligence = CreatorIntelligence()
@@ -368,3 +366,14 @@ def build_creator_analytics(creator_id: str, access_token: str | None = None) ->
     enriched_payload["creator_intelligence"] = creator_intelligence.model_dump(mode="python")
     enriched_payload["content_type_breakdown"] = content_type_breakdown
     return enriched_payload
+
+
+def build_creator_dashboard(creator_id: str, access_token: str | None = None) -> dict:
+    """Sync wrapper retained for tests and legacy callers."""
+    return asyncio.run(build_creator_dashboard_async(creator_id, access_token=access_token))
+
+
+def build_creator_analytics(creator_id: str, access_token: str | None = None) -> dict:
+    """Sync wrapper retained for tests and legacy callers."""
+    return asyncio.run(build_creator_analytics_async(creator_id, access_token=access_token))
+

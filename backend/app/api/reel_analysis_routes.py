@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from backend.app.api.auth import verify_api_key
 from backend.app.services.reel_analysis_jobs import (
     enqueue_reel_analysis_job,
     get_reel_job_status,
@@ -14,6 +16,19 @@ from backend.app.services.reel_analysis_jobs import (
 
 
 router = APIRouter(prefix="/api/reel-analysis", tags=["Reel Analysis"])
+
+
+def _require_reel_analysis_api_key_if_configured(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> str | None:
+    env = (os.getenv("ENV") or "").strip().lower()
+    if env != "production":
+        return None
+
+    expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
+    if not expected_api_key:
+        return None
+    return verify_api_key(x_api_key)
 
 
 class ReelEnqueueRequest(BaseModel):
@@ -34,7 +49,7 @@ class ReelEnqueueRequest(BaseModel):
         return value.strip()
 
 
-@router.post("/enqueue")
+@router.post("/enqueue", dependencies=[Depends(_require_reel_analysis_api_key_if_configured)])
 def enqueue_reel_analysis(request: ReelEnqueueRequest) -> dict[str, Any]:
     """Enqueue reel analysis and return the job id."""
     try:
@@ -45,7 +60,7 @@ def enqueue_reel_analysis(request: ReelEnqueueRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to enqueue: {exc}")
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", dependencies=[Depends(_require_reel_analysis_api_key_if_configured)])
 def get_reel_job(job_id: str) -> dict[str, Any]:
     """Return reel-analysis job status payload."""
     normalized_job_id = job_id.strip()
