@@ -7,14 +7,17 @@ Exports:
 
 The function uses a strict system prompt instructing the LLM to act as a
 viral trend spotter and to return only TOON text representing a list of
-`GlobalTrend` objects. Results are parsed with the project's `toon` parser
-and validated into Pydantic `GlobalTrend` models. On any error a safe
-fallback list is returned to keep the pipeline resilient.
+`GlobalTrend` objects. Before calling the LLM, live trend signals are fetched
+and injected into the prompt payload as grounding context. Results are parsed
+with the project's `toon` parser and validated into Pydantic `GlobalTrend`
+models. On any error a safe fallback list is returned to keep the pipeline
+resilient.
 """
 
 import asyncio
 from typing import List
 
+from backend.app.analytics.trend_signals_fetcher import fetch_live_trend_signals
 from backend.app.ai.llm_client import LLMClient
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.trend_models import CreatorNiche, GlobalTrend
@@ -50,10 +53,22 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
 
     # Build a compact user payload describing the niche
     sub_niches_text = "\n".join(f"- {s}" for s in (niche.sub_niches or []))
+    live_signals = await fetch_live_trend_signals(
+        primary_category=niche.primary_category,
+        sub_niches=niche.sub_niches,
+    )
+    live_signals_text = (
+        "\n".join(f"- {signal}" for signal in live_signals)
+        if live_signals
+        else "none available"
+    )
     user_payload = (
         f"primary_category: {niche.primary_category}\n"
         f"sub_niches:\n{sub_niches_text if sub_niches_text else '[]'}\n"
-        "instruction: Provide 3-5 rising trends tailored to the above niche."
+        f"live_trend_signals:\n{live_signals_text}\n"
+        "instruction: Using the live_trend_signals as your primary evidence, "
+        "identify 3-5 rising trends tailored to the above niche. If "
+        "live_trend_signals is empty, use your best knowledge of the niche."
     )
 
     prompt = {"system": system_prompt, "user": user_payload}
