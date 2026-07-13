@@ -1104,10 +1104,11 @@ def _call_openai_text_api(*, api_key: str, prompt: str) -> str:
                     "content": prompt,
                 }
             ],
-            "temperature": 0,
         }
         if "5.6" in model_name or "o1" in model_name:
             payload["max_completion_tokens"] = 2000
+        else:
+            payload["temperature"] = 0
             
         response = client.chat.completions.create(**payload)
         text = (response.choices[0].message.content or "").strip() if response.choices else ""

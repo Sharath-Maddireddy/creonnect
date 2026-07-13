@@ -184,12 +184,13 @@ class LLMClient:
                             {"role": "system", "content": prompt["system"]},
                             {"role": "user", "content": prompt["user"]}
                         ],
-                        "temperature": self.temperature,
                     }
                     if "5.6" in self.model_name or "o1" in self.model_name:
                         request_payload["max_completion_tokens"] = self.max_tokens
+                        # Do not include temperature for o1/5.6 models
                     else:
                         request_payload["max_tokens"] = self.max_tokens
+                        request_payload["temperature"] = self.temperature
 
                     response_format = prompt.get("response_format")
                     if isinstance(response_format, dict) and not skip_response_format:
@@ -286,12 +287,13 @@ class LLMClient:
                         "messages": messages,
                         "tools": tools,
                         "tool_choice": tool_choice,
-                        "temperature": self.temperature,
                     }
                     if "5.6" in self.model_name or "o1" in self.model_name:
                         payload["max_completion_tokens"] = self.max_tokens
+                        # Do not include temperature for o1/5.6 models
                     else:
                         payload["max_tokens"] = self.max_tokens
+                        payload["temperature"] = self.temperature
 
                     return self._client.chat.completions.create(**payload)
 
