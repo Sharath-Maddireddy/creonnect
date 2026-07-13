@@ -125,3 +125,7 @@ def test_float_cringe_score_from_helper_applies_penalty(monkeypatch) -> None:
     penalty_keys = {penalty.key for penalty in score.penalties}
     assert "extreme_cringe" in penalty_keys
     assert score.flags["cringe_detected"] is True
+
+def test_brand_match_equal_token_count_is_symmetric() -> None:
+    assert _is_brand_match("meta platforms", "platforms meta") is False
+    assert _is_brand_match("meta platforms", "meta platforms") is True

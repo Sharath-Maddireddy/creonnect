@@ -31,6 +31,7 @@ def test_client_includes_access_token_from_env(monkeypatch) -> None:
         return _FakeResponse()
 
     monkeypatch.setenv("CREONNECT_BD_ACCESS_TOKEN", "test-access-token")
+    monkeypatch.delenv("CREONNECT_BD_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setattr("backend.app.account_sources.creonnect_bd_client.urlopen", _fake_urlopen)
 
     client = CreonnectBDClient(base_url="https://bd.example")
@@ -38,6 +39,7 @@ def test_client_includes_access_token_from_env(monkeypatch) -> None:
 
     assert connections == []
     assert captured["timeout"] == 30.0
+
 
     parsed = urlparse(captured["url"])
     query = parse_qs(parsed.query)

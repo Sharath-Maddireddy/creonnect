@@ -19,15 +19,10 @@ INTERNAL_TOOLS_DIR = Path(__file__).resolve().parent
 ARTIFACTS_DIR = INTERNAL_TOOLS_DIR / "artifacts"
 
 # ── Load .env BEFORE any backend imports ──────────────────────────
+from dotenv import load_dotenv
 env_path = REPO_ROOT / "backend" / ".env"
 if env_path.exists():
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+    load_dotenv(env_path, override=True)
 
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 

@@ -63,6 +63,9 @@ def test_materialize_creonnect_bd_source_pages_posts(monkeypatch) -> None:
         def __init__(self, *args, **kwargs) -> None:  # noqa: D401, ANN002, ANN003
             return None
 
+        async def get_creator_profile(self) -> dict[str, Any]:
+            return {"creator": {"niches": ["fitness", "lifestyle"]}}
+
         async def list_connections(self, *, platform: str = "instagram", include_disconnected: bool = False):
             assert platform == "instagram"
             assert include_disconnected is False

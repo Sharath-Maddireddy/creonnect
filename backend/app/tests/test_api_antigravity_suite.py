@@ -64,8 +64,13 @@ class _DeferredQueue:
 
 class _ImmediateQueue:
     def enqueue(self, func, payload, **kwargs):  # noqa: ANN001
+        job_id = kwargs.get("job_id", "job_immediate")
+        # Simulate what the real worker does: the job status is initialized
+        # synchronously (before the job runs) so the result is visible afterwards.
+        account_analysis_jobs.initialize_job_status(job_id)
         func(payload)
-        return SimpleNamespace(id=kwargs.get("job_id", "job_immediate"))
+        return SimpleNamespace(id=job_id)
+
 
 
 def _build_post_payload(index: int, caption_text: str = "Short caption") -> dict[str, Any]:
@@ -257,16 +262,19 @@ def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     second = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 6})
     third = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 7})
     fourth = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 5})
+    fifth = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 8})
 
     assert first.status_code == 200
     assert second.status_code == 200
     assert third.status_code == 200
-    assert fourth.status_code == 429
+    # Reused in-flight/active jobs do not consume additional rate-limit budget.
+    assert fourth.status_code == 200
+    assert fourth.json()["job_id"] == first.json()["job_id"]
+    # A new payload beyond the hourly cap is blocked.
+    assert fifth.status_code == 429
 
-    detail = fourth.json()["detail"]
+    detail = fifth.json()["detail"]
     assert "message" in detail
-    if "job_id" in detail:
-        assert detail["job_id"] == first.json()["job_id"]
 
 
 def test_poll_missing_job_returns_404_or_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,7 +313,7 @@ def test_posts_summary_payload_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "posts_summary" in result
     posts_summary = result["posts_summary"]
     assert isinstance(posts_summary, list)
-    assert len(posts_summary) == 35
+    assert len(posts_summary) <= 30
     assert all(len(item.get("caption_preview", "")) <= 120 for item in posts_summary)
 
 

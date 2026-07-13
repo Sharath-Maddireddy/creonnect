@@ -7,15 +7,15 @@ import backend.app.analytics.reel_gemini_engine as reel_gemini_engine
 from backend.app.ai.prompts import REEL_VISION_EVALUATION_PROMPT
 
 
-def test_reel_prompt_contains_hook_and_sync_rubrics() -> None:
-    assert "Scoring rubric for hook_strength_score (0-1):" in REEL_VISION_EVALUATION_PROMPT
-    assert "0.90-1.00: elite hook" in REEL_VISION_EVALUATION_PROMPT
-    assert "Slow pacing, dark lighting, no text, and no clear motion should generally land in 0.10-0.30." in (
-        REEL_VISION_EVALUATION_PROMPT
-    )
-    assert "Scoring rubric for audio_visual_sync (0-1):" in REEL_VISION_EVALUATION_PROMPT
-    assert "Do not score above 0.85 unless there are clear timed cuts" in REEL_VISION_EVALUATION_PROMPT
+def test_reel_prompt_forces_terse_toon_output() -> None:
+    assert "Return ONLY TOON. No markdown. No prose. No reasoning. No filler." in REEL_VISION_EVALUATION_PROMPT
+    assert "Use the shortest possible labels, especially for enums" in REEL_VISION_EVALUATION_PROMPT
+    assert "Return a bare TOON object only." in REEL_VISION_EVALUATION_PROMPT
 
+
+def test_reel_model_names_are_explicit() -> None:
+    assert reel_gemini_engine.PRIMARY_REEL_MODEL == "gemini-2.5-flash-lite"
+    assert reel_gemini_engine.FALLBACK_REEL_MODEL == "gemini-flash-lite-latest"
 
 def test_upload_and_analyse_uses_imported_reel_prompt(monkeypatch) -> None:
     captured_contents: list[object] = []
@@ -189,3 +189,4 @@ adult_content_detected false
     assert captured_contents[0] == REEL_VISION_EVALUATION_PROMPT
     assert payload["hook_strength_score"] == 0.64
     assert payload["audio_visual_sync"] == 0.66
+

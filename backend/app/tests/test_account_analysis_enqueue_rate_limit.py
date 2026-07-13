@@ -188,7 +188,11 @@ def test_creonnect_bd_source_is_materialized_before_enqueue(monkeypatch) -> None
     assert len(queued_payload["posts"]) == 1
 
 
-def test_source_materialization_requires_async_helper_inside_running_event_loop(monkeypatch) -> None:
+def test_source_materialization_works_inside_running_event_loop(monkeypatch) -> None:
+    """_materialize_posts_for_enqueue uses a background thread when called from within a running
+    event loop, so it now completes successfully rather than raising ValueError.
+    The async variant _materialize_posts_for_enqueue_async uses await and works natively.
+    """
     async def _fake_materialize_account_source_payload(payload: dict[str, Any], *, post_limit: int) -> dict[str, Any]:
         assert payload["source"] == "creonnect_bd"
         assert payload["connection_id"] == "conn_123"
@@ -202,8 +206,10 @@ def test_source_materialization_requires_async_helper_inside_running_event_loop(
 
     monkeypatch.setattr(account_analysis_jobs, "materialize_account_source_payload", _fake_materialize_account_source_payload)
 
-    async def _run_sync_inside_loop() -> None:
-        account_analysis_jobs._materialize_posts_for_enqueue(
+    async def _run_sync_inside_loop() -> dict[str, Any]:
+        # _materialize_posts_for_enqueue now spins a background thread when inside a
+        # running loop rather than raising — verify it returns the right payload.
+        return account_analysis_jobs._materialize_posts_for_enqueue(
             {"source": "creonnect_bd", "connection_id": "conn_123"},
             post_limit=5,
         )
@@ -214,17 +220,18 @@ def test_source_materialization_requires_async_helper_inside_running_event_loop(
             post_limit=5,
         )
 
-    try:
-        asyncio.run(_run_sync_inside_loop())
-    except ValueError as exc:
-        assert "cannot be used from a running event loop" in str(exc)
-    else:
-        raise AssertionError("Expected ValueError when sync materialization runs inside an event loop")
+    # Sync path: succeeds via background thread
+    result_sync = asyncio.run(_run_sync_inside_loop())
+    assert result_sync["source"] == "creonnect_bd"
+    assert isinstance(result_sync.get("posts"), list)
+    assert len(result_sync["posts"]) == 1
 
+    # Async path: succeeds via native await
     result = asyncio.run(_run_async_inside_loop())
     assert result["source"] == "creonnect_bd"
     assert isinstance(result.get("posts"), list)
     assert len(result["posts"]) == 1
+
 
 
 def test_async_enqueue_materializes_creonnect_bd_source(monkeypatch) -> None:

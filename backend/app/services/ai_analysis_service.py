@@ -1094,16 +1094,22 @@ def _call_openai_text_api(*, api_key: str, prompt: str) -> str:
             api_key=api_key,
             http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
         )
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
+        
+    try:
+        payload = {
+            "model": model_name,
+            "messages": [
                 {
                     "role": "user",
                     "content": prompt,
                 }
             ],
-            temperature=0,
-        )
+            "temperature": 0,
+        }
+        if "5.6" in model_name or "o1" in model_name:
+            payload["max_completion_tokens"] = 2000
+            
+        response = client.chat.completions.create(**payload)
         text = (response.choices[0].message.content or "").strip() if response.choices else ""
         if not text:
             raise ValueError("OpenAI repair response did not include text output.")

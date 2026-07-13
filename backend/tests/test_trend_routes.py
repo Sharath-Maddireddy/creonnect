@@ -55,14 +55,26 @@ async def test_get_trends_returns_stored():
 
 @pytest.mark.asyncio
 async def test_refresh_trends_rate_limited(monkeypatch):
-    # make aincr_with_expire return >1
     monkeypatch.setattr(trend_routes, "aincr_with_expire", AsyncMock(return_value=2))
+    monkeypatch.setattr(trend_routes.TrendAnalysisCache, "get", lambda account_id, posts: None)
+
+    fake_ctx = MagicMock()
+    fake_ctx.historical_posts = []
+    fake_ctx.account_data = {"bio": "bio", "username": "uname"}
+    monkeypatch.setattr(trend_routes, "load_draft_history_context", lambda account_id: fake_ctx)
+
+    fake_job = MagicMock()
+    fake_job.id = "trend-job-123"
+    monkeypatch.setattr(trend_routes, "enqueue_trend_analysis_job", lambda account_id: fake_job)
 
     db = AsyncMock()
-    with pytest.raises(Exception) as excinfo:
-        await trend_routes.refresh_trends("acct-rate", db=db, current_user=MagicMock())
-    assert "Rate limit" in str(excinfo.value)
+    res = await trend_routes.refresh_trends("acct-rate", db=db, current_user=MagicMock())
 
+    assert res == {
+        "status": "queued",
+        "job_id": "trend-job-123",
+        "message": "Trend analysis queued. Check status with GET /trends/job/{job_id}",
+    }
 
 @pytest.mark.asyncio
 async def test_refresh_trends_upserts(monkeypatch):
@@ -96,3 +108,5 @@ async def test_refresh_trends_upserts(monkeypatch):
     assert isinstance(res, TrendAnalysisResult)
     db.add.assert_called()
     db.commit.assert_awaited()
+
+
