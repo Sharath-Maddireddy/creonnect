@@ -29,6 +29,25 @@ const MANUAL_NICHES = [
     'other'
 ]
 
+function buildCampaignHeaders({ json = false } = {}) {
+    const headers = {}
+    if (json) {
+        headers['Content-Type'] = 'application/json'
+    }
+
+    let apiKey = ''
+    try {
+        apiKey = localStorage.getItem('brand_api_key') || localStorage.getItem('api_key') || ''
+    } catch {
+        apiKey = ''
+    }
+
+    if (apiKey) {
+        headers['X-API-Key'] = apiKey
+    }
+
+    return headers
+}
 function formatFollowerRange(minFollowers, maxFollowers) {
     const min = typeof minFollowers === 'number' ? minFollowers.toLocaleString() : null
     const max = typeof maxFollowers === 'number' ? maxFollowers.toLocaleString() : null
@@ -114,7 +133,9 @@ function CreatorMatchCard({ match }) {
         setLookalikesOpen(true)
 
         try {
-            const response = await fetch(`/api/brand/campaign/lookalikes/${encodeURIComponent(match.account_id)}`)
+            const response = await fetch(`/api/brand/campaign/lookalikes/${encodeURIComponent(match.account_id)}`, {
+                headers: buildCampaignHeaders()
+            })
             const json = await response.json()
             if (!response.ok) {
                 throw new Error(json?.detail || 'Unable to load creator lookalikes.')
@@ -291,7 +312,7 @@ function BrandCampaign() {
         try {
             const res = await fetch('/api/brand/campaign/discover', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: buildCampaignHeaders({ json: true }),
                 body: JSON.stringify({
                     prompt,
                     brand_name: optionalBrandName || null
@@ -327,7 +348,7 @@ function BrandCampaign() {
             }
             const res = await fetch('/api/brand/campaign/match', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: buildCampaignHeaders({ json: true }),
                 body: JSON.stringify(payload)
             })
             const json = await res.json()
@@ -621,3 +642,4 @@ function BrandCampaign() {
 }
 
 export default BrandCampaign
+

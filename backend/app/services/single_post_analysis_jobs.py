@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -22,10 +21,9 @@ from backend.app.infra.job_queue import (
 from backend.app.infra.job_state_store import get_job_state, initialize_job_state, update_job_state
 from backend.app.services.post_insights_service import build_single_post_insights
 from backend.app.utils.logger import logger
+from backend.app.utils.number_utils import now_iso as _now_iso
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _normalize_text(value: Any) -> str | None:

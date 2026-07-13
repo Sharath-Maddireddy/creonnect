@@ -1,47 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { formatDate, formatDecimal, formatNumber, formatPillarName } from '../utils/format'
 
 const ACCOUNT_FIXTURE_URL = '/fixtures/cristiano_account_result.json'
 const POST_FIXTURE_URL = '/fixtures/cristiano_result.json'
-
-function formatNumber(value) {
-    if (typeof value !== 'number' || Number.isNaN(value)) {
-        return 'N/A'
-    }
-    return value.toLocaleString('en-US')
-}
-
-function formatDecimal(value, digits = 2) {
-    if (typeof value !== 'number' || Number.isNaN(value)) {
-        return 'N/A'
-    }
-    return value.toFixed(digits)
-}
-
-function formatDate(value) {
-    if (typeof value !== 'string' || !value.trim()) {
-        return 'Date unavailable'
-    }
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) {
-        return 'Date unavailable'
-    }
-    return parsed.toLocaleDateString('en-US', {
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric'
-    })
-}
-
-function formatPillarName(value) {
-    if (typeof value !== 'string' || !value.trim()) {
-        return 'Unknown'
-    }
-    return value
-        .split('_')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ')
-}
 
 function bandTone(value) {
     if (value === 'EXCEPTIONAL') return 'success'

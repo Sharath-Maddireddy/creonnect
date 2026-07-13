@@ -226,32 +226,9 @@ def _score_payload(post: SinglePostInsights) -> tuple[int, str]:
     return score, band
 
 
-def _default_visual_quality_score() -> VisualQualityScore:
-    return VisualQualityScore()
-
-
-def _default_content_clarity_score() -> ContentClarityScore:
-    return ContentClarityScore()
-
-
-def _default_caption_effectiveness_score() -> CaptionEffectivenessScore:
-    return CaptionEffectivenessScore()
-
-
-def _default_engagement_potential_score() -> EngagementPotentialScore:
-    return EngagementPotentialScore()
-
-
-def _default_audience_relevance_score() -> AudienceRelevanceScore:
-    return AudienceRelevanceScore()
-
-
-def _default_brand_safety_score() -> BrandSafetyScore:
-    return BrandSafetyScore()
-
-
-def _default_weighted_post_score() -> WeightedPostScore:
-    return WeightedPostScore()
+def _resolve_score(attr_val: Any, cls: type) -> Any:
+    "Return attr_val if already an instance of cls, else return cls()."
+    return attr_val if isinstance(attr_val, cls) else cls()
 
 
 def _fallback_engagement_potential_score() -> EngagementPotentialScore:
@@ -439,14 +416,28 @@ def _normalize_production_level(value: Any) -> str | None:
     return normalized
 
 
-def _coerce_int_0_100(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return int(max(0.0, min(100.0, round(numeric))))
+_VQ_KEYS = ("composition", "lighting", "subject_clarity", "aesthetic_quality")
+
+
+def _clamp_vq(raw: Any) -> dict[str, float] | None:
+    """Normalise a visual_quality_score value into a clamped sub-dict.
+
+    Accepts:
+    - A scalar (int/float): broadcast to all four sub-keys.
+    - A dict: clamp each of the four sub-keys individually.
+    Returns None when the value cannot be normalised.
+    """
+    numeric = _as_float(raw)
+    if numeric is not None:
+        v = max(0.0, min(10.0, float(numeric)))
+        return {k: v for k in _VQ_KEYS}
+    if isinstance(raw, dict):
+        vals = [_as_float(raw.get(k)) for k in _VQ_KEYS]
+        if any(v is None for v in vals):
+            return None
+        return {k: max(0.0, min(10.0, float(v))) for k, v in zip(_VQ_KEYS, vals)}
+    return None
+
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -510,9 +501,6 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
             detected_text = str(detected_text)
     if scene_type is not None and not isinstance(scene_type, str):
         raise ValueError("Invalid scene_type field.")
-    numeric_visual_quality = _as_float(visual_quality_score)
-    if numeric_visual_quality is None and not isinstance(visual_quality_score, dict):
-        visual_quality_score = {}
     if not isinstance(hook_strength_score, (int, float)):
         hook_strength_score = 0.5
 
@@ -522,28 +510,9 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
     detected_text = detected_text.strip() if detected_text else None
     visual_style = visual_style.strip() if isinstance(visual_style, str) else "Unknown"
     scene_type = scene_type.strip() if isinstance(scene_type, str) else None
-    if numeric_visual_quality is not None:
-        clamped_visual_quality = max(0.0, min(10.0, float(numeric_visual_quality)))
-        normalized_visual_quality = {
-            "composition": clamped_visual_quality,
-            "lighting": clamped_visual_quality,
-            "subject_clarity": clamped_visual_quality,
-            "aesthetic_quality": clamped_visual_quality,
-        }
-    else:
-        composition_raw = _as_float(visual_quality_score.get("composition"))
-        lighting_raw = _as_float(visual_quality_score.get("lighting"))
-        subject_clarity_raw = _as_float(visual_quality_score.get("subject_clarity"))
-        aesthetic_quality_raw = _as_float(visual_quality_score.get("aesthetic_quality"))
-        if None in {composition_raw, lighting_raw, subject_clarity_raw, aesthetic_quality_raw}:
-            normalized_visual_quality = None
-        else:
-            normalized_visual_quality = {
-                "composition": max(0.0, min(10.0, float(composition_raw))),
-                "lighting": max(0.0, min(10.0, float(lighting_raw))),
-                "subject_clarity": max(0.0, min(10.0, float(subject_clarity_raw))),
-                "aesthetic_quality": max(0.0, min(10.0, float(aesthetic_quality_raw))),
-            }
+
+    normalized_visual_quality = _clamp_vq(visual_quality_score)
+
     clamped_hook_strength_score = max(0.0, min(1.0, float(hook_strength_score)))
     dominant_object = payload.get("dominant_object")
     lighting_quality = normalized_visual_quality.get("lighting") if isinstance(normalized_visual_quality, dict) else None
@@ -611,6 +580,75 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
     }
 
 
+async def _retry_parse_with_repair(
+    *,
+    generate_fn: Any,
+    repair_fn: Any,
+    api_key: str,
+    instruction: str,
+    media_url: str,
+    provider_label: str,
+    post_id: str | None,
+) -> dict[str, Any]:
+    """Shared parse→repair→retry→repair cascade used by both Gemini and OpenAI.
+
+    Steps:
+    1. generate  → parse
+    2. if step 1 fails: repair raw output → parse
+    3. if step 2 fails: generate with simplified prompt → parse
+    4. if step 3 fails: repair simplified output → parse
+    5. if all fail: raise with accumulated error messages
+
+    Raises on failure so the caller can decide what to do.
+    """
+    parse_errors: list[str] = []
+
+    raw_text = await generate_fn(api_key=api_key, instruction=instruction, media_url=media_url)
+    try:
+        return _build_vision_signal(_parse_gemini_payload(raw_text), media_url=media_url)
+    except Exception as primary_exc:
+        parse_errors.append(f"primary={primary_exc}")
+
+    # Step 2: repair the original raw output.
+    if isinstance(raw_text, str) and raw_text.strip():
+        try:
+            repaired_text = await repair_fn(api_key=api_key, raw_text=raw_text)
+            signal = _build_vision_signal(_parse_gemini_payload(repaired_text), media_url=media_url)
+            logger.info("[Vision] Repaired malformed %s output for media_id=%s", provider_label, post_id)
+            return signal
+        except Exception as repair_exc:
+            parse_errors.append(f"repair={repair_exc}")
+
+    # Step 3: retry with simplified prompt.
+    retry_raw_text = await generate_fn(
+        api_key=api_key,
+        instruction=_SIMPLIFIED_GEMINI_VISION_PROMPT,
+        media_url=media_url,
+    )
+    try:
+        signal = _build_vision_signal(_parse_gemini_payload(retry_raw_text), media_url=media_url)
+        logger.info("[Vision] Simplified prompt recovered %s output for media_id=%s", provider_label, post_id)
+        return signal
+    except Exception as retry_exc:
+        parse_errors.append(f"simplified={retry_exc}")
+
+    # Step 4: repair the simplified output.
+    if isinstance(retry_raw_text, str) and retry_raw_text.strip():
+        try:
+            repaired_retry = await repair_fn(api_key=api_key, raw_text=retry_raw_text)
+            signal = _build_vision_signal(_parse_gemini_payload(repaired_retry), media_url=media_url)
+            logger.info(
+                "[Vision] Simplified prompt + repair recovered %s output for media_id=%s",
+                provider_label,
+                post_id,
+            )
+            return signal
+        except Exception as repair_retry_exc:
+            parse_errors.append(f"simplified_repair={repair_retry_exc}")
+
+    raise ValueError("; ".join(parse_errors) or f"{provider_label} output could not be parsed.")
+
+
 async def run_vision_analysis(
     post: SinglePostInsights,
 ) -> dict[str, Any]:
@@ -671,38 +709,15 @@ async def run_vision_analysis(
     try:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("GEMINI_API_KEY missing")
-        parse_errors: list[str] = []
-        raw_text = await _generate_gemini_vision_json(api_key=api_key, instruction=instruction, media_url=media_url)
-        try:
-            signal = _build_vision_signal(_parse_gemini_payload(raw_text), media_url=media_url)
-        except Exception as primary_exc:
-            parse_errors.append(f"primary={primary_exc}")
-            signal = None
-            repaired_text = ""
-            if isinstance(raw_text, str) and raw_text.strip():
-                try:
-                    repaired_text = await _repair_gemini_vision_json(api_key=api_key, raw_text=raw_text)
-                    signal = _build_vision_signal(_parse_gemini_payload(repaired_text), media_url=media_url)
-                    logger.info("[Vision] Repaired malformed Gemini output for media_id=%s", post_id)
-                except Exception as repair_exc:
-                    parse_errors.append(f"repair={repair_exc}")
-            if signal is None:
-                retry_raw_text = await _generate_gemini_vision_json(
-                    api_key=api_key,
-                    instruction=_SIMPLIFIED_GEMINI_VISION_PROMPT,
-                    media_url=media_url,
-                )
-                try:
-                    signal = _build_vision_signal(_parse_gemini_payload(retry_raw_text), media_url=media_url)
-                    logger.info("[Vision] Simplified prompt recovered Gemini output for media_id=%s", post_id)
-                except Exception as retry_exc:
-                    parse_errors.append(f"simplified={retry_exc}")
-                    if isinstance(retry_raw_text, str) and retry_raw_text.strip():
-                        repaired_retry = await _repair_gemini_vision_json(api_key=api_key, raw_text=retry_raw_text)
-                        signal = _build_vision_signal(_parse_gemini_payload(repaired_retry), media_url=media_url)
-                        logger.info("[Vision] Simplified prompt + repair recovered Gemini output for media_id=%s", post_id)
-            if signal is None:
-                raise ValueError("; ".join(parse_errors) or "Gemini output could not be parsed.")
+        signal = await _retry_parse_with_repair(
+            generate_fn=_generate_gemini_vision_json,
+            repair_fn=_repair_gemini_vision_json,
+            api_key=api_key,
+            instruction=instruction,
+            media_url=media_url,
+            provider_label="Gemini",
+            post_id=post_id,
+        )
         return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
     except Exception as gemini_exc:
         gemini_error_reason = str(gemini_exc).strip() or gemini_exc.__class__.__name__
@@ -747,42 +762,15 @@ async def run_vision_analysis(
         if isinstance(openai_api_key, str) and openai_api_key.strip() and mime_type.startswith("image/"):
             try:
                 openai_api_key = openai_api_key.strip()
-                parse_errors: list[str] = []
-                openai_raw_text = await _generate_openai_vision_json(
+                openai_signal = await _retry_parse_with_repair(
+                    generate_fn=_generate_openai_vision_json,
+                    repair_fn=_repair_openai_vision_json,
                     api_key=openai_api_key,
                     instruction=instruction,
                     media_url=media_url,
+                    provider_label="OpenAI",
+                    post_id=post_id,
                 )
-                try:
-                    openai_signal = _build_vision_signal(_parse_gemini_payload(openai_raw_text), media_url=media_url)
-                except Exception as primary_exc:
-                    parse_errors.append(f"primary={primary_exc}")
-                    openai_signal = None
-                    repaired_text = ""
-                    if isinstance(openai_raw_text, str) and openai_raw_text.strip():
-                        try:
-                            repaired_text = await _repair_openai_vision_json(api_key=openai_api_key, raw_text=openai_raw_text)
-                            openai_signal = _build_vision_signal(_parse_gemini_payload(repaired_text), media_url=media_url)
-                            logger.info("[Vision] Repaired malformed OpenAI output for media_id=%s", post_id)
-                        except Exception as repair_exc:
-                            parse_errors.append(f"repair={repair_exc}")
-                    if openai_signal is None:
-                        retry_raw_text = await _generate_openai_vision_json(
-                            api_key=openai_api_key,
-                            instruction=_SIMPLIFIED_GEMINI_VISION_PROMPT,
-                            media_url=media_url,
-                        )
-                        try:
-                            openai_signal = _build_vision_signal(_parse_gemini_payload(retry_raw_text), media_url=media_url)
-                            logger.info("[Vision] Simplified prompt recovered OpenAI output for media_id=%s", post_id)
-                        except Exception as retry_exc:
-                            parse_errors.append(f"simplified={retry_exc}")
-                            if isinstance(retry_raw_text, str) and retry_raw_text.strip():
-                                repaired_retry = await _repair_openai_vision_json(api_key=openai_api_key, raw_text=retry_raw_text)
-                                openai_signal = _build_vision_signal(_parse_gemini_payload(repaired_retry), media_url=media_url)
-                                logger.info("[Vision] Simplified prompt + repair recovered OpenAI output for media_id=%s", post_id)
-                    if openai_signal is None:
-                        raise ValueError("; ".join(parse_errors) or "OpenAI output could not be parsed.")
                 logger.info("[Vision] OpenAI fallback succeeded for media_id=%s", post_id)
                 return VisionAnalysis(provider="openai", status="ok", signals=[openai_signal]).model_dump(mode="python")
             except Exception as openai_exc:
@@ -974,12 +962,23 @@ class _OpenAIVisionAdapter:
     """Small adapter for GPT-4o vision responses with a `.text` payload."""
 
     def __init__(self, api_key: str) -> None:
-        from openai import OpenAI
-
-        self._client = OpenAI(
-            api_key=api_key,
-            http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
-        )
+        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+        if azure_endpoint:
+            from openai import AzureOpenAI
+            azure_key = os.getenv("AZURE_OPENAI_API_KEY")
+            api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
+            self._client = AzureOpenAI(
+                api_key=azure_key,
+                api_version=api_version,
+                azure_endpoint=azure_endpoint,
+                http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
+            )
+        else:
+            from openai import OpenAI
+            self._client = OpenAI(
+                api_key=api_key,
+                http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
+            )
 
     def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str) -> _VisionTextResponse:
         if mime_type.startswith("video/"):
@@ -1048,7 +1047,10 @@ def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -
 
 
 def _call_openai_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
-    model_name = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
+    if os.getenv("AZURE_OPENAI_ENDPOINT"):
+        model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o")
+    else:
+        model_name = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
     try:
         client = _OpenAIVisionAdapter(api_key=api_key)
         mime = _infer_mime_type(media_url)
@@ -1073,10 +1075,21 @@ def _call_openai_vision_api(*, api_key: str, instruction: str, media_url: str) -
 
 
 def _call_openai_text_api(*, api_key: str, prompt: str) -> str:
-    model_name = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
-    try:
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    if azure_endpoint:
+        model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+        from openai import AzureOpenAI
+        azure_key = os.getenv("AZURE_OPENAI_API_KEY")
+        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
+        client = AzureOpenAI(
+            api_key=azure_key,
+            api_version=api_version,
+            azure_endpoint=azure_endpoint,
+            http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
+        )
+    else:
+        model_name = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
         from openai import OpenAI
-
         client = OpenAI(
             api_key=api_key,
             http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
@@ -1377,14 +1390,14 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
     if not isinstance(payload, dict):
         return None
 
-    hook = _coerce_int_0_100(payload.get("hook_score_0_100"))
-    length = _coerce_int_0_100(payload.get("length_score_0_100"))
-    hashtag = _coerce_int_0_100(payload.get("hashtag_score_0_100"))
-    cta = _coerce_int_0_100(payload.get("cta_score_0_100"))
+    hook = _clamp_int_0_100(payload.get("hook_score_0_100"))
+    length = _clamp_int_0_100(payload.get("length_score_0_100"))
+    hashtag = _clamp_int_0_100(payload.get("hashtag_score_0_100"))
+    cta = _clamp_int_0_100(payload.get("cta_score_0_100"))
     if None in {hook, length, hashtag, cta}:
         return None
 
-    s2_raw = _coerce_int_0_100(payload.get("s2_raw_0_100"))
+    s2_raw = _clamp_int_0_100(payload.get("s2_raw_0_100"))
     if s2_raw is None:
         s2_raw = int(round(hook * 0.30 + length * 0.20 + hashtag * 0.25 + cta * 0.25))
 
@@ -1466,7 +1479,7 @@ async def run_audience_relevance_llm(
     if affinity not in allowed_bands:
         affinity = "UNKNOWN"
 
-    s4_raw = _coerce_int_0_100(payload.get("s4_raw_0_100"))
+    s4_raw = _clamp_int_0_100(payload.get("s4_raw_0_100"))
     if s4_raw is None:
         s4_raw_map = {
             "EXACT": 100,
@@ -1861,41 +1874,13 @@ async def analyze_single_post_ai(
         if cached is not None:
             cached.last_regen_attempt_at = now_ts
             logger.debug("[AIAnalysis] Cache stale; regenerating media_id=%s", post.media_id)
-    visual_quality_score = (
-        post.visual_quality_score
-        if isinstance(post.visual_quality_score, VisualQualityScore)
-        else _default_visual_quality_score()
-    )
-    content_clarity_score = (
-        post.content_clarity_score
-        if isinstance(post.content_clarity_score, ContentClarityScore)
-        else _default_content_clarity_score()
-    )
-    caption_effectiveness_score = (
-        post.caption_effectiveness_score
-        if isinstance(post.caption_effectiveness_score, CaptionEffectivenessScore)
-        else _default_caption_effectiveness_score()
-    )
-    engagement_potential_score = (
-        post.engagement_potential_score
-        if isinstance(post.engagement_potential_score, EngagementPotentialScore)
-        else _default_engagement_potential_score()
-    )
-    weighted_post_score = (
-        post.weighted_post_score
-        if isinstance(post.weighted_post_score, WeightedPostScore)
-        else _default_weighted_post_score()
-    )
-    audience_relevance_score = (
-        post.audience_relevance_score
-        if isinstance(post.audience_relevance_score, AudienceRelevanceScore)
-        else _default_audience_relevance_score()
-    )
-    brand_safety_score = (
-        post.brand_safety_score
-        if isinstance(post.brand_safety_score, BrandSafetyScore)
-        else _default_brand_safety_score()
-    )
+    visual_quality_score = _resolve_score(post.visual_quality_score, VisualQualityScore)
+    content_clarity_score = _resolve_score(post.content_clarity_score, ContentClarityScore)
+    caption_effectiveness_score = _resolve_score(post.caption_effectiveness_score, CaptionEffectivenessScore)
+    engagement_potential_score = _resolve_score(post.engagement_potential_score, EngagementPotentialScore)
+    weighted_post_score = _resolve_score(post.weighted_post_score, WeightedPostScore)
+    audience_relevance_score = _resolve_score(post.audience_relevance_score, AudienceRelevanceScore)
+    brand_safety_score = _resolve_score(post.brand_safety_score, BrandSafetyScore)
     tier_avg_engagement_rate = post.tier_avg_engagement_rate
     predicted_engagement_rate = post.predicted_engagement_rate
     predicted_engagement_rate_notes = list(post.predicted_engagement_rate_notes)

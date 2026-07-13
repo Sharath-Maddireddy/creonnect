@@ -16,15 +16,7 @@ from backend.app.domain.account_models import (
     FakeFollowerSignals,
 )
 from backend.app.domain.post_models import SinglePostInsights
-
-
-def _safe_float(value: object) -> float:
-    if value is None or isinstance(value, bool):
-        return 0.0
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+from backend.app.utils.number_utils import safe_float_or as _safe_float
 
 
 def _extract_numeric(account_data: dict[str, Any], *keys: str) -> float:

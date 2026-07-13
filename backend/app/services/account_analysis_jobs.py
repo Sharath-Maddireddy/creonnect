@@ -44,7 +44,8 @@ from backend.app.services.account_analysis_result_store import persist_account_a
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
 from backend.app.utils.logger import logger
-from backend.app.utils.number_utils import safe_float as _safe_float
+from backend.app.utils.number_utils import now_iso as _now_iso, safe_float as _safe_float
+from backend.app.infra.redis_job_store import RedisJobStore
 from backend.app.workers.embedding_worker import upsert_creator
 
 
@@ -57,6 +58,9 @@ ACCOUNT_ANALYSIS_DEDUPE_TTL_SECONDS = 7200
 ACCOUNT_ANALYSIS_INPUTHASH_TTL_SECONDS = 86400
 ACCOUNT_ANALYSIS_RATE_TTL_SECONDS = 3600
 ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR = 3
+
+_store = RedisJobStore(ACCOUNT_ANALYSIS_JOB_KEY_PREFIX, ACCOUNT_ANALYSIS_STATUS_TTL_SECONDS)
+_ACCOUNT_EXTRA_STATUS_FIELDS: dict = {"progress": None, "warnings": [], "quality": None}
 ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS = max(900, DEFAULT_JOB_TIMEOUT_SECONDS + 300)
 ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS = max(1800, DEFAULT_JOB_TIMEOUT_SECONDS * 2)
 
@@ -104,14 +108,6 @@ def get_queue():
     return get_rq_queue(ACCOUNT_ANALYSIS_QUEUE_NAME)
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _job_key(job_id: str) -> str:
-    return f"{ACCOUNT_ANALYSIS_JOB_KEY_PREFIX}{job_id}"
-
-
 def _dedupe_key(account_id: str, post_limit: int) -> str:
     return f"{ACCOUNT_ANALYSIS_DEDUPE_KEY_PREFIX}{account_id}:{post_limit}"
 
@@ -122,29 +118,6 @@ def _rate_key(account_id: str) -> str:
 
 def _inputhash_key(account_id: str, payload_hash: str) -> str:
     return f"{ACCOUNT_ANALYSIS_INPUTHASH_KEY_PREFIX}{account_id}:{payload_hash}"
-
-
-def _base_status(job_id: str) -> dict[str, Any]:
-    return {
-        "job_id": job_id,
-        "status": "queued",
-        "created_at": _now_iso(),
-        "started_at": None,
-        "finished_at": None,
-        "progress": None,
-        "error": None,
-        "result": None,
-        "warnings": [],
-        "quality": None,
-    }
-
-
-def _write_status(job_id: str, status_payload: dict[str, Any]) -> None:
-    set_json(_job_key(job_id), status_payload, ttl_seconds=ACCOUNT_ANALYSIS_STATUS_TTL_SECONDS)
-
-
-def _read_status(job_id: str) -> dict[str, Any] | None:
-    return get_json(_job_key(job_id))
 
 
 def _strip_signals(value: Any) -> Any:
@@ -332,7 +305,7 @@ def _project_stale_failed_status(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _read_status_with_guard(job_id: str) -> dict[str, Any] | None:
-    payload = _read_status(job_id)
+    payload = _store.get(job_id)
     if not isinstance(payload, dict):
         return None
     sanitized = _sanitize_status_payload(payload)
@@ -340,9 +313,9 @@ def _read_status_with_guard(job_id: str) -> dict[str, Any] | None:
 
 
 def _update_status(job_id: str, **updates: Any) -> dict[str, Any]:
-    payload = _read_status(job_id) or _base_status(job_id)
+    payload = _store.get(job_id) or _store.base_status(job_id, _ACCOUNT_EXTRA_STATUS_FIELDS)
     payload.update(updates)
-    _write_status(job_id, payload)
+    _store.write(job_id, payload)
     return payload
 
 
@@ -350,8 +323,8 @@ def initialize_job_status(job_id: str) -> dict[str, Any]:
     existing = get_account_analysis_job_status(job_id)
     if existing:
         return existing
-    payload = _base_status(job_id)
-    _write_status(job_id, payload)
+    payload = _store.base_status(job_id, _ACCOUNT_EXTRA_STATUS_FIELDS)
+    _store.write(job_id, payload)
     return payload
 
 
@@ -534,6 +507,18 @@ def _restore_rate_limit_counter(account_id: str) -> None:
     value = redis_client.decr(rate_key)
     if int(value) <= 0:
         redis_client.delete(rate_key)
+
+
+T = Any  # simple TypeVar alias for _try_nonfatal
+
+
+def _try_nonfatal(label: str, fn: Callable[[], Any], account_id: str, fallback: Any = None) -> Any:
+    """Call fn(); on any Exception log a non-fatal warning and return fallback."""
+    try:
+        return fn()
+    except Exception as exc:
+        logger.warning("[AccountAnalysisJob] Non-fatal: %s failed for %s: %s", label, account_id, exc)
+        return fallback
 
 
 def _run_coroutine_sync(coro):
@@ -1339,37 +1324,23 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             follower_band=payload.get("follower_band"),
             use_cache=True,
         )
-        creator_score = None
-        try:
-            recent_posts = processed_posts
-            account_metadata = payload if isinstance(payload, dict) else {}
-            creator_score = calculate_creator_score(recent_posts, account_metadata)
-        except Exception as e:
-            logger.warning(
-                "[AccountAnalysisJob] Non-fatal: creator scoring failed for %s: %s",
-                account_id,
-                e,
-            )
+        creator_score = _try_nonfatal(
+            "creator scoring",
+            lambda: calculate_creator_score(processed_posts, payload if isinstance(payload, dict) else {}),
+            account_id,
+        )
 
-        try:
-            engagement_signals = compute_account_engagement_signals(processed_posts)
-        except Exception as signals_exc:
-            logger.warning(
-                "[AccountAnalysisJob] Non-fatal: engagement signals failed for %s: %s",
-                account_id,
-                signals_exc,
-            )
-            engagement_signals = None
+        engagement_signals = _try_nonfatal(
+            "engagement signals",
+            lambda: compute_account_engagement_signals(processed_posts),
+            account_id,
+        )
 
-        try:
-            vision_summary = compute_account_vision_summary(processed_posts)
-        except Exception as vision_exc:
-            logger.warning(
-                "[AccountAnalysisJob] Non-fatal: vision summary failed for %s: %s",
-                account_id,
-                vision_exc,
-            )
-            vision_summary = None
+        vision_summary = _try_nonfatal(
+            "vision summary",
+            lambda: compute_account_vision_summary(processed_posts),
+            account_id,
+        )
 
         try:
             creator_intelligence = _run_coroutine_sync(
@@ -1393,27 +1364,18 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
 
             creator_intelligence = CreatorIntelligence()
 
-        try:
-            content_type_performance = compute_content_type_performance(processed_posts)
-        except Exception as ctp_exc:
-            logger.warning(
-                "[AccountAnalysisJob] Non-fatal: content type performance failed for %s: %s",
-                account_id,
-                ctp_exc,
-            )
-            content_type_performance = None
+        content_type_performance = _try_nonfatal(
+            "content type performance",
+            lambda: compute_content_type_performance(processed_posts),
+            account_id,
+        )
 
-        try:
+        def _attach_signals() -> None:
             result.creator_intelligence = creator_intelligence
             result.vision_summary = vision_summary
             result.engagement_signals = engagement_signals
             result.content_type_performance = content_type_performance
-        except Exception as attach_exc:
-            logger.warning(
-                "[AccountAnalysisJob] Non-fatal: failed attaching account signals for %s: %s",
-                account_id,
-                attach_exc,
-            )
+        _try_nonfatal("attaching account signals", _attach_signals, account_id)
 
         result_payload = result.model_dump(mode="python")
         if creator_score is not None:
@@ -1421,8 +1383,8 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         persisted_result_payload = dict(result_payload)
         persisted_result_payload["draft_optimizer_history"] = _draft_optimizer_history(processed_posts)
 
-        try:
-            creator_data = {
+        def _enqueue_embedding() -> None:
+            upsert_creator({
                 "account_id": account_id,
                 "username": payload.get("username"),
                 "bio": payload.get("bio"),
@@ -1437,10 +1399,8 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
                 "avg_likes": sum((post.core_metrics.likes or 0) if post.core_metrics else 0 for post in processed_posts) / len(processed_posts) if processed_posts else 0,
                 "avg_comments": sum((post.core_metrics.comments or 0) if post.core_metrics else 0 for post in processed_posts) / len(processed_posts) if processed_posts else 0,
                 "posts_per_week": result.metadata.post_count_used / (result.metadata.time_window_days / 7) if getattr(result.metadata, "time_window_days", None) else 0,
-            }
-            upsert_creator(creator_data)
-        except Exception as embed_exc:
-            logger.warning("[AccountAnalysisJob] Non-fatal: failed to enqueue embedding ingestion for %s: %s", account_id, embed_exc)
+            })
+        _try_nonfatal("embedding ingestion", _enqueue_embedding, account_id)
 
         try:
             if include_posts_summary:

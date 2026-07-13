@@ -8,6 +8,7 @@ from sqlalchemy import desc, select
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
 from backend.app.infra.database import get_sync_sessionmaker
 from backend.app.infra.models import AccountAnalysisResult, CreatorDiscoveryMeta
+from backend.app.utils.number_utils import safe_float as _safe_float
 
 
 @dataclass(slots=True)
@@ -40,15 +41,6 @@ def _coerce_history_post(item: Any, *, account_id: str, follower_count: int | No
         ),
         benchmark_metrics=BenchmarkMetrics(),
     )
-
-
-def _safe_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def load_draft_history_context(account_id: str, *, history_limit: int = 12) -> DraftHistoryContext:

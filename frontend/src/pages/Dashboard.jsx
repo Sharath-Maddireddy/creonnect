@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { formatDate, formatNumber, formatPillarName } from '../utils/format'
 import {
     LineChart,
     Line,
@@ -97,15 +98,6 @@ function formatBarScore(value, scale = 10) {
     return scale === 100 ? `${value.toFixed(1)}` : `${value.toFixed(1)}/${scale}`
 }
 
-function formatPillarName(value) {
-    if (typeof value !== 'string' || !value.trim()) {
-        return 'Unknown Pillar'
-    }
-    return value
-        .split('_')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ')
-}
 
 function recommendationToneClass(level) {
     if (level === 'HIGH') return 'high'

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -16,61 +15,33 @@ from backend.app.infra.job_queue import (
     REEL_ANALYSIS_QUEUE_NAME,
     enqueue_callable,
 )
-from backend.app.infra.redis_client import get_json, set_json
+from backend.app.infra.redis_job_store import RedisJobStore
 from backend.app.infra.rq_queue import (
     DEFAULT_FAILURE_TTL_SECONDS,
     DEFAULT_RESULT_TTL_SECONDS,
 )
 from backend.app.utils.logger import logger
+from backend.app.utils.number_utils import now_iso as _now_iso
 
 
 REEL_JOB_KEY_PREFIX = "reel_analysis:job:"
 REEL_JOB_STATUS_TTL_SECONDS = 86400
 REEL_JOB_TIMEOUT_SECONDS = 120
 
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+_store = RedisJobStore(REEL_JOB_KEY_PREFIX, REEL_JOB_STATUS_TTL_SECONDS)
 
 
-def _job_key(job_id: str) -> str:
-    return f"{REEL_JOB_KEY_PREFIX}{job_id}"
 
 
-def _base_status(job_id: str) -> dict[str, Any]:
-    return {
-        "job_id": job_id,
-        "status": "queued",
-        "created_at": _now_iso(),
-        "started_at": None,
-        "finished_at": None,
-        "result": None,
-        "error": None,
-    }
-
-
-def _write_status(job_id: str, payload: dict[str, Any]) -> None:
-    set_json(_job_key(job_id), payload, ttl_seconds=REEL_JOB_STATUS_TTL_SECONDS)
-
-
-def _read_status(job_id: str) -> dict[str, Any] | None:
-    return get_json(_job_key(job_id))
-
-
-def _update_status(job_id: str, **updates: Any) -> dict[str, Any]:
-    payload = _read_status(job_id) or _base_status(job_id)
-    payload.update(updates)
-    _write_status(job_id, payload)
-    return payload
 
 
 def initialize_reel_job_status(job_id: str) -> None:
     logger.debug("[ReelAnalysisJob] Initializing status job_id=%s", job_id)
-    _write_status(job_id, _base_status(job_id))
+    _store.initialize(job_id)
 
 
 def get_reel_job_status(job_id: str) -> dict[str, Any] | None:
-    return _read_status(job_id)
+    return _store.get(job_id)
 
 
 def enqueue_reel_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
@@ -124,7 +95,7 @@ def run_reel_analysis_job(payload: dict[str, Any]) -> None:
         bool(audio_name),
         watch_time_pct,
     )
-    _update_status(job_id, status="started", started_at=_now_iso())
+    _store.update(job_id, status="started", started_at=_now_iso())
 
     try:
         vision_result = run_reel_gemini_analysis(media_url)

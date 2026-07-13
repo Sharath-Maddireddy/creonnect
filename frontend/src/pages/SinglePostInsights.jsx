@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { formatNumber } from '../utils/format'
 import {
     CartesianGrid,
     Line,
@@ -21,12 +22,6 @@ const METRIC_CONFIG = [
     { key: 'watch_through_rate', label: 'Watch-through Rate', isRate: true, derivedKey: 'watch_through_rate' }
 ]
 
-function formatNumber(value) {
-    if (typeof value !== 'number' || Number.isNaN(value)) {
-        return 'N/A'
-    }
-    return value.toLocaleString()
-}
 
 function formatPercent(value) {
     if (typeof value !== 'number' || Number.isNaN(value)) {

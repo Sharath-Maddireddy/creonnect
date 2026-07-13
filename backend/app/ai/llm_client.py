@@ -185,8 +185,12 @@ class LLMClient:
                             {"role": "user", "content": prompt["user"]}
                         ],
                         "temperature": self.temperature,
-                        "max_tokens": self.max_tokens,
                     }
+                    if "5.6" in self.model_name or "o1" in self.model_name:
+                        request_payload["max_completion_tokens"] = self.max_tokens
+                    else:
+                        request_payload["max_tokens"] = self.max_tokens
+
                     response_format = prompt.get("response_format")
                     if isinstance(response_format, dict) and not skip_response_format:
                         request_payload["response_format"] = response_format
@@ -277,14 +281,19 @@ class LLMClient:
                 )
 
                 def _make_api_call():
-                    return self._client.chat.completions.create(
-                        model=self.model_name,
-                        messages=messages,
-                        tools=tools,
-                        tool_choice=tool_choice,
-                        temperature=self.temperature,
-                        max_tokens=self.max_tokens,
-                    )
+                    payload = {
+                        "model": self.model_name,
+                        "messages": messages,
+                        "tools": tools,
+                        "tool_choice": tool_choice,
+                        "temperature": self.temperature,
+                    }
+                    if "5.6" in self.model_name or "o1" in self.model_name:
+                        payload["max_completion_tokens"] = self.max_tokens
+                    else:
+                        payload["max_tokens"] = self.max_tokens
+
+                    return self._client.chat.completions.create(**payload)
 
                 try:
                     response = openai_circuit_breaker.call(_make_api_call)

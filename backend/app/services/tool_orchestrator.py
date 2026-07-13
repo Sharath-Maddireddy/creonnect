@@ -41,22 +41,19 @@ class ToolOrchestrator:
                 )
             else:
                 normalized_tool = tool_name.strip()
-                if normalized_tool == "search_creator_pool":
-                    response = self._search_creator_pool(arguments)
-                elif normalized_tool == "find_lookalike_creators":
-                    response = self._find_lookalike_creators(arguments)
-                elif normalized_tool == "score_creator_brand_fit":
-                    response = self._score_creator_brand_fit(arguments)
-                elif normalized_tool == "get_creator_analysis":
-                    response = self._get_creator_analysis(arguments)
-                elif normalized_tool == "ask_brand_clarification":
-                    response = self._ask_brand_clarification(arguments)
-                elif normalized_tool == "generate_outreach_brief":
-                    response = self._generate_outreach_brief(arguments)
-                elif normalized_tool == "generate_content_brief":
-                    response = self._generate_content_brief(arguments)
-                elif normalized_tool == "estimate_campaign_cost":
-                    response = self._estimate_campaign_cost(arguments)
+                _HANDLERS = {
+                    "search_creator_pool": self._search_creator_pool,
+                    "find_lookalike_creators": self._find_lookalike_creators,
+                    "score_creator_brand_fit": self._score_creator_brand_fit,
+                    "get_creator_analysis": self._get_creator_analysis,
+                    "ask_brand_clarification": self._ask_brand_clarification,
+                    "generate_outreach_brief": self._generate_outreach_brief,
+                    "generate_content_brief": self._generate_content_brief,
+                    "estimate_campaign_cost": self._estimate_campaign_cost,
+                }
+                handler = _HANDLERS.get(normalized_tool)
+                if handler is not None:
+                    response = handler(arguments)
                 else:
                     response = ToolResponse.error(
                         tool=normalized_tool,
@@ -86,14 +83,10 @@ class ToolOrchestrator:
         max_followers = self._as_optional_int(arguments.get("max_followers"), "max_followers")
         limit = self._as_optional_int(arguments.get("limit"), "limit")
 
-        if isinstance(niche, str) and niche.startswith("__error__"):
-            return ToolResponse.error("search_creator_pool", niche.removeprefix("__error__"))
-        if isinstance(min_followers, str) and min_followers.startswith("__error__"):
-            return ToolResponse.error("search_creator_pool", min_followers.removeprefix("__error__"))
-        if isinstance(max_followers, str) and max_followers.startswith("__error__"):
-            return ToolResponse.error("search_creator_pool", max_followers.removeprefix("__error__"))
-        if isinstance(limit, str) and limit.startswith("__error__"):
-            return ToolResponse.error("search_creator_pool", limit.removeprefix("__error__"))
+        if err := self._check_sentinel(niche, "search_creator_pool"): return err
+        if err := self._check_sentinel(min_followers, "search_creator_pool"): return err
+        if err := self._check_sentinel(max_followers, "search_creator_pool"): return err
+        if err := self._check_sentinel(limit, "search_creator_pool"): return err
 
         min_value = min_followers if isinstance(min_followers, int) else None
         max_value = max_followers if isinstance(max_followers, int) else None
@@ -119,12 +112,10 @@ class ToolOrchestrator:
 
     def _find_lookalike_creators(self, arguments: dict[str, Any]) -> ToolResponse:
         account_id = self._as_required_string(arguments.get("account_id"), "account_id")
-        if account_id.startswith("__error__"):
-            return ToolResponse.error("find_lookalike_creators", account_id.removeprefix("__error__"))
+        if err := self._check_sentinel(account_id, "find_lookalike_creators"): return err
 
         limit = self._as_optional_int(arguments.get("limit"), "limit")
-        if isinstance(limit, str) and limit.startswith("__error__"):
-            return ToolResponse.error("find_lookalike_creators", limit.removeprefix("__error__"))
+        if err := self._check_sentinel(limit, "find_lookalike_creators"): return err
         limit_value = 5 if limit is None else limit
         if limit_value is not None and limit_value > 10:
             return ToolResponse.error("find_lookalike_creators", "limit must be <= 10.")
@@ -147,20 +138,17 @@ class ToolOrchestrator:
 
     def _score_creator_brand_fit(self, arguments: dict[str, Any]) -> ToolResponse:
         account_id = self._as_required_string(arguments.get("account_id"), "account_id")
-        if account_id.startswith("__error__"):
-            return ToolResponse.error("score_creator_brand_fit", account_id.removeprefix("__error__"))
+        if err := self._check_sentinel(account_id, "score_creator_brand_fit"): return err
 
         brand_niche = self._as_required_string(arguments.get("brand_niche"), "brand_niche")
-        if brand_niche.startswith("__error__"):
-            return ToolResponse.error("score_creator_brand_fit", brand_niche.removeprefix("__error__"))
+        if err := self._check_sentinel(brand_niche, "score_creator_brand_fit"): return err
 
         min_followers = self._as_optional_int(arguments.get("min_followers"), "min_followers")
         max_followers = self._as_optional_int(arguments.get("max_followers"), "max_followers")
         min_engagement_rate = self._as_optional_float(arguments.get("min_engagement_rate"), "min_engagement_rate")
 
         for value in (min_followers, max_followers, min_engagement_rate):
-            if isinstance(value, str) and value.startswith("__error__"):
-                return ToolResponse.error("score_creator_brand_fit", value.removeprefix("__error__"))
+            if err := self._check_sentinel(value, "score_creator_brand_fit"): return err
 
         min_value = min_followers if isinstance(min_followers, int) else None
         max_value = max_followers if isinstance(max_followers, int) else None
@@ -205,8 +193,7 @@ class ToolOrchestrator:
 
     def _get_creator_analysis(self, arguments: dict[str, Any]) -> ToolResponse:
         account_id = self._as_required_string(arguments.get("account_id"), "account_id")
-        if account_id.startswith("__error__"):
-            return ToolResponse.error("get_creator_analysis", account_id.removeprefix("__error__"))
+        if err := self._check_sentinel(account_id, "get_creator_analysis"): return err
 
         session_factory = get_sync_sessionmaker()
         try:
@@ -233,8 +220,7 @@ class ToolOrchestrator:
 
     def _ask_brand_clarification(self, arguments: dict[str, Any]) -> ToolResponse:
         question = self._as_required_string(arguments.get("question"), "question")
-        if question.startswith("__error__"):
-            return ToolResponse.error("ask_brand_clarification", question.removeprefix("__error__"))
+        if err := self._check_sentinel(question, "ask_brand_clarification"): return err
 
         raw_options = arguments.get("suggested_options")
         suggested_options: list[str] | None = None
@@ -255,20 +241,16 @@ class ToolOrchestrator:
         )
     def _generate_outreach_brief(self, arguments: dict[str, Any]) -> ToolResponse:
         account_id = self._as_required_string(arguments.get("account_id"), "account_id")
-        if account_id.startswith("__error__"):
-            return ToolResponse.error("generate_outreach_brief", account_id.removeprefix("__error__"))
+        if err := self._check_sentinel(account_id, "generate_outreach_brief"): return err
 
         campaign_goal = self._as_required_string(arguments.get("campaign_goal"), "campaign_goal")
-        if campaign_goal.startswith("__error__"):
-            return ToolResponse.error("generate_outreach_brief", campaign_goal.removeprefix("__error__"))
+        if err := self._check_sentinel(campaign_goal, "generate_outreach_brief"): return err
 
         brand_tone = self._as_optional_string(arguments.get("brand_tone"), "brand_tone")
-        if isinstance(brand_tone, str) and brand_tone.startswith("__error__"):
-            return ToolResponse.error("generate_outreach_brief", brand_tone.removeprefix("__error__"))
+        if err := self._check_sentinel(brand_tone, "generate_outreach_brief"): return err
 
         deliverables = self._as_optional_string_list(arguments.get("deliverables"), "deliverables")
-        if isinstance(deliverables, str) and deliverables.startswith("__error__"):
-            return ToolResponse.error("generate_outreach_brief", deliverables.removeprefix("__error__"))
+        if err := self._check_sentinel(deliverables, "generate_outreach_brief"): return err
 
         analysis = self._load_creator_analysis_by_account_id(account_id)
         if analysis is None:
@@ -312,20 +294,16 @@ class ToolOrchestrator:
 
     def _generate_content_brief(self, arguments: dict[str, Any]) -> ToolResponse:
         account_id = self._as_required_string(arguments.get("account_id"), "account_id")
-        if account_id.startswith("__error__"):
-            return ToolResponse.error("generate_content_brief", account_id.removeprefix("__error__"))
+        if err := self._check_sentinel(account_id, "generate_content_brief"): return err
 
         brand_name = self._as_required_string(arguments.get("brand_name"), "brand_name")
-        if brand_name.startswith("__error__"):
-            return ToolResponse.error("generate_content_brief", brand_name.removeprefix("__error__"))
+        if err := self._check_sentinel(brand_name, "generate_content_brief"): return err
 
         key_messages = self._as_required_string_list(arguments.get("key_messages"), "key_messages")
-        if isinstance(key_messages, str) and key_messages.startswith("__error__"):
-            return ToolResponse.error("generate_content_brief", key_messages.removeprefix("__error__"))
+        if err := self._check_sentinel(key_messages, "generate_content_brief"): return err
 
         content_format = self._as_optional_string(arguments.get("content_format"), "content_format")
-        if isinstance(content_format, str) and content_format.startswith("__error__"):
-            return ToolResponse.error("generate_content_brief", content_format.removeprefix("__error__"))
+        if err := self._check_sentinel(content_format, "generate_content_brief"): return err
 
         allowed_formats = {"REEL", "IMAGE", "STORY", "CAROUSEL"}
         if isinstance(content_format, str):
@@ -396,12 +374,10 @@ class ToolOrchestrator:
 
     def _estimate_campaign_cost(self, arguments: dict[str, Any]) -> ToolResponse:
         account_id = self._as_required_string(arguments.get("account_id"), "account_id")
-        if account_id.startswith("__error__"):
-            return ToolResponse.error("estimate_campaign_cost", account_id.removeprefix("__error__"))
+        if err := self._check_sentinel(account_id, "estimate_campaign_cost"): return err
 
         deliverable_type = self._as_required_string(arguments.get("deliverable_type"), "deliverable_type")
-        if deliverable_type.startswith("__error__"):
-            return ToolResponse.error("estimate_campaign_cost", deliverable_type.removeprefix("__error__"))
+        if err := self._check_sentinel(deliverable_type, "estimate_campaign_cost"): return err
 
         deliverable_type = deliverable_type.upper()
         multipliers = {
@@ -418,8 +394,7 @@ class ToolOrchestrator:
             )
 
         deliverable_count = self._as_optional_int(arguments.get("deliverable_count"), "deliverable_count")
-        if isinstance(deliverable_count, str) and deliverable_count.startswith("__error__"):
-            return ToolResponse.error("estimate_campaign_cost", deliverable_count.removeprefix("__error__"))
+        if err := self._check_sentinel(deliverable_count, "estimate_campaign_cost"): return err
 
         count_value = 1 if deliverable_count is None else deliverable_count
         if count_value <= 0:
@@ -570,6 +545,12 @@ class ToolOrchestrator:
             "bio": summary.get("bio"),
             "niche_tags": summary.get("niche_tags"),
         }
+
+    def _check_sentinel(self, value: Any, tool_name: str) -> "ToolResponse | None":
+        "Return an error ToolResponse if value is an __error__ sentinel, else None."
+        if isinstance(value, str) and value.startswith("__error__"):
+            return ToolResponse.error(tool_name, value.removeprefix("__error__"))
+        return None
 
     def _as_required_string(self, value: Any, field_name: str) -> str:
         if not isinstance(value, str) or not value.strip():

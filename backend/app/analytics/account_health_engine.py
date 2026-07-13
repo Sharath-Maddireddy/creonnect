@@ -19,6 +19,7 @@ from backend.app.domain.account_models import (
     PillarScore,
 )
 from backend.app.domain.post_models import SinglePostInsights
+from backend.app.utils.number_utils import safe_float as _safe_float
 
 
 PILLAR_WEIGHTS: dict[str, float] = {
@@ -33,15 +34,6 @@ PILLAR_WEIGHTS: dict[str, float] = {
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
-
-
-def _safe_float(value: object) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _score_to_band(score: float) -> str:
@@ -72,7 +64,6 @@ def _sort_recent_posts(posts: list[SinglePostInsights]) -> list[SinglePostInsigh
 
 def _mean_or_none(values: list[float]) -> float | None:
     return mean(values) if values else None
-
 
 def _map_ratio_to_score(ratio: float) -> float:
     if ratio <= 0.6:

@@ -14,6 +14,7 @@ from backend.app.ai.llm_client import LLMClient
 from backend.app.domain.account_models import AIFeaturePredictions
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.utils.logger import logger
+from backend.app.utils.number_utils import safe_float_or as _safe_float
 
 
 _AI_FEATURES_SYSTEM_PROMPT = """
@@ -51,15 +52,6 @@ Constraints:
 _CACHE_TTL_SECONDS = 900
 _PREDICTION_CACHE: dict[str, tuple[float, AIFeaturePredictions]] = {}
 _PREDICTION_CACHE_LOCK = Lock()
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    if value is None or isinstance(value, bool):
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
