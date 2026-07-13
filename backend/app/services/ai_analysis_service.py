@@ -985,9 +985,9 @@ class _OpenAIVisionAdapter:
             raise ValueError("OpenAI vision fallback currently supports images only.")
 
         def _call_with_part(image_part: dict[str, Any]):
-            return self._client.chat.completions.create(
-                model=model_name,
-                messages=[
+            payload = {
+                "model": model_name,
+                "messages": [
                     {
                         "role": "user",
                         "content": [
@@ -996,8 +996,13 @@ class _OpenAIVisionAdapter:
                         ],
                     }
                 ],
-                temperature=0,
-            )
+            }
+            if "5.6" in model_name or "o1" in model_name:
+                payload["max_completion_tokens"] = 2000
+            else:
+                payload["temperature"] = 0
+
+            return self._client.chat.completions.create(**payload)
 
         response = _call_with_part({"type": "image_url", "image_url": {"url": media_url}})
 
