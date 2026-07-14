@@ -593,7 +593,12 @@ def _enqueue_account_analysis_job_impl(
     sanitized_payload: dict[str, Any],
 ) -> dict[str, str]:
     account_id = _normalize_account_id(
-        _coalesce_account_id(sanitized_payload.get("account_id"), payload.get("account_id"))
+        _coalesce_account_id(
+            sanitized_payload.get("account_id"),
+            payload.get("account_id"),
+            sanitized_payload.get("username"),
+            payload.get("username"),
+        )
     )
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
     include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
@@ -1222,7 +1227,9 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
     current_job_id = _normalize_job_id(current_job.id if current_job is not None else None)
     raw_job_id = _normalize_job_id(payload.get("job_id"))
     job_id = current_job_id or raw_job_id or str(uuid4())
-    account_id = _normalize_account_id(payload.get("account_id"))
+    account_id = _normalize_account_id(
+        _coalesce_account_id(payload.get("account_id"), payload.get("username"))
+    )
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
     include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
     include_posts_summary_max = _normalize_include_posts_summary_max(payload.get("include_posts_summary_max", 30))
