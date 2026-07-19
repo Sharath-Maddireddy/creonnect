@@ -19,6 +19,7 @@ from backend.app.services.account_analysis_jobs import (
 from backend.app.services.single_post_analysis_jobs import (
     enqueue_single_post_analysis_job_async,
     get_single_post_analysis_job_status,
+    run_single_post_analysis_inline,
 )
 from backend.app.utils.logger import logger
 
@@ -94,7 +95,11 @@ async def _get_account_status_handler(payload: dict[str, Any]) -> dict[str, Any]
 
 
 async def _start_single_post_handler(payload: dict[str, Any]) -> dict[str, Any]:
-    result = await enqueue_single_post_analysis_job_async(payload)
+    try:
+        result = await enqueue_single_post_analysis_job_async(payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[gRPCAnalysis] Failed to enqueue single-post analysis; running inline fallback: %s", exc)
+        result = await run_single_post_analysis_inline(payload)
     return {"ok": True, "data": result}
 
 

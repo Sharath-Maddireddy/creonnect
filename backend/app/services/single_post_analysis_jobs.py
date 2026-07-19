@@ -135,6 +135,51 @@ def _post_payload(post: SinglePostInsights, fallback_post_id: str, fallback_medi
     }
 
 
+async def run_single_post_analysis_inline(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run single-post analysis immediately when queue startup is unavailable."""
+    normalized = _normalize_enqueue_payload(payload if isinstance(payload, dict) else {})
+    creator_id = _normalize_text(normalized.get("account_id")) or _normalize_text(normalized.get("creator_id")) or ""
+    creator_post = CreatorPostAIInput(
+        post_id=str(normalized.get("post_id") or ""),
+        creator_id=creator_id,
+        platform=str(normalized.get("platform") or "instagram"),
+        post_type=_normalize_post_type(normalized.get("post_type")),
+        media_url=str(normalized.get("media_url") or ""),
+        thumbnail_url=str(normalized.get("thumbnail_url") or ""),
+        caption_text=str(normalized.get("caption_text") or ""),
+        hashtags=normalized.get("hashtags") if isinstance(normalized.get("hashtags"), list) else [],
+        likes=int(normalized.get("likes") or 0),
+        comments=int(normalized.get("comments") or 0),
+        views=normalized.get("views"),
+        audio_name=_normalize_text(normalized.get("audio_name")),
+        posted_at=normalized.get("posted_at"),
+    )
+    pipeline_result = await build_single_post_insights(
+        target_post=creator_post,
+        historical_posts=[],
+        run_ai=True,
+    )
+    raw_post = pipeline_result.get("post")
+    if raw_post is None:
+        raise RuntimeError("Single-post pipeline returned no post data.")
+    post = raw_post if isinstance(raw_post, SinglePostInsights) else SinglePostInsights.model_validate(raw_post)
+    ai_analysis = pipeline_result.get("ai_analysis") if isinstance(pipeline_result.get("ai_analysis"), dict) else {}
+    return {
+        "job_id": f"inline_{creator_post.post_id}",
+        "status": "succeeded",
+        "mode": "inline_fallback",
+        "result": {
+            "status": "succeeded",
+            "post": _post_payload(post, fallback_post_id=creator_post.post_id, fallback_media_url=creator_post.media_url),
+            "scores": {
+                "P": post.weighted_post_score.score if post.weighted_post_score else None,
+                "predicted_engagement_rate": post.predicted_engagement_rate,
+            },
+            "ai_analysis": ai_analysis,
+        },
+    }
+
+
 def run_single_post_analysis_job(payload: dict[str, Any]) -> None:
     payload = payload if isinstance(payload, dict) else {}
     job_id = _normalize_text(payload.get("job_id")) or str(uuid4())
