@@ -23,6 +23,7 @@ from backend.app.services.post_insights_service import build_single_post_insight
 from backend.app.services.single_post_analysis_jobs import (
     enqueue_single_post_analysis_job_async,
     get_single_post_analysis_job_status,
+    run_single_post_analysis_inline,
 )
 from backend.app.services.post_snapshot_store import read_post_insights_snapshot
 from backend.app.utils.logger import logger
@@ -434,7 +435,8 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
     }
 
 
-@legacy_router.post("/single-post-analysis", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
+@v1_router.post("/single-post-analysis", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
+@legacy_router.post("/single-post-analysis", include_in_schema=False, dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
     """Enqueue single-post analysis as a background job."""
     payload = request.model_dump(mode="python")
@@ -445,18 +447,7 @@ async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str
         enqueue_error = exc
         logger.exception("[SinglePostJob] Failed to enqueue single-post analysis job; falling back to inline run: %s", exc)
         try:
-            inline_result = await _analyze_single_post_inline(request)
-            post_id = request.post_id or _stable_post_id(
-                media_url=request.media_url,
-                post_type=request.post_type,
-                caption_text=request.caption_text,
-            )
-            return {
-                "job_id": f"inline_{post_id}",
-                "status": "succeeded",
-                "mode": "inline_fallback",
-                "result": inline_result,
-            }
+            return await run_single_post_analysis_inline(payload)
         except Exception as inline_exc:
             logger.exception("[SinglePostJob] Inline fallback also failed: %s", inline_exc)
             raise HTTPException(
@@ -469,7 +460,8 @@ async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str
             ) from inline_exc
 
 
-@legacy_router.get("/single-post-analysis/{job_id}", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
+@v1_router.get("/single-post-analysis/{job_id}", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
+@legacy_router.get("/single-post-analysis/{job_id}", include_in_schema=False, dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 def get_single_post_analysis_status(job_id: str) -> dict[str, Any]:
     """Poll single-post analysis background job status."""
     status = get_single_post_analysis_job_status(job_id)
