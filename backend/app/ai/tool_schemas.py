@@ -1,4 +1,4 @@
-﻿"""OpenAI-compatible function tool schemas for brand discovery tool-calling."""
+"""OpenAI-compatible function tool schemas for brand discovery tool-calling."""
 
 from __future__ import annotations
 
@@ -225,6 +225,187 @@ BRAND_DISCOVERY_TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["account_id", "deliverable_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_campaign",
+            "description": (
+                "Generate a structured influencer campaign plan covering goals, timeline, "
+                "creator tier recommendations, content formats, and KPIs. Use when the brand "
+                "wants to plan or kick off a new campaign."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "brand_name": {
+                        "type": "string",
+                        "description": "Name of the brand running the campaign.",
+                    },
+                    "campaign_goal": {
+                        "type": "string",
+                        "description": "Primary campaign objective, e.g. product launch, brand awareness, sales.",
+                    },
+                    "budget_inr": {
+                        "type": "number",
+                        "description": "Total campaign budget in INR.",
+                    },
+                    "timeline_weeks": {
+                        "type": "integer",
+                        "description": "Campaign duration in weeks.",
+                    },
+                    "niche": {
+                        "type": "string",
+                        "description": "Creator niche/category, e.g. fitness, beauty, tech.",
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Preferred content format.",
+                        "enum": ["REEL", "IMAGE", "STORY", "CAROUSEL", "MIXED"],
+                    },
+                    "target_audience": {
+                        "type": "string",
+                        "description": "Brief description of the target audience.",
+                    },
+                },
+                "required": ["brand_name", "campaign_goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "review_campaign_results",
+            "description": (
+                "Analyze and summarize the performance of an influencer campaign. "
+                "Identifies what worked, what didn't, and provides actionable recommendations. "
+                "Use when the brand shares campaign metrics or asks for performance review."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_name": {
+                        "type": "string",
+                        "description": "Name or description of the campaign.",
+                    },
+                    "total_reach": {
+                        "type": "integer",
+                        "description": "Total combined reach across all creators.",
+                    },
+                    "total_impressions": {
+                        "type": "integer",
+                        "description": "Total impressions generated.",
+                    },
+                    "total_engagement": {
+                        "type": "integer",
+                        "description": "Total engagements (likes + comments + shares + saves).",
+                    },
+                    "creator_count": {
+                        "type": "integer",
+                        "description": "Number of creators involved in the campaign.",
+                    },
+                    "budget_spent_inr": {
+                        "type": "number",
+                        "description": "Total budget spent in INR.",
+                    },
+                    "conversions": {
+                        "type": "integer",
+                        "description": "Number of conversions or sales attributed to the campaign.",
+                    },
+                    "campaign_goal": {
+                        "type": "string",
+                        "description": "Original campaign objective for comparison.",
+                    },
+                    "niche": {
+                        "type": "string",
+                        "description": "Creator niche to benchmark against industry averages.",
+                    },
+                },
+                "required": ["campaign_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "suggest_budget_allocation",
+            "description": (
+                "Recommend how to split an influencer marketing budget across creator tiers "
+                "and content types to maximize ROI. Use when a brand asks how to allocate "
+                "or distribute their campaign budget."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "total_budget_inr": {
+                        "type": "number",
+                        "description": "Total available influencer marketing budget in INR.",
+                    },
+                    "campaign_goal": {
+                        "type": "string",
+                        "description": "Primary campaign objective, e.g. awareness, conversions, engagement.",
+                    },
+                    "creator_count": {
+                        "type": "integer",
+                        "description": "Approximate number of creators to work with.",
+                    },
+                    "niche": {
+                        "type": "string",
+                        "description": "Creator niche/category for pricing context.",
+                    },
+                    "preferred_tiers": {
+                        "type": "array",
+                        "description": "Preferred creator tiers to include.",
+                        "items": {
+                            "type": "string",
+                            "enum": ["nano", "micro", "mid-tier", "macro"],
+                        },
+                    },
+                },
+                "required": ["total_budget_inr", "campaign_goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "benchmark_campaign_performance",
+            "description": (
+                "Compare campaign metrics against industry benchmarks for the given niche. "
+                "Returns a performance grade and gap analysis. Use when a brand wants to "
+                "know how their results compare to industry standards."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "niche": {
+                        "type": "string",
+                        "description": "Creator niche to benchmark against, e.g. fitness, beauty, tech.",
+                    },
+                    "engagement_rate": {
+                        "type": "number",
+                        "description": "Observed average engagement rate as a decimal (e.g. 0.045 for 4.5%).",
+                    },
+                    "reach_per_post": {
+                        "type": "integer",
+                        "description": "Average reach per post across the campaign.",
+                    },
+                    "cost_per_engagement_inr": {
+                        "type": "number",
+                        "description": "Cost per engagement in INR.",
+                    },
+                    "cost_per_reach_inr": {
+                        "type": "number",
+                        "description": "Cost per 1000 reach (CPM) in INR.",
+                    },
+                    "conversion_rate": {
+                        "type": "number",
+                        "description": "Conversion rate as a decimal (e.g. 0.02 for 2%).",
+                    },
+                },
+                "required": ["niche"],
             },
         },
     },

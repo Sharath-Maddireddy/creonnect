@@ -11,6 +11,8 @@ The function is defensive: on any LLM or parsing error it logs the
 failure and returns a conservative fallback `CreatorNiche`.
 """
 
+from collections import Counter
+import re
 from typing import List
 import asyncio
 
@@ -19,6 +21,273 @@ from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.domain.trend_models import CreatorNiche
 from backend.app.utils.logger import logger
+
+
+_NICHE_KEYWORDS: dict[str, set[str]] = {
+    "Fitness": {
+        "abs",
+        "bodybuilding",
+        "cardio",
+        "calisthenics",
+        "crossfit",
+        "exercise",
+        "fatloss",
+        "fitness",
+        "gym",
+        "hiit",
+        "health",
+        "mobility",
+        "muscle",
+        "protein",
+        "running",
+        "strength",
+        "training",
+        "weightloss",
+        "workout",
+        "yoga",
+        "zumba",
+    },
+    "Food": {
+        "bake",
+        "biryani",
+        "chef",
+        "cook",
+        "cooking",
+        "cuisine",
+        "desi",
+        "dessert",
+        "dhaba",
+        "dinner",
+        "eat",
+        "food",
+        "foodie",
+        "homemade",
+        "kitchen",
+        "lunch",
+        "recipe",
+        "restaurant",
+        "snack",
+        "streetfood",
+        "taste",
+        "thali",
+    },
+    "Beauty": {
+        "beauty",
+        "blush",
+        "eyebrow",
+        "foundation",
+        "glow",
+        "glam",
+        "hair",
+        "highlighter",
+        "lipstick",
+        "makeup",
+        "mascara",
+        "nails",
+        "serum",
+        "skincare",
+        "spf",
+        "sunscreen",
+        "tutorial",
+    },
+    "Fashion": {
+        "dress",
+        "ethnic",
+        "fashion",
+        "fitcheck",
+        "kurta",
+        "lehenga",
+        "ootd",
+        "outfit",
+        "saree",
+        "style",
+        "styling",
+        "thrift",
+        "wear",
+        "wardrobe",
+    },
+    "Travel": {
+        "beach",
+        "explore",
+        "hill",
+        "hotel",
+        "india",
+        "itinerary",
+        "mountains",
+        "offbeat",
+        "resort",
+        "solo",
+        "travel",
+        "traveller",
+        "trip",
+        "vacation",
+        "vlog",
+        "wanderlust",
+    },
+    "Tech": {
+        "ai",
+        "app",
+        "build",
+        "coding",
+        "developer",
+        "gadget",
+        "laptop",
+        "programming",
+        "review",
+        "saas",
+        "software",
+        "startup",
+        "tech",
+        "unboxing",
+    },
+    "Finance": {
+        "business",
+        "crypto",
+        "entrepreneur",
+        "finance",
+        "freelance",
+        "growth",
+        "investing",
+        "money",
+        "passive",
+        "profit",
+        "saving",
+        "sip",
+        "startup",
+        "stocks",
+        "trading",
+    },
+    "Motivation": {
+        "attitude",
+        "confidence",
+        "discipline",
+        "goals",
+        "grind",
+        "growth",
+        "hustle",
+        "inspire",
+        "inspiration",
+        "life",
+        "mindset",
+        "motivation",
+        "motivational",
+        "persistence",
+        "positivity",
+        "quotes",
+        "success",
+        "thoughts",
+        "vision",
+        "winning",
+    },
+    "Lifestyle": {
+        "aesthetic",
+        "daily",
+        "day",
+        "grwm",
+        "lifestyle",
+        "living",
+        "morning",
+        "productive",
+        "productivity",
+        "routine",
+        "selfcare",
+        "vlog",
+        "wellness",
+    },
+    "Education": {
+        "career",
+        "course",
+        "education",
+        "exam",
+        "explainer",
+        "facts",
+        "howto",
+        "knowledge",
+        "learn",
+        "learning",
+        "school",
+        "science",
+        "skills",
+        "study",
+        "teacher",
+        "tips",
+        "tutorial",
+        "upsc",
+    },
+    "Comedy": {
+        "comedy",
+        "comic",
+        "fun",
+        "funny",
+        "humor",
+        "joke",
+        "lol",
+        "meme",
+        "prank",
+        "roast",
+        "skit",
+        "standup",
+        "troll",
+    },
+}
+
+
+def _tokenize_text(value: str | None) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    return re.findall(r"[a-z0-9]+", value.lower())
+
+
+def _fallback_creator_niche(
+    posts: List[SinglePostInsights],
+    bio: str | None,
+    username: str | None,
+) -> CreatorNiche:
+    tokens: list[str] = []
+    tokens.extend(_tokenize_text(username))
+    tokens.extend(_tokenize_text(bio))
+    media_type_counts: Counter[str] = Counter()
+    for post in posts[:20]:
+        tokens.extend(_tokenize_text(getattr(post, "caption_text", None)))
+        tokens.extend(_tokenize_text(getattr(post, "post_category", None)))
+        tokens.extend(_tokenize_text(getattr(post, "creator_dominant_category", None)))
+        media_type = str(getattr(post, "media_type", "") or "").lower()
+        if media_type:
+            media_type_counts[media_type] += 1
+
+    counts = Counter(tokens)
+    scores: dict[str, int] = {}
+    for category, keywords in _NICHE_KEYWORDS.items():
+        scores[category] = sum(counts[keyword] for keyword in keywords)
+
+    category, score = max(scores.items(), key=lambda item: item[1])
+    if score <= 0:
+        # Last-resort heuristic: dominant media type hints at content category
+        if media_type_counts.get("reel", 0) + media_type_counts.get("video", 0) > len(posts) // 2:
+            logger.warning(
+                "[NicheDiscovery] Keyword score=0; guessing Lifestyle from reel-heavy account (username=%s)",
+                username,
+            )
+            return CreatorNiche(primary_category="Lifestyle", sub_niches=["video", "reels"], confidence_score=0.2)
+        logger.warning(
+            "[NicheDiscovery] Keyword score=0; returning General (username=%s, post_count=%d)",
+            username,
+            len(posts),
+        )
+        return CreatorNiche(primary_category="General", sub_niches=[], confidence_score=0.1)
+
+    matched_keywords = [
+        keyword
+        for keyword, _count in counts.most_common()
+        if keyword in _NICHE_KEYWORDS[category]
+    ][:5]
+    total_keyword_hits = sum(scores.values())
+    confidence = min(0.85, max(0.35, score / max(total_keyword_hits, 1)))
+    return CreatorNiche(
+        primary_category=category,
+        sub_niches=matched_keywords,
+        confidence_score=round(confidence, 2),
+    )
 
 
 async def discover_creator_niche(
@@ -108,5 +377,4 @@ async def discover_creator_niche(
 
     except Exception as e:  # broad to catch LLM, parsing, and validation errors
         logger.exception("niche_discovery failed: %s", e)
-        # Safe conservative fallback
-        return CreatorNiche(primary_category="General", sub_niches=[], confidence_score=0.1)
+        return _fallback_creator_niche(posts, bio, username)

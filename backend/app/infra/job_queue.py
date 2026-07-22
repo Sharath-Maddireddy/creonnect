@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
+from backend.app.infra.job_defaults import (
+    DEFAULT_FAILURE_TTL_SECONDS,
+    DEFAULT_JOB_TIMEOUT_SECONDS,
+    DEFAULT_RESULT_TTL_SECONDS,
+)
 from backend.app.utils.logger import logger
 
 
@@ -24,10 +29,6 @@ SINGLE_POST_ANALYSIS_JOB_NAME = "single_post_analysis.run"
 
 _JOB_HANDLERS: dict[str, Callable[..., Any]] = {}
 _SQS_CLIENT = None
-
-DEFAULT_JOB_TIMEOUT_SECONDS = 600
-DEFAULT_RESULT_TTL_SECONDS = 86400
-DEFAULT_FAILURE_TTL_SECONDS = 86400
 
 
 def _json_default(value: Any) -> Any:

@@ -12,7 +12,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from backend.app.utils.env import load_app_env
 
-load_app_env(override=False)
+load_app_env(override=True)
 
 from backend.app.api.account_analysis_routes import router as account_analysis_router
 from backend.app.api.campaign_routes import router as campaign_router
@@ -23,6 +23,7 @@ from backend.app.api.instagram_auth_routes import router as instagram_auth_route
 from backend.app.api.post_analysis_routes import router as post_analysis_router
 from backend.app.api.reel_analysis_routes import router as reel_analysis_router
 from backend.app.api.trend_routes import router as trend_router
+from backend.app.api.creo_intelligence_routes import router as creo_intelligence_router
 from backend.app.infra.database import init_db, initialize_database_engines
 from backend.app.utils.logger import logger
 
@@ -145,6 +146,13 @@ app.include_router(reel_analysis_router)
 app.include_router(draft_analysis_router)
 app.include_router(instagram_auth_router)
 app.include_router(trend_router)
+app.include_router(creo_intelligence_router)
+
+# Dev-only: session bypass for testing without Instagram OAuth
+if not _is_production_environment():
+    from backend.app.api.dev_auth_routes import router as dev_auth_router
+    app.include_router(dev_auth_router)
+    logger.info("[Dev] /api/dev/* routes registered (non-production only)")
 
 
 @app.get("/health")

@@ -300,6 +300,7 @@ async def build_creator_analytics_async(creator_id: str, access_token: str | Non
         account_avg_engagement_rate=account_avg_engagement_rate,
         niche_avg_engagement_rate=None,
         follower_band=follower_band,
+        follower_count=followers_count,
     )
 
     # Deterministic signals

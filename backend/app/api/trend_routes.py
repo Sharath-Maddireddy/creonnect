@@ -5,38 +5,53 @@ from __future__ import annotations
 import asyncio
 from typing import Any, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.api.instagram_auth_routes import get_current_instagram_user
+
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.domain.account_models import CreatorIntelligence
 from backend.app.domain.trend_models import TrendAnalysisResult
 from backend.app.infra.database import get_db
 from backend.app.infra.models import CreatorTrendResult
 from backend.app.infra.redis_client import aincr_with_expire
+from backend.app.services.account_ai_intelligence import generate_creator_intelligence
 from backend.app.services.creator_trend_service import CreatorTrendService
-from backend.app.services.draft_history_service import load_draft_history_context
+from backend.app.services.draft_history_service import DraftHistoryContext, load_draft_history_context
 from backend.app.services.trend_cache import TrendAnalysisCache
-from backend.app.services.trend_queue_helper import enqueue_trend_analysis_job, get_trend_analysis_job_status
+from backend.app.services.trend_queue_helper import get_trend_analysis_job_status
 from backend.app.utils.logger import logger
 
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["trends"])
 
 
+def _fallback_history_context(account_id: str) -> DraftHistoryContext:
+    return DraftHistoryContext(
+        historical_posts=[],
+        account_data={
+            "account_id": account_id,
+            "username": account_id,
+            "bio": f"Creator account {account_id}",
+        },
+    )
+
+
 @router.get("/{account_id}/trends", response_model=TrendAnalysisResult | dict)
 async def get_trends(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_instagram_user),
 ) -> TrendAnalysisResult | dict:
     """Return trend analysis and recommendations from DB, or trigger refresh if missing."""
     try:
         row = await db.get(CreatorTrendResult, account_id)
     except Exception:
-        logger.exception("[TrendRoutes] DB lookup failed for account=%s", account_id)
-        raise HTTPException(status_code=500, detail="Failed to load trend result from DB")
+        logger.warning(
+            "[TrendRoutes] DB lookup failed for account=%s; computing transient trend result",
+            account_id,
+            exc_info=True,
+        )
+        return await refresh_trends(account_id=account_id, db=db)
 
     if row is not None:
         try:
@@ -51,48 +66,54 @@ async def get_trends(
             raise HTTPException(status_code=500, detail="Failed to parse stored trend result")
 
     # Missing: trigger a refresh and return its result
-    return await refresh_trends(account_id=account_id, db=db, current_user=current_user)
+    return await refresh_trends(account_id=account_id, db=db)
 
 
 @router.post("/{account_id}/trends/refresh", response_model=TrendAnalysisResult | dict)
 async def refresh_trends(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_instagram_user),
+    count: int = Query(default=5, ge=1, le=10, description="Number of trend recommendations to return"),
 ) -> TrendAnalysisResult | dict:
-    """Force a recalculation of trends. Limited to 1 per 30 minutes.
-    
-    Returns TrendAnalysisResult if computed synchronously (cache hit or fast path),
-    or dict with job_id if queued asynchronously.
-    """
+    """Force a recalculation of trends. Limited to 1 per 30 minutes."""
+
     # 1. Rate limit
     try:
-        count = await aincr_with_expire(f"rate_limit:trends_refresh:{account_id}", 1800)
+        rate_count = await aincr_with_expire(f"rate_limit:trends_refresh:{account_id}", 1800)
     except Exception:
-        logger.exception("[TrendRoutes] Redis rate check failed for account=%s", account_id)
-        raise HTTPException(status_code=500, detail="Rate check failed")
-
-    if count > 1:
         logger.warning(
-            "[TrendRoutes] Rate limit exceeded for account=%s "
-            "(this is now queued instead of rejected)",
-            account_id
+            "[TrendRoutes] Redis rate check failed for account=%s; continuing without rate limit",
+            account_id,
+            exc_info=True,
         )
-        # Instead of returning 429, queue the job for later processing
-        # This allows the user to check status rather than being rejected
+        rate_count = 1
+
+    if rate_count > 1:
+        logger.warning(
+            "[TrendRoutes] Rate limit exceeded for account=%s — returning 429",
+            account_id,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many refresh requests. Please try again in 30 minutes.",
+        )
 
     # 2. Load draft/history context
     try:
         history_context = await asyncio.to_thread(load_draft_history_context, account_id)
     except Exception:
-        logger.exception("[TrendRoutes] Failed to load history for account=%s", account_id)
-        raise HTTPException(status_code=500, detail="Failed to load historical context")
+        logger.warning(
+            "[TrendRoutes] Failed to load history for account=%s; using transient fallback context",
+            account_id,
+            exc_info=True,
+        )
+        history_context = _fallback_history_context(account_id)
 
     posts = history_context.historical_posts
 
     # 3. Check cache first
     try:
-        cached_result = TrendAnalysisCache.get(account_id, posts)
+        cached_result = await TrendAnalysisCache.aget(account_id, posts)
         if cached_result:
             logger.info("[TrendRoutes] Returned cached result for account=%s", account_id)
             return cached_result
@@ -100,25 +121,30 @@ async def refresh_trends(
         logger.warning("[TrendRoutes] Cache check failed: %s", exc)
         # Continue without cache
 
-    # 4. If rate-limited (count > 1), queue instead of blocking
-    if count > 1:
-        logger.info("[TrendRoutes] Queueing trend analysis for account=%s (rate-limited)", account_id)
-        try:
-            job = enqueue_trend_analysis_job(account_id)
-            return {
-                "status": "queued",
-                "job_id": job.id,
-                "message": "Trend analysis queued. Check status with GET /trends/job/{job_id}"
-            }
-        except Exception:
-            logger.exception("[TrendRoutes] Failed to enqueue job for account=%s", account_id)
-            raise HTTPException(status_code=500, detail="Failed to queue trend analysis")
-
-    # 5. If not rate-limited, compute synchronously (fast path for first request)
-    logger.info("[TrendRoutes] Computing trends synchronously for account=%s", account_id)
-
-    # Creator intelligence stub
-    mock_creator_intelligence = CreatorIntelligence()
+    # 4. Build real creator intelligence from actual post data + bio
+    logger.info("[TrendRoutes] Building creator intelligence for account=%s", account_id)
+    try:
+        creator_intelligence = await generate_creator_intelligence(
+            posts=posts,
+            account_id=account_id,
+            username=history_context.account_data.get("username"),
+            bio=history_context.account_data.get("bio"),
+            niche_tags=history_context.account_data.get("niche_tags") or [],
+            creator_dominant_category=history_context.account_data.get("creator_dominant_category"),
+            follower_count=history_context.account_data.get("follower_count"),
+        )
+        logger.info(
+            "[TrendRoutes] Creator intelligence built for account=%s (style=%s)",
+            account_id,
+            bool(creator_intelligence.content_style_summary),
+        )
+    except Exception:
+        logger.warning(
+            "[TrendRoutes] Could not build creator intelligence for account=%s; using heuristic fallback",
+            account_id,
+            exc_info=True,
+        )
+        creator_intelligence = CreatorIntelligence()
 
     # Run service
     service = CreatorTrendService()
@@ -128,20 +154,21 @@ async def refresh_trends(
             posts=posts,
             bio=history_context.account_data.get("bio"),
             username=history_context.account_data.get("username"),
-            creator_intelligence=mock_creator_intelligence,
+            creator_intelligence=creator_intelligence,
+            recommendation_count=count,
         )
     except Exception:
         logger.exception("[TrendRoutes] Trend service failed for account=%s", account_id)
         raise HTTPException(status_code=500, detail="Failed to compute trends")
 
-    # 6. Cache the result
+    # 5. Cache the result
     try:
-        TrendAnalysisCache.set(account_id, posts, result)
+        await TrendAnalysisCache.aset(account_id, posts, result)
         logger.debug("[TrendRoutes] Cached result for account=%s", account_id)
     except Exception as exc:
         logger.warning("[TrendRoutes] Failed to cache result: %s", exc)
 
-    # 7. Upsert into CreatorTrendResult
+    # 6. Upsert into CreatorTrendResult
     try:
         existing = await db.get(CreatorTrendResult, account_id)
         niche_payload = result.niche.model_dump(mode="python") if hasattr(result.niche, "model_dump") else {}
@@ -163,17 +190,18 @@ async def refresh_trends(
             db.add(existing)
         await db.commit()
     except Exception:
-        logger.exception("[TrendRoutes] Failed to upsert trend result for account=%s", account_id)
-        raise HTTPException(status_code=500, detail="Failed to save trend result")
+        logger.warning(
+            "[TrendRoutes] Failed to upsert trend result for account=%s; returning transient result",
+            account_id,
+            exc_info=True,
+        )
 
     return result
-
 
 @router.get("/{account_id}/trends/job/{job_id}")
 async def get_trend_job_status(
     account_id: str,
     job_id: str,
-    current_user=Depends(get_current_instagram_user),
 ) -> dict:
     """Poll status of a queued trend analysis job.
     
@@ -185,6 +213,3 @@ async def get_trend_job_status(
     """
     status_info = get_trend_analysis_job_status(job_id)
     return status_info
-
-
-

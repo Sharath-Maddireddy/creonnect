@@ -46,7 +46,7 @@ def parse_campaign_prompt(prompt: str, brand_name: str | None = None) -> dict:
     """Take a natural language prompt and return extracted campaign requirements."""
     logger.info("[CampaignPromptService] Parsing campaign prompt via AI...")
 
-    llm = LLMClient(model_name="gpt-4o-mini", temperature=0.3, max_tokens=500)
+    llm = LLMClient(temperature=0.3, max_tokens=500)
     system_prompt = "You are an expert brand marketing campaign strategist."
     user_prompt = CAMPAIGN_BRIEF_EXTRACTION_PROMPT.replace("{user_prompt}", prompt)
 
@@ -127,7 +127,7 @@ def build_brand_profile_from_parsed(parsed: dict) -> BrandProfile:
 
 def build_ai_campaign_summary(prompt: str, parsed_brief: dict, brand: BrandProfile) -> str:
     """Generate a short AI summary of the interpreted campaign brief."""
-    llm = LLMClient(model_name="gpt-4o-mini", temperature=0.2, max_tokens=120)
+    llm = LLMClient(temperature=0.2, max_tokens=120)
     try:
         summary = llm.generate(
             {

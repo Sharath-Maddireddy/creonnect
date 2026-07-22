@@ -172,10 +172,13 @@ async def fetch_live_trend_signals(
         A deduplicated list of up to 10 non-empty plain-text trend strings.
     """
     try:
-        tavily_signals, google_signals = await asyncio.gather(
+        results = await asyncio.gather(
             _fetch_tavily_signals(primary_category, sub_niches),
             _fetch_google_trends_signals(primary_category, sub_niches),
+            return_exceptions=True,
         )
+        tavily_signals = results[0] if not isinstance(results[0], BaseException) else []
+        google_signals = results[1] if not isinstance(results[1], BaseException) else []
     except Exception as exc:
         logger.warning("[TrendSignals] Aggregation failed: %s", exc)
         return []

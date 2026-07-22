@@ -8,28 +8,15 @@ import json
 import os
 import re
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread
 from typing import Any
 from uuid import uuid4
 
 from rq import Retry, get_current_job
 
-from backend.app.account_sources.creonnect_bd_client import CreonnectBDClient
-from backend.app.account_sources import materialize_account_source_payload
-from backend.app.domain.post_models import SinglePostInsights
 import backend.app.infra.redis_client as redis_client
-from backend.app.infra.job_queue import (
-    ACCOUNT_ANALYSIS_JOB_NAME,
-    ACCOUNT_ANALYSIS_QUEUE_NAME,
-    enqueue_callable,
-)
-from backend.app.infra.rq_queue import (
-    DEFAULT_FAILURE_TTL_SECONDS,
-    DEFAULT_JOB_TIMEOUT_SECONDS,
-    DEFAULT_RESULT_TTL_SECONDS,
-    get_queue as get_rq_queue,
-)
+from backend.app.account_sources import materialize_account_source_payload
+from backend.app.account_sources.creonnect_bd_client import CreonnectBDClient
 from backend.app.analytics.account_health_engine import (
     compute_account_engagement_signals,
     compute_account_vision_summary,
@@ -39,13 +26,45 @@ from backend.app.analytics.creator_scoring_engine import calculate_creator_score
 from backend.app.analytics.reel_analysis_service import compute_reel_analysis
 from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
 from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
+from backend.app.domain.post_models import SinglePostInsights
+from backend.app.infra.job_defaults import (
+    ACTIVE_REUSABLE_STATUSES,
+    DEFAULT_FAILURE_TTL_SECONDS,
+    DEFAULT_JOB_TIMEOUT_SECONDS,
+    DEFAULT_RESULT_TTL_SECONDS,
+)
+from backend.app.infra.job_queue import (
+    ACCOUNT_ANALYSIS_JOB_NAME,
+    ACCOUNT_ANALYSIS_QUEUE_NAME,
+    enqueue_callable,
+)
+from backend.app.infra.redis_job_store import RedisJobStore
+from backend.app.infra.rq_queue import get_queue as get_rq_queue
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
+from backend.app.services.account_analysis_bd_sync import (
+    connection_id_from_payload as _connection_id_from_payload_external,
+    publish_result_to_creonnect_bd as _publish_result_to_creonnect_bd_external,
+)
+from backend.app.services.account_analysis_lifecycle import (
+    initialize_job_status as _initialize_job_status_external,
+    project_stale_failed_status as _project_stale_failed_status_external,
+    read_status_with_guard as _read_status_with_guard_external,
+    update_status as _update_status_external,
+)
+from backend.app.services.account_analysis_post_pipeline import (
+    bounded_posts_summary as _bounded_posts_summary_external,
+    maybe_attach_inline_reel_analysis as _maybe_attach_inline_reel_analysis_external,
+)
 from backend.app.services.account_analysis_result_store import persist_account_analysis_result
+from backend.app.services.account_analysis_results import (
+    draft_optimizer_history as _draft_optimizer_history_external,
+    pipeline_result_payload as _pipeline_result_payload_external,
+)
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
+from backend.app.utils.datetime_utils import parse_iso_datetime
 from backend.app.utils.logger import logger
 from backend.app.utils.number_utils import now_iso as _now_iso, safe_float as _safe_float
-from backend.app.infra.redis_job_store import RedisJobStore
 from backend.app.workers.embedding_worker import upsert_creator
 
 
@@ -64,7 +83,6 @@ _ACCOUNT_EXTRA_STATUS_FIELDS: dict = {"progress": None, "warnings": [], "quality
 ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS = max(900, DEFAULT_JOB_TIMEOUT_SECONDS + 300)
 ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS = max(1800, DEFAULT_JOB_TIMEOUT_SECONDS * 2)
 
-_ACTIVE_REUSABLE_STATUSES = {"queued", "started", "succeeded"}
 _RUNNING_STATUSES = {"queued", "started"}
 _GEMINI_CONCURRENCY_LIMIT = 8
 _ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,120}$")
@@ -167,16 +185,7 @@ def _sanitize_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _connection_id_from_payload(payload: dict[str, Any]) -> str | None:
-    value = payload.get("connection_id")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    source_meta = payload.get("source_meta")
-    if isinstance(source_meta, dict):
-        meta_value = source_meta.get("connection_id")
-        if isinstance(meta_value, str) and meta_value.strip():
-            return meta_value.strip()
-    return None
-
+    return _connection_id_from_payload_external(payload)
 
 def _publish_result_to_creonnect_bd(
     *,
@@ -184,150 +193,48 @@ def _publish_result_to_creonnect_bd(
     result_payload: dict[str, Any],
     job_id: str,
 ) -> None:
-    source = payload.get("source")
-    if not (isinstance(source, str) and source.strip().lower() == "creonnect_bd"):
-        return
-    connection_id = _connection_id_from_payload(payload)
-    if not connection_id:
-        logger.warning("[AccountAnalysisJob] Skipping creonnect-bd sync: missing connection_id job_id=%s", job_id)
-        return
-
-    account_level = dict(result_payload)
-    posts_summary = account_level.pop("posts_summary", None)
-    post_items: list[dict[str, Any]] = []
-    if isinstance(posts_summary, list):
-        for item in posts_summary:
-            if not isinstance(item, dict):
-                continue
-            post_id = item.get("post_id")
-            if not isinstance(post_id, str) or not post_id.strip():
-                continue
-            post_items.append(
-                {
-                    "post_id": post_id.strip(),
-                    "ai_analysis": item,
-                }
-            )
-
-    client = CreonnectBDClient(
-        base_url=payload.get("bd_base_url") if isinstance(payload.get("bd_base_url"), str) else None,
-        timeout_seconds=payload.get("bd_timeout_seconds") if isinstance(payload.get("bd_timeout_seconds"), (int, float)) else None,
+    _publish_result_to_creonnect_bd_external(
+        payload=payload,
+        result_payload=result_payload,
+        job_id=job_id,
+        client_factory=CreonnectBDClient,
+        run_coroutine_sync=_run_coroutine_sync,
+        logger=logger,
     )
-    logger.info(
-        "[AccountAnalysisJob] Syncing analysis to creonnect-bd job_id=%s connection_id=%s posts=%s",
-        job_id,
-        connection_id,
-        len(post_items),
-    )
-    _run_coroutine_sync(
-        client.update_connection_ai_analysis(
-            platform="instagram",
-            connection_id=connection_id,
-            ai_analysis=account_level,
-        )
-    )
-    if post_items:
-        _run_coroutine_sync(
-            client.update_posts_ai_analysis(
-                platform="instagram",
-                connection_id=connection_id,
-                items=post_items,
-            )
-        )
-    logger.info("[AccountAnalysisJob] Synced analysis to creonnect-bd job_id=%s connection_id=%s", job_id, connection_id)
-
-
-def _parse_iso_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
 
 def _project_stale_failed_status(payload: dict[str, Any]) -> dict[str, Any]:
-    status = payload.get("status")
-    if status not in _RUNNING_STATUSES:
-        return payload
-
-    now = datetime.now(timezone.utc)
-    created_at = _parse_iso_datetime(payload.get("created_at"))
-    started_at = _parse_iso_datetime(payload.get("started_at"))
-    stale_reason: str | None = None
-    stale_finished_at: datetime | None = None
-
-    if status == "queued":
-        if created_at is None:
-            return payload
-        age_seconds = (now - created_at).total_seconds()
-        if age_seconds > ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS:
-            stale_reason = (
-                f"Job remained queued for {int(age_seconds)}s, exceeding "
-                f"{ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS}s."
-            )
-            stale_finished_at = created_at + timedelta(seconds=ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS)
-
-    if status == "started":
-        active_since = started_at or created_at
-        if active_since is None:
-            return payload
-        age_seconds = (now - active_since).total_seconds()
-        if age_seconds > ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS:
-            stale_reason = (
-                f"Job remained started for {int(age_seconds)}s, exceeding "
-                f"{ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS}s."
-            )
-            stale_finished_at = active_since + timedelta(seconds=ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS)
-
-    if stale_reason is None:
-        return payload
-
-    finished_at = payload.get("finished_at")
-    if not isinstance(finished_at, str) or not finished_at.strip():
-        finished_at = (
-            stale_finished_at.isoformat()
-            if isinstance(stale_finished_at, datetime)
-            else _now_iso()
-        )
-
-    projected = dict(payload)
-    projected.update(
-        status="failed",
-        finished_at=finished_at,
-        error={"type": "TimeoutError", "message": stale_reason},
-        result=None,
+    return _project_stale_failed_status_external(
+        payload,
+        running_statuses=_RUNNING_STATUSES,
+        queued_stale_seconds=ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS,
+        started_stale_seconds=ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS,
+        parse_iso_datetime=parse_iso_datetime,
+        now_iso=_now_iso,
     )
-    return projected
-
 
 def _read_status_with_guard(job_id: str) -> dict[str, Any] | None:
-    payload = _store.get(job_id)
-    if not isinstance(payload, dict):
-        return None
-    sanitized = _sanitize_status_payload(payload)
-    return _project_stale_failed_status(sanitized)
-
+    return _read_status_with_guard_external(
+        job_id,
+        store=_store,
+        sanitize_status_payload=_sanitize_status_payload,
+        project_stale_status=_project_stale_failed_status,
+    )
 
 def _update_status(job_id: str, **updates: Any) -> dict[str, Any]:
-    payload = _store.get(job_id) or _store.base_status(job_id, _ACCOUNT_EXTRA_STATUS_FIELDS)
-    payload.update(updates)
-    _store.write(job_id, payload)
-    return payload
-
+    return _update_status_external(
+        job_id,
+        store=_store,
+        extra_status_fields=_ACCOUNT_EXTRA_STATUS_FIELDS,
+        updates=updates,
+    )
 
 def initialize_job_status(job_id: str) -> dict[str, Any]:
-    existing = get_account_analysis_job_status(job_id)
-    if existing:
-        return existing
-    payload = _store.base_status(job_id, _ACCOUNT_EXTRA_STATUS_FIELDS)
-    _store.write(job_id, payload)
-    return payload
-
-
+    return _initialize_job_status_external(
+        job_id,
+        get_status=get_account_analysis_job_status,
+        store=_store,
+        extra_status_fields=_ACCOUNT_EXTRA_STATUS_FIELDS,
+    )
 
 def get_account_analysis_job_status(job_id: str) -> dict[str, Any] | None:
     return _read_status_with_guard(job_id)
@@ -478,7 +385,7 @@ def _resolve_reusable_job(
 
     for candidate_job_id in candidates:
         status = _status_value(candidate_job_id)
-        if status in _ACTIVE_REUSABLE_STATUSES:
+        if status in ACTIVE_REUSABLE_STATUSES:
             return candidate_job_id, status
     return None, None
 
@@ -507,9 +414,6 @@ def _restore_rate_limit_counter(account_id: str) -> None:
     value = redis_client.decr(rate_key)
     if int(value) <= 0:
         redis_client.delete(rate_key)
-
-
-T = Any  # simple TypeVar alias for _try_nonfatal
 
 
 def _try_nonfatal(label: str, fn: Callable[[], Any], account_id: str, fallback: Any = None) -> Any:
@@ -867,67 +771,13 @@ def _is_reel_post(post: SinglePostInsights) -> bool:
 
 
 def _maybe_attach_inline_reel_analysis(post: SinglePostInsights) -> SinglePostInsights:
-    if not _is_reel_post(post):
-        return post
-
-    media_url = post.media_url if isinstance(post.media_url, str) else ""
-    logger.info(
-        "[AccountAnalysisJob] Detected REEL post for inline reel analysis media_id=%s",
-        post.media_id,
+    return _maybe_attach_inline_reel_analysis_external(
+        post,
+        run_reel_gemini_analysis=run_reel_gemini_analysis,
+        compute_reel_audio_score=compute_reel_audio_score,
+        compute_reel_analysis=compute_reel_analysis,
+        logger=logger,
     )
-    if not media_url.strip():
-        logger.info(
-            "[AccountAnalysisJob] Skipping inline reel analysis for media_id=%s: missing media_url",
-            post.media_id,
-        )
-        return post
-
-    try:
-        logger.info(
-            "[AccountAnalysisJob] Starting inline reel analysis media_id=%s",
-            post.media_id,
-        )
-        vision_result = run_reel_gemini_analysis(media_url.strip())
-        vision_status = str(vision_result.get("status", "error"))
-        signals = vision_result.get("signals", {})
-        if not isinstance(signals, dict):
-            signals = {}
-        logger.info(
-            "[AccountAnalysisJob] Inline reel vision result media_id=%s status=%s signal_keys=%s",
-            post.media_id,
-            vision_status,
-            sorted(signals.keys()),
-        )
-
-        audio_score = compute_reel_audio_score(
-            audio_name=None,
-            caption_text=post.caption_text,
-        )
-        reel_model = compute_reel_analysis(
-            reel_vision_signals=signals,
-            audio_score=audio_score,
-            watch_time_pct=None,
-            reel_vision_status=vision_status,
-        )
-        logger.info(
-            "[AccountAnalysisJob] Inline reel analysis complete media_id=%s status=%s total=%s",
-            post.media_id,
-            vision_status,
-            reel_model.total,
-        )
-        logger.info(
-            "[AccountAnalysisJob] Attached reel_analysis to post media_id=%s",
-            post.media_id,
-        )
-        return post.model_copy(update={"reel_analysis": reel_model})
-    except Exception as exc:
-        logger.warning(
-            "[AccountAnalysisJob] Non-fatal: inline reel analysis failed for media_id=%s: %s",
-            post.media_id,
-            exc,
-        )
-        return post
-
 
 def _build_post_summary(
     post: SinglePostInsights,
@@ -1009,31 +859,17 @@ def _bounded_posts_summary(
     vision_enabled: bool,
     notes_by_post_id: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    summaries: list[dict[str, Any]] = []
-    for post in posts:
-        post_id = post.media_id if isinstance(post.media_id, str) else ""
-        summaries.append(
-            _build_post_summary(
-                post,
-                vision_enabled=vision_enabled,
-                note_overrides=notes_by_post_id.get(post_id),
-            )
-        )
-    summaries.sort(key=lambda item: (str(item.get("post_id") or ""), str(item.get("media_url") or "")))
-    return summaries[:include_posts_summary_max]
-
+    return _bounded_posts_summary_external(
+        posts,
+        include_posts_summary_max=include_posts_summary_max,
+        vision_enabled=vision_enabled,
+        notes_by_post_id=notes_by_post_id,
+        safe_float=_safe_float,
+        logger=logger,
+    )
 
 def _draft_optimizer_history(posts: list[SinglePostInsights], limit: int = 12) -> list[dict[str, Any]]:
-    ordered_posts = sorted(
-        posts,
-        key=lambda post: (
-            post.published_at.isoformat() if post.published_at is not None else "",
-            str(post.media_id or ""),
-        ),
-        reverse=True,
-    )
-    return [post.model_dump(mode="json") for post in ordered_posts[:limit]]
-
+    return _draft_optimizer_history_external(posts, limit=limit)
 
 def _warning_code(warning: dict[str, Any]) -> str | None:
     code = warning.get("code")
@@ -1113,15 +949,14 @@ def _pipeline_result_payload(
     ai_fallback_count: int,
     notes_by_post_id: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    return {
-        "posts": processed_posts,
-        "warnings": warnings,
-        "per_post_warnings_count": per_post_warnings_count,
-        "vision_error_count": int(vision_error_count),
-        "ai_fallback_count": int(ai_fallback_count),
-        "notes_by_post_id": notes_by_post_id,
-    }
-
+    return _pipeline_result_payload_external(
+        processed_posts=processed_posts,
+        warnings=warnings,
+        per_post_warnings_count=per_post_warnings_count,
+        vision_error_count=vision_error_count,
+        ai_fallback_count=ai_fallback_count,
+        notes_by_post_id=notes_by_post_id,
+    )
 
 async def _run_single_post_pipeline_if_needed(
     posts: list[SinglePostInsights],
@@ -1329,6 +1164,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             account_avg_engagement_rate=payload.get("account_avg_engagement_rate"),
             niche_avg_engagement_rate=payload.get("niche_avg_engagement_rate"),
             follower_band=payload.get("follower_band"),
+            follower_count=payload.get("follower_count"),
             use_cache=True,
         )
         creator_score = _try_nonfatal(

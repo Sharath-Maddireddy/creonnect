@@ -4,6 +4,7 @@ import AccountAnalysisDemo from './pages/AccountAnalysisDemo'
 import BrandCampaign from './pages/BrandCampaign'
 import Dashboard from './pages/Dashboard'
 import SinglePostInsights from './pages/SinglePostInsights'
+import TrendRecommendations from './pages/TrendRecommendations'
 
 function App() {
     return (
@@ -15,6 +16,7 @@ function App() {
                 <Route path="/account-analysis-demo" element={<AccountAnalysisDemo />} />
                 <Route path="/brand/campaign" element={<BrandCampaign />} />
                 <Route path="/post/:media_id" element={<SinglePostInsights />} />
+                <Route path="/trends" element={<TrendRecommendations />} />
                 <Route path="/auth/callback" element={<Callback />} />
             </Routes>
         </BrowserRouter>

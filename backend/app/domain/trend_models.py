@@ -107,6 +107,16 @@ class GlobalTrend(BaseModel):
         ),
     )
 
+    audience_match_pct: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "Percentage match (0-100) indicating how well this trend aligns with the "
+            "creator's audience interests and content patterns."
+        ),
+    )
+
 
 class TrendRecommendation(BaseModel):
     """A concrete recommendation derived from trend analysis for a creator to apply.
@@ -116,6 +126,13 @@ class TrendRecommendation(BaseModel):
     - rationale: Explanation linking the recommendation to observed trends and the creator's niche.
     - expected_impact: Short description of the anticipated benefit (reach, engagement, discovery).
     - trend_reference: Optional pointer to the `GlobalTrend.topic_name` or an external reference.
+    - opportunity_score: 0-100 score combining trend momentum, niche fit, and engagement potential.
+    - expected_reach_min: Lower bound of expected reach range.
+    - expected_reach_max: Upper bound of expected reach range.
+    - best_time: Suggested posting time (e.g., "Thu, 8:30 PM").
+    - difficulty: Content creation difficulty level.
+    - hook: Suggested opening hook text for the content.
+    - content_style: Richer content type label (e.g., "Storytelling", "Educational").
     """
 
     suggested_title: str = Field(
@@ -151,6 +168,109 @@ class TrendRecommendation(BaseModel):
         ),
     )
 
+    opportunity_score: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "0-100 score combining trend momentum, niche fit, and engagement potential. "
+            "Higher scores indicate greater content opportunity."
+        ),
+    )
+
+    expected_reach_min: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Lower bound of expected reach range for this content.",
+    )
+
+    expected_reach_max: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Upper bound of expected reach range for this content.",
+    )
+
+    best_time: Optional[str] = Field(
+        None,
+        description=(
+            "Suggested posting time derived from the creator's engagement heatmap, "
+            "for example 'Thu, 8:30 PM'."
+        ),
+    )
+
+    difficulty: Optional[str] = Field(
+        None,
+        description=(
+            "Content creation difficulty level: 'Easy', 'Medium', or 'Hard'. "
+            "Derived from trend type and content complexity."
+        ),
+    )
+
+    hook: Optional[str] = Field(
+        None,
+        description=(
+            "Suggested opening hook text for the content. A short, attention-grabbing "
+            "first line that aligns with the trend and creator style."
+        ),
+    )
+
+    content_style: Optional[str] = Field(
+        None,
+        description=(
+            "Richer content type label beyond the basic trend_type. For example: "
+            "'Storytelling', 'Educational', 'POV/Lifestyle', 'How-to', 'Day-in-life'."
+        ),
+    )
+
+
+class ContentGap(BaseModel):
+    """A detected gap in the creator's content strategy."""
+
+    description: str = Field(
+        ...,
+        description="Human-readable description of the content gap.",
+    )
+
+    severity: str = Field(
+        default="info",
+        description="Severity level: 'warning', 'info', or 'opportunity'.",
+    )
+
+    suggested_action: Optional[str] = Field(
+        None,
+        description="Optional suggested action to address this gap.",
+    )
+
+
+class DailyInsights(BaseModel):
+    """Today's key insights for the creator."""
+
+    audience_active_window: Optional[str] = Field(
+        None,
+        description="Peak audience activity window (e.g., '8:30 PM – 11:30 PM').",
+    )
+
+    best_content_type: Optional[str] = Field(
+        None,
+        description="Best performing content type today (e.g., 'Reels').",
+    )
+
+    trending_audio_count: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Number of trending audio tracks relevant to the creator's niche.",
+    )
+
+    competition_level: Optional[str] = Field(
+        None,
+        description="Competition level for posting today: 'Low', 'Medium', or 'High'.",
+    )
+
+    overall_opportunity: Optional[str] = Field(
+        None,
+        description="Overall opportunity level today: 'Very High', 'High', 'Medium', or 'Low'.",
+    )
+
 
 class TrendAnalysisResult(BaseModel):
     """Aggregated result of running trend analysis for a specific creator.
@@ -159,6 +279,9 @@ class TrendAnalysisResult(BaseModel):
     - niche: The inferred `CreatorNiche` for the creator.
     - global_trends: Ordered list of `GlobalTrend` objects relevant to the creator.
     - recommendations: Prioritized list of `TrendRecommendation` items the creator can act on.
+    - content_gaps: Detected gaps in the creator's content strategy.
+    - daily_insights: Today's key insights for the creator.
+    - opportunity_bullets: AI-generated insight bullets for the weekly opportunity banner.
     """
 
     niche: CreatorNiche = Field(
@@ -185,10 +308,37 @@ class TrendAnalysisResult(BaseModel):
         ),
     )
 
+    content_gaps: list["ContentGap"] = Field(
+        default_factory=list,
+        description=(
+            "Detected gaps in the creator's content strategy, such as missing content types, "
+            "underutilized formats, or low-performing areas relative to trending opportunities."
+        ),
+    )
+
+    daily_insights: Optional["DailyInsights"] = Field(
+        None,
+        description=(
+            "Today's key insights for the creator, including active audience window, "
+            "best content type, trending audio count, and competition level."
+        ),
+    )
+
+    opportunity_bullets: list[str] = Field(
+        default_factory=list,
+        description=(
+            "AI-generated insight bullets for the weekly opportunity banner. "
+            "Each is a concise statement about a content opportunity (e.g., "
+            "'Travel reels are underutilized')."
+        ),
+    )
+
 
 __all__ = [
     "CreatorNiche",
     "GlobalTrend",
     "TrendRecommendation",
+    "ContentGap",
+    "DailyInsights",
     "TrendAnalysisResult",
 ]

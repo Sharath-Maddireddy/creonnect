@@ -126,6 +126,8 @@ async def enqueue_account_analysis(request: AccountAnalysisRequest) -> AccountAn
         if exc.job_id is not None:
             detail["job_id"] = exc.job_id
         raise HTTPException(status_code=429, detail=detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("[AccountAnalysis] Failed to enqueue account analysis job")
         raise HTTPException(status_code=500, detail="Failed to enqueue account analysis job") from exc

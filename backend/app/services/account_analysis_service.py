@@ -62,6 +62,7 @@ def _cache_key(
     account_avg_engagement_rate: float | None,
     niche_avg_engagement_rate: float | None,
     follower_band: str | None,
+    follower_count: int | None,
     now_ts: datetime | None,
 ) -> str:
     account_id = posts[0].account_id if posts and isinstance(posts[0].account_id, str) else "unknown_account"
@@ -70,6 +71,7 @@ def _cache_key(
     return (
         f"{account_id}:{fingerprint}:"
         f"{_format_rate(account_avg_engagement_rate)}:{_format_rate(niche_avg_engagement_rate)}:{follower_band or ''}:"
+        f"{follower_count or 0}:"
         f"{now_str}"
     )
 
@@ -110,16 +112,17 @@ def analyze_account_health(
     account_avg_engagement_rate: float | None = None,
     niche_avg_engagement_rate: float | None = None,
     follower_band: str | None = None,
+    follower_count: int | None = None,
     now_ts: datetime | None = None,
     use_cache: bool = True,
 ) -> AccountHealthScore:
     """Analyze account health from precomputed SinglePostInsights posts.
 
-    Note: now_ts is reserved for future time-window overrides and does not
-    affect scoring or caching at present.
+    Note: now_ts partitions cache entries for callers that need deterministic
+    cache windows; it does not affect the underlying score calculation.
     """
 
-    key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band, now_ts)
+    key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band, follower_count, now_ts)
     account_id = posts[0].account_id if posts and isinstance(posts[0].account_id, str) else "unknown_account"
     logger.info(
         "[AccountHealth] Start account_id=%s post_count=%d use_cache=%s follower_band=%s",
@@ -142,7 +145,7 @@ def analyze_account_health(
         account_avg_engagement_rate=account_avg_engagement_rate,
         niche_avg_engagement_rate=niche_avg_engagement_rate,
         follower_band=follower_band,
-        now_ts=now_ts,
+        follower_count=follower_count,
     )
     logger.info(
         "[AccountHealth] Computed account_id=%s score=%s band=%s",

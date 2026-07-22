@@ -304,6 +304,7 @@ def _scores_payload(post: SinglePostInsights, ai_analysis: dict[str, Any]) -> di
         ),
         "predicted_engagement_rate": _safe_float(predicted_er),
         "predicted_engagement_rate_notes": predicted_notes,
+        "predicted_er_confidence": ai_analysis.get("predicted_er_confidence"),
     }
 
 
@@ -311,12 +312,18 @@ def _ai_payload(ai_analysis: dict[str, Any]) -> dict[str, Any]:
     summary = ai_analysis.get("summary")
     drivers = ai_analysis.get("drivers")
     recommendations = ai_analysis.get("recommendations")
+    caption_improvement = ai_analysis.get("caption_improvement")
+    posting_intelligence = ai_analysis.get("posting_intelligence")
+    hashtag_quality_note = ai_analysis.get("hashtag_quality_note")
     return {
         "summary": summary if isinstance(summary, str) else "",
         "drivers": drivers if isinstance(drivers, list) else [],
         "recommendations": recommendations if isinstance(recommendations, list) else [],
         "vision_status": ai_analysis.get("vision_status"),
         "fallback_used": bool(ai_analysis.get("fallback_used", False)),
+        "caption_improvement": caption_improvement if isinstance(caption_improvement, dict) else None,
+        "posting_intelligence": posting_intelligence if isinstance(posting_intelligence, str) else None,
+        "hashtag_quality_note": hashtag_quality_note if isinstance(hashtag_quality_note, str) else None,
     }
 
 
@@ -372,12 +379,16 @@ async def _analyze_single_post_inline(request: PostAnalysisRequest) -> dict[str,
     cringe_summary["vision_status"] = vision_payload.get("status", "error")
     _write_cringe_summary(str(post_payload["post_id"]), cringe_summary)
 
+    score_analysis = ai_analysis.get("score_analysis")
+
     return {
         "status": "succeeded",
         "post": post_payload,
         "vision": vision_payload,
         "scores": _scores_payload(post, ai_analysis),
         "ai": _ai_payload(ai_analysis),
+        "cringe": cringe_summary,
+        "score_analysis": score_analysis if isinstance(score_analysis, dict) else None,
         "warnings": warnings_list,
         "quality": {
             "vision_enabled": vision_enabled,

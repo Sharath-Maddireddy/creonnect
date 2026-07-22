@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.analytics.brand_match_engine import score_creator_against_brand
 from backend.app.ai.llm_client import LLMClient
+from backend.app.ai.prompts import format_user_json_block, format_user_text_block
 from backend.app.domain.brand_models import BrandProfile
 from backend.app.domain.tool_response import ToolResponse, ToolResponseMeta
 from backend.app.infra.database import get_sync_sessionmaker
@@ -22,6 +23,21 @@ from backend.app.utils.logger import logger
 class ToolOrchestrator:
     """Central tool dispatch layer for LLM tool-use requests."""
 
+    def __init__(self, llm_client: LLMClient | None = None) -> None:
+        self._shared_llm = llm_client or LLMClient()
+        self._llm_profiles: dict[tuple[float, int], LLMClient] = {}
+
+    def _get_llm_client(self, *, temperature: float | None = None, max_tokens: int | None = None) -> LLMClient:
+        if temperature is None and max_tokens is None:
+            return self._shared_llm
+        temp = float(temperature if temperature is not None else 0.7)
+        tokens = int(max_tokens if max_tokens is not None else 800)
+        key = (temp, tokens)
+        client = self._llm_profiles.get(key)
+        if client is None:
+            client = LLMClient(temperature=temp, max_tokens=tokens)
+            self._llm_profiles[key] = client
+        return client
     def execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> ToolResponse:
         """Execute one tool call and return a standardized response envelope."""
         started_at = time.perf_counter()
@@ -50,6 +66,11 @@ class ToolOrchestrator:
                     "generate_outreach_brief": self._generate_outreach_brief,
                     "generate_content_brief": self._generate_content_brief,
                     "estimate_campaign_cost": self._estimate_campaign_cost,
+                    # ── Creo Intelligence tools ──
+                    "plan_campaign": self._plan_campaign,
+                    "review_campaign_results": self._review_campaign_results,
+                    "suggest_budget_allocation": self._suggest_budget_allocation,
+                    "benchmark_campaign_performance": self._benchmark_campaign_performance,
                 }
                 handler = _HANDLERS.get(normalized_tool)
                 if handler is not None:
@@ -257,23 +278,22 @@ class ToolOrchestrator:
             return ToolResponse.error("generate_outreach_brief", f"No analysis found for creator '{account_id}'.")
 
         compact_analysis = self._summarize_analysis_for_prompt(analysis)
-        llm = LLMClient()
         outreach_prompt = {
             "system": (
                 "You create concise brand outreach drafts for creators. "
                 "Return plain text only. This is a draft and must mention that brand confirmation is required before sending."
             ),
             "user": (
-                f"Creator account: {account_id}\n"
-                f"Creator analysis: {json.dumps(compact_analysis, ensure_ascii=True)}\n"
-                f"Campaign goal: {campaign_goal}\n"
-                f"Brand tone: {brand_tone or 'neutral'}\n"
-                f"Deliverables: {', '.join(deliverables or []) if deliverables else 'not specified'}\n\n"
+                "Creator account (data): " + format_user_text_block(account_id) + "\n"
+                "Creator analysis JSON (data): " + format_user_json_block(compact_analysis) + "\n"
+                "Campaign goal (data): " + format_user_text_block(campaign_goal) + "\n"
+                "Brand tone (data): " + format_user_text_block(brand_tone or "neutral") + "\n"
+                "Deliverables JSON (data): " + format_user_json_block(deliverables or []) + "\n\n"
                 "Write one personalized outreach message draft. Keep it under 180 words."
             ),
         }
 
-        draft_text = llm.generate(outreach_prompt)
+        draft_text = self._get_llm_client().generate(outreach_prompt)
         if not isinstance(draft_text, str) or not draft_text.strip():
             return ToolResponse.error("generate_outreach_brief", "Failed to generate outreach draft.")
 
@@ -319,7 +339,6 @@ class ToolOrchestrator:
             return ToolResponse.error("generate_content_brief", f"No analysis found for creator '{account_id}'.")
 
         compact_analysis = self._summarize_analysis_for_prompt(analysis)
-        llm = LLMClient()
         brief_prompt = {
             "system": (
                 "You create structured creator content briefs. "
@@ -327,17 +346,17 @@ class ToolOrchestrator:
                 "creative_direction, hashtags, posting_guidelines."
             ),
             "user": (
-                f"Creator account: {account_id}\n"
-                f"Creator analysis: {json.dumps(compact_analysis, ensure_ascii=True)}\n"
-                f"Brand name: {brand_name}\n"
-                f"Key messages: {json.dumps(key_messages, ensure_ascii=True)}\n"
-                f"Preferred format: {content_format or 'Not specified'}\n\n"
+                "Creator account (data): " + format_user_text_block(account_id) + "\n"
+                "Creator analysis JSON (data): " + format_user_json_block(compact_analysis) + "\n"
+                "Brand name (data): " + format_user_text_block(brand_name) + "\n"
+                "Key messages JSON (data): " + format_user_json_block(key_messages) + "\n"
+                "Preferred format (data): " + format_user_text_block(content_format or "Not specified") + "\n\n"
                 "Produce a draft content brief aligned to the creator's style and audience. "
                 "hashtags must be an array of strings."
             ),
         }
 
-        brief_text = llm.generate(brief_prompt)
+        brief_text = self._get_llm_client().generate(brief_prompt)
         if not isinstance(brief_text, str) or not brief_text.strip():
             return ToolResponse.error("generate_content_brief", "Failed to generate content brief draft.")
 
@@ -644,3 +663,216 @@ class ToolOrchestrator:
         if isinstance(value, (int, float)):
             return float(value)
         return None
+
+    # ── Creo Intelligence LLM-backed tools ────────────────────────────────────
+    # These tools call the LLM to generate strategic content (plans, reviews,
+    # budget allocations, benchmarks) instead of querying the database.
+    def _plan_campaign(self, arguments):  # type: ignore[override]
+        """Generate a structured campaign plan via LLM."""
+        from backend.app.domain.tool_response import ToolResponse as TR
+
+        brand_name = self._as_optional_string(arguments.get("brand_name"), "brand_name")
+        campaign_goal = self._as_optional_string(arguments.get("campaign_goal"), "campaign_goal")
+        if err := self._check_sentinel(brand_name, "plan_campaign"):
+            return err
+        if err := self._check_sentinel(campaign_goal, "plan_campaign"):
+            return err
+        if not isinstance(campaign_goal, str) or not campaign_goal:
+            return TR.error("plan_campaign", "campaign_goal is required.")
+
+        budget_inr = self._as_float_or_none(arguments.get("budget_inr"))
+        timeline_weeks = self._as_int_or_none(arguments.get("timeline_weeks"))
+        niche = self._as_string_or_none(arguments.get("niche"))
+        content_type = self._as_string_or_none(arguments.get("content_type"))
+        target_audience = self._as_string_or_none(arguments.get("target_audience"))
+
+        parts = []
+        if isinstance(brand_name, str):
+            parts.append("Brand (data): " + format_user_text_block(brand_name))
+        parts.append("Campaign Goal (data): " + format_user_text_block(campaign_goal))
+        if budget_inr is not None:
+            parts.append("Budget INR: " + f"{budget_inr:,.0f}")
+        if timeline_weeks is not None:
+            parts.append("Timeline Weeks: " + str(timeline_weeks))
+        if niche:
+            parts.append("Niche (data): " + format_user_text_block(niche))
+        if content_type:
+            parts.append("Content Format (data): " + format_user_text_block(content_type))
+        if target_audience:
+            parts.append("Target Audience (data): " + format_user_text_block(target_audience))
+
+        prompt = {
+            "system": (
+                "You are a senior influencer marketing strategist. Generate a concise, structured "
+                "influencer campaign plan. Include: campaign objective, recommended creator tiers "
+                "(nano/micro/mid-tier/macro), content format strategy, posting schedule, KPIs to "
+                "track, and 3 actionable next steps. Be specific and practical. Use INR for budgets."
+            ),
+            "user": "\n".join(parts),
+        }
+        try:
+            plan_text = self._get_llm_client(temperature=0.3, max_tokens=800).generate(prompt)
+            return TR.ok(
+                tool="plan_campaign",
+                data={"plan": plan_text, "brand_name": brand_name, "campaign_goal": campaign_goal},
+                message="Campaign plan generated.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[ToolOrchestrator] plan_campaign LLM error: %s", exc)
+            return TR.error("plan_campaign", "Failed to generate plan: " + str(exc))
+
+    def _review_campaign_results(self, arguments):  # type: ignore[override]
+        """Analyze campaign performance metrics via LLM."""
+        from backend.app.domain.tool_response import ToolResponse as TR
+
+        campaign_name = self._as_optional_string(arguments.get("campaign_name"), "campaign_name")
+        if err := self._check_sentinel(campaign_name, "review_campaign_results"):
+            return err
+        if not isinstance(campaign_name, str) or not campaign_name:
+            return TR.error("review_campaign_results", "campaign_name is required.")
+
+        metric_parts = ["Campaign (data): " + format_user_text_block(campaign_name)]
+        for field, label in [
+            ("total_reach", "Total Reach"),
+            ("total_impressions", "Total Impressions"),
+            ("total_engagement", "Total Engagements"),
+            ("creator_count", "Creator Count"),
+            ("conversions", "Conversions"),
+        ]:
+            val = self._as_int_or_none(arguments.get(field))
+            if val is not None:
+                metric_parts.append(label + ": " + f"{val:,}")
+        budget_spent = self._as_float_or_none(arguments.get("budget_spent_inr"))
+        if budget_spent is not None:
+            metric_parts.append("Budget Spent INR: " + f"{budget_spent:,.0f}")
+        for field, label in [("campaign_goal", "Campaign Goal"), ("niche", "Niche")]:
+            val = self._as_string_or_none(arguments.get(field))
+            if val:
+                metric_parts.append(label + " (data): " + format_user_text_block(val))
+
+        prompt = {
+            "system": (
+                "You are a senior influencer marketing analyst. Review the campaign metrics provided "
+                "and give a structured performance analysis. Include: overall performance rating "
+                "(Excellent/Good/Average/Below Average), what worked well, what underperformed, "
+                "key metrics assessment, and 3 concrete improvement recommendations for the next campaign."
+            ),
+            "user": "\n".join(metric_parts),
+        }
+        try:
+            review_text = self._get_llm_client(temperature=0.2, max_tokens=700).generate(prompt)
+            return TR.ok(
+                tool="review_campaign_results",
+                data={"review": review_text, "campaign_name": campaign_name},
+                message="Campaign review completed.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[ToolOrchestrator] review_campaign_results LLM error: %s", exc)
+            return TR.error("review_campaign_results", "Failed to generate review: " + str(exc))
+
+    def _suggest_budget_allocation(self, arguments):  # type: ignore[override]
+        """Recommend budget split across creator tiers via LLM."""
+        from backend.app.domain.tool_response import ToolResponse as TR
+
+        total_budget = self._as_float_or_none(arguments.get("total_budget_inr"))
+        campaign_goal = self._as_optional_string(arguments.get("campaign_goal"), "campaign_goal")
+        if err := self._check_sentinel(campaign_goal, "suggest_budget_allocation"):
+            return err
+        if total_budget is None or total_budget <= 0:
+            return TR.error("suggest_budget_allocation", "total_budget_inr must be a positive number.")
+        if not isinstance(campaign_goal, str) or not campaign_goal:
+            return TR.error("suggest_budget_allocation", "campaign_goal is required.")
+
+        creator_count = self._as_int_or_none(arguments.get("creator_count"))
+        niche = self._as_string_or_none(arguments.get("niche"))
+        preferred_tiers_raw = arguments.get("preferred_tiers")
+        preferred_tiers = (
+            [t for t in preferred_tiers_raw if isinstance(t, str)]
+            if isinstance(preferred_tiers_raw, list)
+            else None
+        )
+
+        alloc_parts = [
+            "Total Budget INR: " + f"{total_budget:,.0f}",
+            "Campaign Goal (data): " + format_user_text_block(campaign_goal),
+        ]
+        if creator_count is not None:
+            alloc_parts.append("Number of Creators: " + str(creator_count))
+        if niche:
+            alloc_parts.append("Niche (data): " + format_user_text_block(niche))
+        if preferred_tiers:
+            alloc_parts.append("Preferred Tiers JSON (data): " + format_user_json_block(preferred_tiers))
+
+        prompt = {
+            "system": (
+                "You are a senior influencer marketing strategist specializing in budget optimization. "
+                "Recommend how to allocate the influencer marketing budget across creator tiers. "
+                "Provide: tier breakdown with % and INR amounts, rationale for each tier, expected "
+                "reach and engagement per tier, and a recommended split between content creation fees "
+                "and paid amplification. Be specific with numbers."
+            ),
+            "user": "\n".join(alloc_parts),
+        }
+        try:
+            allocation_text = self._get_llm_client(temperature=0.2, max_tokens=600).generate(prompt)
+            return TR.ok(
+                tool="suggest_budget_allocation",
+                data={
+                    "allocation": allocation_text,
+                    "total_budget_inr": total_budget,
+                    "campaign_goal": campaign_goal,
+                },
+                message="Budget allocation generated.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[ToolOrchestrator] suggest_budget_allocation LLM error: %s", exc)
+            return TR.error("suggest_budget_allocation", "Failed to generate allocation: " + str(exc))
+
+    def _benchmark_campaign_performance(self, arguments):  # type: ignore[override]
+        """Compare campaign metrics to industry benchmarks via LLM."""
+        from backend.app.domain.tool_response import ToolResponse as TR
+
+        niche = self._as_optional_string(arguments.get("niche"), "niche")
+        if err := self._check_sentinel(niche, "benchmark_campaign_performance"):
+            return err
+        if not isinstance(niche, str) or not niche:
+            return TR.error("benchmark_campaign_performance", "niche is required.")
+
+        bench_parts = ["Niche (data): " + format_user_text_block(niche)]
+        engagement_rate = self._as_float_or_none(arguments.get("engagement_rate"))
+        if engagement_rate is not None:
+            bench_parts.append("Engagement Rate: " + f"{engagement_rate * 100:.2f}%")
+        reach_per_post = self._as_int_or_none(arguments.get("reach_per_post"))
+        if reach_per_post is not None:
+            bench_parts.append("Avg Reach per Post: " + f"{reach_per_post:,}")
+        cpe = self._as_float_or_none(arguments.get("cost_per_engagement_inr"))
+        if cpe is not None:
+            bench_parts.append("Cost per Engagement INR: " + f"{cpe:.2f}")
+        cpm = self._as_float_or_none(arguments.get("cost_per_reach_inr"))
+        if cpm is not None:
+            bench_parts.append("CPM INR: " + f"{cpm:.2f}")
+        conversion_rate = self._as_float_or_none(arguments.get("conversion_rate"))
+        if conversion_rate is not None:
+            bench_parts.append("Conversion Rate: " + f"{conversion_rate * 100:.2f}%")
+
+        prompt = {
+            "system": (
+                "You are an influencer marketing analytics expert with deep knowledge of Indian "
+                "market benchmarks. Compare the provided campaign metrics against typical industry "
+                "benchmarks for the given niche in India. Provide: performance grade for each metric "
+                "(Above/At/Below benchmark), the benchmark reference values you are comparing against, "
+                "an overall campaign performance score (A/B/C/D), and 3 specific improvement actions "
+                "to reach benchmark levels."
+            ),
+            "user": "\n".join(bench_parts),
+        }
+        try:
+            benchmark_text = self._get_llm_client(temperature=0.1, max_tokens=700).generate(prompt)
+            return TR.ok(
+                tool="benchmark_campaign_performance",
+                data={"benchmark_analysis": benchmark_text, "niche": niche},
+                message="Benchmark analysis completed.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[ToolOrchestrator] benchmark_campaign_performance LLM error: %s", exc)
+            return TR.error("benchmark_campaign_performance", "Failed to benchmark: " + str(exc))

@@ -273,25 +273,8 @@ function Dashboard() {
         return sortablePosts
     }, [postSort, data?.posts])
 
-    if (loading) {
-        return (
-            <div className="loading-container">
-                <div className="spinner"></div>
-                <p>Loading dashboard...</p>
-            </div>
-        )
-    }
-
-    if (error) {
-        return (
-            <div className="error-container">
-                <p>Error: {error}</p>
-                <button onClick={() => fetchDashboard(userId)}>Retry</button>
-            </div>
-        )
-    }
-
-    const { summary, posts, charts } = data
+    // NOTE: early returns moved below all hooks — React requires all hooks to run unconditionally.
+    const { summary, posts, charts } = data || { summary: {}, posts: [], charts: { engagement_over_time: [], views_over_time: [] } }
     const accountHealth = data?.account_health || {}
     const engagementSignals = data?.engagement_signals || {}
     const visionSummary = data?.vision_summary || {}
@@ -426,6 +409,27 @@ function Dashboard() {
             grid
         }
     }, [bestHoursRaw, summary?.best_time_to_post?.best_hours])
+
+    // Early returns AFTER all hooks (React rules of hooks requirement)
+    if (loading) {
+        return (
+            <div className="loading-container">
+                <div className="spinner"></div>
+                <p>Loading dashboard...</p>
+            </div>
+        )
+    }
+
+    if (error) {
+        return (
+            <div className="error-container">
+                <p>Error: {error}</p>
+                <button onClick={() => fetchDashboard(userId)}>Retry</button>
+            </div>
+        )
+    }
+
+    if (!data) return null
 
     const handleOpenPost = async (post) => {
         if (!post?.post_id || !post?.media_url || analyzingPostId) {

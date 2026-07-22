@@ -30,7 +30,7 @@ def brand_chat_discover(prompt: str, brand_name: str | None = None) -> BrandChat
     """Run an agentic tool-calling loop to discover creator matches for a brand brief."""
     started_at = time.perf_counter()
 
-    llm = LLMClient(model_name="gpt-4o", temperature=0.2)
+    llm = LLMClient(temperature=0.2)
     orchestrator = ToolOrchestrator()
 
     user_prompt = prompt.strip() if isinstance(prompt, str) else ""

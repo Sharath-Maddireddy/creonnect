@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from rq import Queue
 
+from backend.app.infra.job_defaults import (
+    DEFAULT_FAILURE_TTL_SECONDS,
+    DEFAULT_JOB_TIMEOUT_SECONDS,
+    DEFAULT_RESULT_TTL_SECONDS,
+)
 from backend.app.infra.redis_client import get_rq_redis
 
 
 DEFAULT_QUEUE_NAME = "account-analysis"
-DEFAULT_JOB_TIMEOUT_SECONDS = 600
-DEFAULT_RESULT_TTL_SECONDS = 86400
-DEFAULT_FAILURE_TTL_SECONDS = 86400
-
 
 def get_queue(name: str = DEFAULT_QUEUE_NAME) -> Queue:
     """Return RQ queue bound to configured Redis connection."""

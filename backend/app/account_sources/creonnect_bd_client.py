@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import hashlib
 import hmac
+import json
 import os
 import time
 import uuid
@@ -78,7 +79,6 @@ class CreonnectBDClient:
     def _encode_json_body(body: dict[str, Any] | None) -> bytes | None:
         if body is None:
             return None
-        # Keep canonical JSON aligned with JS JSON.stringify: no spaces, UTF-8 text.
         return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
     async def _request_json(
@@ -111,24 +111,29 @@ class CreonnectBDClient:
                 )
             )
         request = Request(url, headers=headers, data=payload_bytes, method=method.upper())
-        try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-                status_code = int(getattr(response, "status", 200))
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
+
+        def _execute_request() -> tuple[dict[str, Any], int]:
             try:
-                payload = json.loads(body)
-            except ValueError:
-                payload = {"message": body}
-            message = payload.get("message") if isinstance(payload, dict) else None
-            raise ValueError(
-                f"creonnect-bd request failed for {path}: HTTP {exc.code} {message or ''}".strip()
-            ) from exc
-        except URLError as exc:
-            raise ValueError(f"creonnect-bd request failed for {path}: {exc.reason}") from exc
-        except ValueError as exc:
-            raise ValueError(f"creonnect-bd returned non-JSON response for {path}") from exc
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                    status_code = int(getattr(response, "status", 200))
+                    return payload, status_code
+            except HTTPError as exc:
+                body_text = exc.read().decode("utf-8", errors="replace")
+                try:
+                    payload = json.loads(body_text)
+                except ValueError:
+                    payload = {"message": body_text}
+                message = payload.get("message") if isinstance(payload, dict) else None
+                raise ValueError(
+                    f"creonnect-bd request failed for {path}: HTTP {exc.code} {message or ''}".strip()
+                ) from exc
+            except URLError as exc:
+                raise ValueError(f"creonnect-bd request failed for {path}: {exc.reason}") from exc
+            except ValueError as exc:
+                raise ValueError(f"creonnect-bd returned non-JSON response for {path}") from exc
+
+        payload, status_code = await asyncio.to_thread(_execute_request)
 
         if status_code != 200:
             message = None

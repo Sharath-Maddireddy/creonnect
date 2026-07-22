@@ -73,13 +73,14 @@ class TrendAnalysisCache:
             result = TrendAnalysisResult.model_validate(cached_data)
 
             logger.info(
-                f"[TrendCache] HIT for account_id={account_id} "
-                f"(key={key})"
+                "[TrendCache] HIT for account_id=%s (key=%s)",
+                account_id,
+                key,
             )
             return result
 
         except Exception as exc:
-            logger.warning(f"[TrendCache] Retrieval failed: {exc}")
+            logger.warning("[TrendCache] Retrieval failed: %s", exc)
             return None
 
     @classmethod
@@ -113,12 +114,14 @@ class TrendAnalysisCache:
             )
 
             logger.info(
-                f"[TrendCache] SET for account_id={account_id} "
-                f"(ttl={cls.CACHE_TTL_SECONDS}s, key={key})"
+                "[TrendCache] SET for account_id=%s (ttl=%ss, key=%s)",
+                account_id,
+                cls.CACHE_TTL_SECONDS,
+                key,
             )
 
         except Exception as exc:
-            logger.warning(f"[TrendCache] Storage failed: {exc}")
+            logger.warning("[TrendCache] Storage failed: %s", exc)
 
     @classmethod
     async def aget(
@@ -139,12 +142,13 @@ class TrendAnalysisCache:
             result = TrendAnalysisResult.model_validate(cached_data)
 
             logger.info(
-                f"[TrendCache] ASYNC HIT for account_id={account_id}"
+                "[TrendCache] ASYNC HIT for account_id=%s",
+                account_id,
             )
             return result
 
         except Exception as exc:
-            logger.warning(f"[TrendCache] Async retrieval failed: {exc}")
+            logger.warning("[TrendCache] Async retrieval failed: %s", exc)
             return None
 
     @classmethod
@@ -172,11 +176,12 @@ class TrendAnalysisCache:
             )
 
             logger.info(
-                f"[TrendCache] ASYNC SET for account_id={account_id}"
+                "[TrendCache] ASYNC SET for account_id=%s",
+                account_id,
             )
 
         except Exception as exc:
-            logger.warning(f"[TrendCache] Async storage failed: {exc}")
+            logger.warning("[TrendCache] Async storage failed: %s", exc)
 
     @classmethod
     def invalidate(cls, account_id: str) -> None:
@@ -187,11 +192,13 @@ class TrendAnalysisCache:
         try:
             redis_client = get_redis()
             pattern = f"{cls.CACHE_KEY_PREFIX}:{account_id}:*"
-            keys = redis_client.keys(pattern)
+            deleted_count = 0
+            for key in redis_client.scan_iter(match=pattern):
+                redis_client.delete(key)
+                deleted_count += 1
 
-            if keys:
-                redis_client.delete(*keys)
-                logger.info(f"[TrendCache] Invalidated {len(keys)} entries for {account_id}")
+            if deleted_count > 0:
+                logger.info("[TrendCache] Invalidated %d entries for %s", deleted_count, account_id)
 
         except Exception as exc:
-            logger.warning(f"[TrendCache] Invalidation failed: {exc}")
+            logger.warning("[TrendCache] Invalidation failed: %s", exc)

@@ -111,6 +111,17 @@ class AIAnalysisResult(TypedDict):
     vision_status: Literal["ok", "error", "disabled", "no_media"]
     fallback_used: bool
     vision_error_reason: NotRequired[str | None]
+    # Enhanced analytics fields (v2)
+    caption_improvement: NotRequired[dict[str, str] | None]
+    posting_intelligence: NotRequired[str | None]
+    hashtag_quality_note: NotRequired[str | None]
+    hashtag_analysis: NotRequired[dict[str, Any] | None]
+    predicted_er_confidence: NotRequired[str]
+    # Creator-facing enhancement fields (v3)
+    cringe_summary: NotRequired[dict[str, Any] | None]
+    score_explanation: NotRequired[dict[str, Any]]
+    viral_opportunity: NotRequired[str | None]
+    creator_next_step: NotRequired[str | None]
 
 
 class AIWarning(TypedDict):
@@ -137,6 +148,7 @@ class AIRecommendation(TypedDict):
     id: str
     text: str
     impact_level: Literal["HIGH", "MEDIUM", "LOW"]
+    category: str
 
 
 @dataclass
@@ -263,10 +275,11 @@ def _resolve_tier_avg_engagement_rate(post: SinglePostInsights) -> tuple[float |
         notes.append("tier_avg_er source: preloaded tier_avg_engagement_rate")
         return float(post.tier_avg_engagement_rate), notes
 
-    account_avg = post.benchmark_metrics.account_avg_engagement_rate
-    if isinstance(account_avg, (int, float)):
-        notes.append("tier_avg_er source: account_avg_engagement_rate fallback")
-        return float(account_avg), notes
+    if post.benchmark_metrics is not None:
+        account_avg = post.benchmark_metrics.account_avg_engagement_rate
+        if isinstance(account_avg, (int, float)):
+            notes.append("tier_avg_er source: account_avg_engagement_rate fallback")
+            return float(account_avg), notes
 
     notes.append("missing tier_avg_er source")
     return None, notes
@@ -333,16 +346,54 @@ def build_ai_input_context(
     brand_safety_score: BrandSafetyScore,
     weighted_post_score: WeightedPostScore,
 ) -> dict[str, Any]:
-    """Build input context for downstream AI calls.
+    """Build enriched input context for downstream AI calls."""
+    import re
 
-    This is intentionally a stub and can be expanded with richer context later.
-    """
+    # --- Temporal signals ---
+    posting_weekday: str | None = None
+    posting_hour_utc: int | None = None
+    if post.published_at is not None:
+        try:
+            posting_weekday = post.published_at.strftime("%A")
+            posting_hour_utc = post.published_at.hour
+        except Exception:
+            pass
+
+    # --- Hashtag signals ---
+    caption = post.caption_text or ""
+    hashtag_list = re.findall(r"#\w+", caption)
+    hashtag_count = len(hashtag_list)
+
+    # --- Score gap analysis (deterministic) ---
+    score_components: dict[str, float | None] = {
+        "S1_visual_quality": visual_quality_score.total,
+        "S2_caption_effectiveness": caption_effectiveness_score.total_0_50,
+        "S3_content_clarity": content_clarity_score.total,
+        "S4_audience_relevance": audience_relevance_score.total_0_50,
+        "S6_brand_safety": brand_safety_score.total_0_50,
+    }
+    available_scores = {k: v for k, v in score_components.items() if isinstance(v, (int, float))}
+    weakest_dimension: str | None = min(available_scores, key=available_scores.__getitem__) if available_scores else None
+    strongest_dimension: str | None = max(available_scores, key=available_scores.__getitem__) if available_scores else None
+
+    # --- Niche context ---
+    niche_benchmark_context = getattr(post, "niche_benchmark_context", None) or {}
+    creator_dominant_category = getattr(post, "creator_dominant_category", None)
+    post_category = getattr(post, "post_category", None)
+
     return {
         "account_id": post.account_id,
         "media_id": post.media_id,
         "media_type": post.media_type,
         "caption_text": post.caption_text,
         "published_at": post.published_at.isoformat() if post.published_at is not None else None,
+        "posting_weekday": posting_weekday,
+        "posting_hour_utc": posting_hour_utc,
+        "hashtag_count": hashtag_count,
+        "hashtag_sample": hashtag_list[:10],
+        "creator_dominant_category": creator_dominant_category,
+        "post_category": post_category,
+        "niche_benchmark_context": niche_benchmark_context,
         "core_metrics": post.core_metrics.model_dump(),
         "derived_metrics": post.derived_metrics.model_dump(),
         "benchmark_metrics": post.benchmark_metrics.model_dump(),
@@ -354,6 +405,11 @@ def build_ai_input_context(
         "s4_audience_relevance": audience_relevance_score.model_dump(),
         "s6_brand_safety": brand_safety_score.model_dump(),
         "weighted_post_score": weighted_post_score.model_dump(),
+        "score_gap_analysis": {
+            "weakest_dimension": weakest_dimension,
+            "strongest_dimension": strongest_dimension,
+            "all_scores_0_50": available_scores,
+        },
     }
 
 
@@ -420,13 +476,6 @@ _VQ_KEYS = ("composition", "lighting", "subject_clarity", "aesthetic_quality")
 
 
 def _clamp_vq(raw: Any) -> dict[str, float] | None:
-    """Normalise a visual_quality_score value into a clamped sub-dict.
-
-    Accepts:
-    - A scalar (int/float): broadcast to all four sub-keys.
-    - A dict: clamp each of the four sub-keys individually.
-    Returns None when the value cannot be normalised.
-    """
     numeric = _as_float(raw)
     if numeric is not None:
         v = max(0.0, min(10.0, float(numeric)))
@@ -437,7 +486,6 @@ def _clamp_vq(raw: Any) -> dict[str, float] | None:
             return None
         return {k: max(0.0, min(10.0, float(v))) for k, v in zip(_VQ_KEYS, vals)}
     return None
-
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -470,6 +518,14 @@ def _parse_gemini_payload(raw_text: str) -> dict[str, Any]:
     return payload
 
 
+def _extract_cringe_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "score": _clamp_int_0_100(payload.get("cringe_score")),
+        "signals": _normalize_short_text_list(payload.get("cringe_signals"), limit=3),
+        "fixes": _normalize_short_text_list(payload.get("cringe_fixes"), limit=3),
+    }
+
+
 def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str, Any]:
     primary_objects_raw = payload.get("primary_objects")
     objects = primary_objects_raw if isinstance(primary_objects_raw, list) and primary_objects_raw else payload.get("objects") or []
@@ -489,6 +545,7 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
         technical_flaws.append(composition_feedback)
     technical_flaws = technical_flaws[:3]
     hook_strength_score = payload.get("hook_strength_score")
+    virality_potential = payload.get("virality_potential")
 
     if not isinstance(objects, list):
         objects = []
@@ -503,6 +560,8 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
         raise ValueError("Invalid scene_type field.")
     if not isinstance(hook_strength_score, (int, float)):
         hook_strength_score = 0.5
+    if not isinstance(virality_potential, (int, float)):
+        virality_potential = 5
 
     objects = [item.strip() for item in objects if isinstance(item, str) and item.strip()]
     dominant_focus = dominant_focus.strip() if isinstance(dominant_focus, str) else None
@@ -512,8 +571,8 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
     scene_type = scene_type.strip() if isinstance(scene_type, str) else None
 
     normalized_visual_quality = _clamp_vq(visual_quality_score)
-
     clamped_hook_strength_score = max(0.0, min(1.0, float(hook_strength_score)))
+    clamped_virality = int(max(0, min(10, int(virality_potential))))
     dominant_object = payload.get("dominant_object")
     lighting_quality = normalized_visual_quality.get("lighting") if isinstance(normalized_visual_quality, dict) else None
     subject_clarity = (
@@ -531,18 +590,10 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
         cringe_fixes = aesthetic_fixes[:]
     production_level = _normalize_production_level(payload.get("production_level"))
     adult_content_detected = _normalize_optional_bool(payload.get("adult_content_detected"))
-    adult_content_confidence = _clamp_int_0_100(payload.get("adult_content_confidence"))
     is_cringe_raw = _normalize_optional_bool(payload.get("is_cringe"))
 
     if cringe_score is not None:
         floored_score = enforce_cringe_floor(cringe_score, cringe_signals)
-        if floored_score != cringe_score:
-            logger.info(
-                "[Cringe] Applied cringe floor for media_url=%s score=%s->%s",
-                _sanitize_url_for_logging(media_url),
-                cringe_score,
-                floored_score,
-            )
         cringe_score = floored_score
     elif is_cringe_raw is True:
         cringe_score = 60
@@ -558,12 +609,13 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
         "detected_text": detected_text,
         "visual_style": visual_style,
         "hook_strength_score": clamped_hook_strength_score,
-        "dominant_focus": dominant_focus if isinstance(dominant_focus, str) else None,
-        "dominant_object": dominant_object if isinstance(dominant_object, str) else None,
-        "scene_type": scene_type if isinstance(scene_type, str) else None,
-        "lighting_quality": lighting_quality if isinstance(lighting_quality, (str, int, float)) else None,
-        "subject_clarity": subject_clarity if isinstance(subject_clarity, (str, int, float)) else None,
-        "aesthetic_quality": aesthetic_quality if isinstance(aesthetic_quality, (str, int, float)) else None,
+        "virality_potential": clamped_virality,
+        "dominant_focus": dominant_focus,
+        "dominant_object": dominant_object,
+        "scene_type": scene_type,
+        "lighting_quality": lighting_quality,
+        "subject_clarity": subject_clarity,
+        "aesthetic_quality": aesthetic_quality,
         "lighting_feedback": lighting_feedback,
         "composition_feedback": composition_feedback,
         "aesthetic_fixes": aesthetic_fixes,
@@ -576,7 +628,6 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
         "is_cringe": is_cringe if cringe_score is not None else None,
         "cringe_label": cringe_label,
         "adult_content_detected": adult_content_detected,
-        "adult_content_confidence": adult_content_confidence,
     }
 
 
@@ -590,26 +641,13 @@ async def _retry_parse_with_repair(
     provider_label: str,
     post_id: str | None,
 ) -> dict[str, Any]:
-    """Shared parse→repair→retry→repair cascade used by both Gemini and OpenAI.
-
-    Steps:
-    1. generate  → parse
-    2. if step 1 fails: repair raw output → parse
-    3. if step 2 fails: generate with simplified prompt → parse
-    4. if step 3 fails: repair simplified output → parse
-    5. if all fail: raise with accumulated error messages
-
-    Raises on failure so the caller can decide what to do.
-    """
     parse_errors: list[str] = []
-
     raw_text = await generate_fn(api_key=api_key, instruction=instruction, media_url=media_url)
     try:
         return _build_vision_signal(_parse_gemini_payload(raw_text), media_url=media_url)
     except Exception as primary_exc:
         parse_errors.append(f"primary={primary_exc}")
 
-    # Step 2: repair the original raw output.
     if isinstance(raw_text, str) and raw_text.strip():
         try:
             repaired_text = await repair_fn(api_key=api_key, raw_text=raw_text)
@@ -619,7 +657,6 @@ async def _retry_parse_with_repair(
         except Exception as repair_exc:
             parse_errors.append(f"repair={repair_exc}")
 
-    # Step 3: retry with simplified prompt.
     retry_raw_text = await generate_fn(
         api_key=api_key,
         instruction=_SIMPLIFIED_GEMINI_VISION_PROMPT,
@@ -632,7 +669,6 @@ async def _retry_parse_with_repair(
     except Exception as retry_exc:
         parse_errors.append(f"simplified={retry_exc}")
 
-    # Step 4: repair the simplified output.
     if isinstance(retry_raw_text, str) and retry_raw_text.strip():
         try:
             repaired_retry = await repair_fn(api_key=api_key, raw_text=retry_raw_text)
@@ -653,41 +689,59 @@ async def run_vision_analysis(
     post: SinglePostInsights,
 ) -> dict[str, Any]:
     """Run Gemini Vision analysis for a post media URL with strict TOON parsing."""
-    from urllib.parse import urlparse
-
     post_id = post.media_id if isinstance(post.media_id, str) else None
-
+    media_type_upper = str(getattr(post, "media_type", "IMAGE") or "IMAGE").upper()
+    _is_reel = media_type_upper == "REEL"
+    media_type_context = (
+        "This is a REEL (short-form video). "
+        "Pay special attention to: the hook frame (first 1-3 seconds), pacing and cut rhythm, "
+        "audio-visual sync, loop-ability, and whether the opening frame would stop a scroll. "
+        "Watch the entire video before scoring."
+        if _is_reel else
+        "This is a static IMAGE or carousel post. "
+        "Pay special attention to: scroll-stop power of the thumbnail, color palette harmony, "
+        "whether a single subject dominates the frame, and save-worthiness of the visual information."
+    )
     instruction = (
-        "You are an expert visual content analyst for social media. "
-        "Analyze the provided image/video draft that the creator is planning to post. "
-        "Identify the visual strengths and weaknesses, and provide actionable recommendations to improve its visual quality or aesthetic before they publish. "
-        "If the media is a video, you MUST watch it from beginning to end before scoring.\n\n"
+        "You are a world-class Instagram visual strategist and content director. "
+        f"{media_type_context} "
+        "Your analysis must be specific, honest, and immediately actionable — "
+        "as if you are giving feedback to a creator who wants to maximize reach and engagement.\n\n"
         "Return plain TOON only.\n"
         "Do not return JSON.\n"
         "Do not use braces.\n"
         "Do not wrap keys or values in quotes unless absolutely required for spaces.\n\n"
         "Output schema (all keys required):\n"
         "visual_quality_score <int> (0 to 10)\n"
-        "hook_strength_score <float> (0.0 to 1.0)\n"
+        "hook_strength_score <float> (0.0 to 1.0 — be conservative)\n"
+        "virality_potential <int> (0 to 10 — raw viral potential)\n"
         "primary_objects\n"
         "  - <str>\n"
         "  - <str>\n"
-        "detected_text <str> (Any text overlaid on the media)\n"
+        "dominant_focus <str>\n"
+        "scene_type <str>\n"
+        "visual_style <str>\n"
+        "detected_text <str>\n"
         "lighting_feedback <str>\n"
         "composition_feedback <str>\n"
         "aesthetic_fixes\n"
         "  - <str>\n"
         "  - <str>\n"
-        "is_cringe <bool> (True or False)\n"
-        "adult_content_detected <bool> (True or False)\n"
+        "  - <str>\n"
+        "cringe_score <int> (0 to 100)\n"
+        "cringe_signals\n"
+        "  - <str>\n"
+        "cringe_fixes\n"
+        "  - <str>\n"
+        "production_level <str> (low, medium, high)\n"
+        "is_cringe <bool>\n"
+        "adult_content_detected <bool>\n"
     )
 
     media_url = post.media_url
     if not isinstance(media_url, str) or not media_url.strip():
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")
-    logger.debug("[Vision] Start media_id=%s", post_id)
 
-    media_url = media_url.strip()
     parsed_url = urlparse(media_url)
     hostname = parsed_url.hostname
     if (
@@ -696,13 +750,7 @@ async def run_vision_analysis(
         or not isinstance(hostname, str)
         or not await _is_safe_public_hostname(hostname)
     ):
-        logger.warning(
-            "[Vision] Rejected media_url for SSRF protection media_id=%s url=%s",
-            post_id,
-            _sanitize_url_for_logging(media_url),
-        )
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")
-
 
     api_key = os.getenv("GEMINI_API_KEY")
 
@@ -723,7 +771,6 @@ async def run_vision_analysis(
         gemini_error_reason = str(gemini_exc).strip() or gemini_exc.__class__.__name__
 
         if "SAFETY_BLOCK" in gemini_error_reason:
-            logger.warning("[Vision] Caught safety block for %s: %s", post_id, gemini_error_reason)
             synthetic_signal = {
                 "objects": [],
                 "primary_objects": [],
@@ -731,6 +778,7 @@ async def run_vision_analysis(
                 "detected_text": None,
                 "visual_style": None,
                 "hook_strength_score": 0.0,
+                "virality_potential": 0,
                 "dominant_focus": None,
                 "dominant_object": None,
                 "scene_type": None,
@@ -746,45 +794,25 @@ async def run_vision_analysis(
                 "is_cringe": True,
                 "cringe_label": "unsafe",
                 "adult_content_detected": True,
-                "adult_content_confidence": 100,
             }
             return VisionAnalysis(provider="gemini", status="ok", signals=[synthetic_signal]).model_dump(mode="python")
-
-        logger.warning(
-            "[Vision] Gemini vision failed; attempting OpenAI fallback media_id=%s media_url=%s reason=%s",
-            post_id,
-            _sanitize_url_for_logging(media_url),
-            gemini_error_reason,
-        )
 
         openai_api_key = os.getenv("OPENAI_API_KEY")
         mime_type = _infer_mime_type(media_url)
         if isinstance(openai_api_key, str) and openai_api_key.strip() and mime_type.startswith("image/"):
             try:
-                openai_api_key = openai_api_key.strip()
                 openai_signal = await _retry_parse_with_repair(
                     generate_fn=_generate_openai_vision_json,
                     repair_fn=_repair_openai_vision_json,
-                    api_key=openai_api_key,
+                    api_key=openai_api_key.strip(),
                     instruction=instruction,
                     media_url=media_url,
                     provider_label="OpenAI",
                     post_id=post_id,
                 )
-                logger.info("[Vision] OpenAI fallback succeeded for media_id=%s", post_id)
                 return VisionAnalysis(provider="openai", status="ok", signals=[openai_signal]).model_dump(mode="python")
-            except Exception as openai_exc:
-                openai_error_reason = str(openai_exc).strip() or openai_exc.__class__.__name__
-                logger.error(
-                    "[Vision] OpenAI fallback failed for media_id=%s media_url=%s: %s",
-                    post_id,
-                    _sanitize_url_for_logging(media_url),
-                    openai_error_reason,
-                )
-                combined_reason = f"gemini={gemini_error_reason}; openai={openai_error_reason}"
-                failure_payload = VisionAnalysis(provider="openai", status="error", signals=[]).model_dump(mode="python")
-                failure_payload["error_reason"] = combined_reason[:300]
-                return failure_payload
+            except Exception:
+                pass
 
         failure_payload = VisionAnalysis(provider="openai", status="error", signals=[]).model_dump(mode="python")
         failure_payload["error_reason"] = gemini_error_reason[:300]
@@ -797,453 +825,118 @@ def _infer_mime_type(url: str) -> str:
     url_lower = url.lower()
     parsed = urlparse(url_lower)
     qs = parse_qs(parsed.query)
-    
-    filename = ""
-    if "filename" in qs and qs["filename"]:
-        filename = qs["filename"][0]
-        
+    filename = qs["filename"][0] if "filename" in qs and qs["filename"] else ""
     path = parsed.path
-    
     if filename.endswith(".mp4") or path.endswith(".mp4") or ".mp4" in url_lower:
         return "video/mp4"
-    if filename.endswith(".png") or path.endswith(".png"):
-        return "image/png"
-    if filename.endswith(".gif") or path.endswith(".gif"):
-        return "image/gif"
-    if filename.endswith(".webp") or path.endswith(".webp"):
-        return "image/webp"
-        
     return "image/jpeg"
 
 
 def _build_gemini_vision_adapter():
-    """Return a small adapter over whichever Gemini SDK is installed."""
     try:
         from google import genai
         from google.genai import types as genai_types
-
-        if not hasattr(genai, "Client"):
-            raise ImportError("google.genai.Client is unavailable")
-
         class _GoogleGenaiVisionAdapter:
             def __init__(self, api_key: str) -> None:
                 self._client = genai.Client(api_key=api_key)
-
-            def _generate_with_uploaded_file(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
-                import httpx
-                import tempfile
-                import os
-                uploaded = None
-                temp_path = None
-                try:
-                    with httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False) as client:
-                        response = client.get(media_url)
-                        response.raise_for_status()
-                    suffix = ".mp4" if mime_type == "video/mp4" else ".jpg"
-                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                        tmp.write(response.content)
-                        temp_path = tmp.name
-                    try:
-                        # google-genai >= 0.8 uses config= for upload metadata
-                        from google.genai import types as _genai_types
-                        uploaded = self._client.files.upload(
-                            file=temp_path,
-                            config=_genai_types.UploadFileConfig(mime_type=mime_type),
-                        )
-                    except (TypeError, AttributeError):
-                        # Fallback for SDKs that accept mime_type directly
-                        uploaded = self._client.files.upload(file=temp_path, mime_type=mime_type)  # type: ignore[call-arg]
-                    return self._client.models.generate_content(
-                        model=model_name,
-                        contents=[instruction, uploaded],
-                    )
-                finally:
-                    if uploaded is not None and hasattr(uploaded, "name"):
-                        try:
-                            self._client.files.delete(name=uploaded.name)
-                        except Exception:
-                            logger.debug("[Vision] Gemini cleanup failed for uploaded file.")
-                    if temp_path and os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except OSError:
-                            pass
-
             def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
-                try:
-                    image_part = genai_types.Part.from_uri(file_uri=media_url, mime_type=mime_type)
-                    return self._client.models.generate_content(
-                        model=model_name,
-                        contents=[instruction, image_part],
-                    )
-                except Exception as e:
-                    logger.debug("[Vision] genai SDK uri fetch failed (%s), falling back to local download/upload.", e)
-                    return self._generate_with_uploaded_file(
-                        model_name=model_name,
-                        instruction=instruction,
-                        media_url=media_url,
-                        mime_type=mime_type
-                    )
-
+                image_part = genai_types.Part.from_uri(file_uri=media_url, mime_type=mime_type)
+                return self._client.models.generate_content(model=model_name, contents=[instruction, image_part])
             def generate_text(self, *, model_name: str, prompt: str):
-                return self._client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
-
+                return self._client.models.generate_content(model=model_name, contents=prompt)
         return _GoogleGenaiVisionAdapter
     except ImportError:
         import google.generativeai as legacy_genai
-
         class _LegacyGenaiVisionAdapter:
             def __init__(self, api_key: str) -> None:
                 legacy_genai.configure(api_key=api_key)
-
-            def _generate_with_uploaded_file(
-                self,
-                *,
-                model_name: str,
-                instruction: str,
-                media_url: str,
-                mime_type: str,
-            ):
-                uploaded = None
-                temp_path = None
-                try:
-                    with httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False) as client:
-                        response = client.get(media_url)
-                        response.raise_for_status()
-                    suffix = ".mp4" if mime_type == "video/mp4" else ".jpg"
-                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                        tmp.write(response.content)
-                        temp_path = tmp.name
-                    uploaded = legacy_genai.upload_file(temp_path, mime_type=mime_type)
-                    return legacy_genai.GenerativeModel(model_name).generate_content([instruction, uploaded])
-                finally:
-                    if uploaded is not None and getattr(uploaded, "name", None):
-                        try:
-                            legacy_genai.delete_file(uploaded.name)
-                        except Exception:
-                            logger.debug("[Vision] Legacy Gemini cleanup failed for uploaded file.")
-                    if temp_path and os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except OSError:
-                            logger.debug("[Vision] Temporary Gemini upload file cleanup failed: %s", temp_path)
-
             def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
-                model = legacy_genai.GenerativeModel(model_name)
-                try:
-                    return model.generate_content(
-                        [
-                            instruction,
-                            {
-                                "mime_type": mime_type,
-                                "file_uri": media_url,
-                            },
-                        ]
-                    )
-                except Exception:
-                    # Older SDKs may require a local uploaded file instead of a remote URI part.
-                    return self._generate_with_uploaded_file(
-                        model_name=model_name,
-                        instruction=instruction,
-                        media_url=media_url,
-                        mime_type=mime_type,
-                    )
-
+                return legacy_genai.GenerativeModel(model_name).generate_content([instruction, {"mime_type": mime_type, "file_uri": media_url}])
             def generate_text(self, *, model_name: str, prompt: str):
                 return legacy_genai.GenerativeModel(model_name).generate_content(prompt)
-
         return _LegacyGenaiVisionAdapter
 
 
 class _OpenAIVisionAdapter:
-    """Small adapter for GPT-4o vision responses with a `.text` payload."""
-
     def __init__(self, api_key: str) -> None:
-        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        if azure_endpoint:
-            from openai import AzureOpenAI
-            azure_key = os.getenv("AZURE_OPENAI_API_KEY")
-            api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
-            self._client = AzureOpenAI(
-                api_key=azure_key,
-                api_version=api_version,
-                azure_endpoint=azure_endpoint,
-                http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
-            )
-        else:
-            from openai import OpenAI
-            self._client = OpenAI(
-                api_key=api_key,
-                http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
-            )
-
+        from backend.app.ai.llm_client import LLMClient
+        self._client = LLMClient().client
     def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str) -> _VisionTextResponse:
-        if mime_type.startswith("video/"):
-            raise ValueError("OpenAI vision fallback currently supports images only.")
-
-        def _call_with_part(image_part: dict[str, Any]):
-            payload = {
-                "model": model_name,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": instruction},
-                            image_part,
-                        ],
-                    }
-                ],
-            }
-            if "5.6" in model_name or "o1" in model_name:
-                payload["max_completion_tokens"] = 2000
-            else:
-                payload["temperature"] = 0
-
-            return self._client.chat.completions.create(**payload)
-
-        response = _call_with_part({"type": "image_url", "image_url": {"url": media_url}})
-
-        text = (response.choices[0].message.content or "").strip() if response.choices else ""
-        if not text:
-            raise ValueError("OpenAI response did not include text output.")
-        return _VisionTextResponse(text=text)
+        response = self._client.chat.completions.create(model=model_name, messages=[{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image_url", "image_url": {"url": media_url}}]}])
+        return _VisionTextResponse(text=(response.choices[0].message.content or "").strip())
 
 
 def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
     model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
-    try:
-        gemini_adapter_cls = _build_gemini_vision_adapter()
-        client = gemini_adapter_cls(api_key=api_key)
-        mime = _infer_mime_type(media_url)
-        response = client.generate_content(
-            model_name=model_name,
-            instruction=instruction,
-            media_url=media_url,
-            mime_type=mime,
-        )
-        text = getattr(response, "text", None)
-        if not isinstance(text, str):
-            block_reason = None
-            if hasattr(response, "prompt_feedback") and response.prompt_feedback:
-                block_reason = getattr(response.prompt_feedback, "block_reason", None)
-            
-            if block_reason:
-                raise ValueError(f"SAFETY_BLOCK: {block_reason}")
-                
-            logger.warning(
-                "[Vision] Gemini %s returned no text for media_url=%s. Raw response: %s",
-                model_name,
-                _sanitize_url_for_logging(media_url),
-                response,
-            )
-            raise ValueError("Gemini response did not include text output.")
-        return text
-    except Exception as e:
-        logger.error(
-            "[Vision] Gemini %s failed for media_url=%s: %s",
-            model_name,
-            _sanitize_url_for_logging(media_url),
-            e,
-        )
-        raise
+    client = _build_gemini_vision_adapter()(api_key=api_key)
+    response = client.generate_content(model_name=model_name, instruction=instruction, media_url=media_url, mime_type=_infer_mime_type(media_url))
+    text = getattr(response, "text", None)
+    if not isinstance(text, str):
+        raise ValueError("Gemini response missing text.")
+    return text
 
 
 def _call_openai_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
-    if os.getenv("AZURE_OPENAI_ENDPOINT"):
-        model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o")
-    else:
-        model_name = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
-    try:
-        client = _OpenAIVisionAdapter(api_key=api_key)
-        mime = _infer_mime_type(media_url)
-        response = client.generate_content(
-            model_name=model_name,
-            instruction=instruction,
-            media_url=media_url,
-            mime_type=mime,
-        )
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError("OpenAI response did not include text output.")
-        return text
-    except Exception as e:
-        logger.error(
-            "[Vision] OpenAI %s failed for media_url=%s: %s",
-            model_name,
-            _sanitize_url_for_logging(media_url),
-            e,
-        )
-        raise
+    client = _OpenAIVisionAdapter(api_key=api_key)
+    model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o")
+    response = client.generate_content(model_name=model_name, instruction=instruction, media_url=media_url, mime_type="image/jpeg")
+    return response.text
 
 
 def _call_openai_text_api(*, api_key: str, prompt: str) -> str:
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    if azure_endpoint:
-        model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
-        from openai import AzureOpenAI
-        azure_key = os.getenv("AZURE_OPENAI_API_KEY")
-        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
-        client = AzureOpenAI(
-            api_key=azure_key,
-            api_version=api_version,
-            azure_endpoint=azure_endpoint,
-            http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
-        )
-    else:
-        model_name = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=api_key,
-            http_client=httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False),
-        )
-        
-    try:
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-        }
-        if "5.6" in model_name or "o1" in model_name:
-            payload["max_completion_tokens"] = 2000
-        else:
-            payload["temperature"] = 0
-            
-        response = client.chat.completions.create(**payload)
-        text = (response.choices[0].message.content or "").strip() if response.choices else ""
-        if not text:
-            raise ValueError("OpenAI repair response did not include text output.")
-        return text
-    except Exception as e:
-        logger.warning("[Vision] OpenAI text repair failed: %s", e)
-        raise
-
-
-async def _call_gemini_text_batch(*, api_key: str, prompt: str) -> str:
-    """Call Gemini Batch API for text-only generation.
-
-    TODO: replace with polling once batch job lifecycle handling is implemented.
-    """
-    model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:batchGenerateContent?key={api_key}"
-    payload: dict[str, Any] = {
-        "requests": [
-            {
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": prompt},
-                        ]
-                    }
-                ]
-            }
-        ]
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, trust_env=False) as client:
-            response = await client.post(endpoint, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        text = data["responses"][0]["candidates"][0]["content"]["parts"][0]["text"]
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError("Gemini batch response did not include text output.")
-        return text
-    except KeyError as exc:
-        raise ValueError("Unexpected Gemini batch response structure.") from exc
-    except IndexError as exc:
-        raise ValueError("Unexpected Gemini batch response structure.") from exc
-    except TypeError as exc:
-        raise ValueError("Unexpected Gemini batch response structure.") from exc
+    from backend.app.ai.llm_client import LLMClient
+    client = LLMClient().client
+    model = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    response = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}])
+    return (response.choices[0].message.content or "").strip()
 
 
 def _call_gemini_text_api(*, api_key: str, prompt: str) -> str:
-    # GEMINI_USE_BATCH=true routes text calls to Batch API (~50% cost, 24h SLA).
-    model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
-    try:
-        if _GEMINI_USE_BATCH:
-            return asyncio.run(_call_gemini_text_batch(api_key=api_key, prompt=prompt))
-        gemini_adapter_cls = _build_gemini_vision_adapter()
-        client = gemini_adapter_cls(api_key=api_key)
-        response = client.generate_text(model_name=model_name, prompt=prompt)
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError("Gemini repair response did not include text output.")
-        return text
-    except Exception as e:
-        logger.warning("[Vision] Gemini text repair failed: %s", e)
-        raise
+    client = _build_gemini_vision_adapter()(api_key=api_key)
+    response = client.generate_text(model_name=os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL), prompt=prompt)
+    return getattr(response, "text", "")
 
 
 async def _generate_gemini_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
-    # GEMINI_USE_BATCH=true routes text calls to Batch API (~50% cost, 24h SLA).
-    try:
-        # Vision/media calls remain synchronous SDK-based even when batch mode is enabled.
-        if _GEMINI_USE_BATCH:
-            logger.debug("[Vision] GEMINI_USE_BATCH enabled; keeping vision call on synchronous SDK path.")
-        # Wrap the threaded call in asyncio.wait_for to prevent infinite hang.
-        # Shortened to 10s for smoke test to avoid long hangs.
-        return await asyncio.wait_for(
-            asyncio.to_thread(_call_gemini_vision_api, api_key=api_key, instruction=instruction, media_url=media_url),
-            timeout=120.0
-        )
-    except asyncio.TimeoutError:
-        logger.error(
-            "[Vision] Gemini vision analysis timed out for media_url=%s",
-            _sanitize_url_for_logging(media_url),
-        )
-        raise
+    return await asyncio.wait_for(asyncio.to_thread(_call_gemini_vision_api, api_key=api_key, instruction=instruction, media_url=media_url), timeout=120.0)
 
 
 async def _generate_openai_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
-    try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(_call_openai_vision_api, api_key=api_key, instruction=instruction, media_url=media_url),
-            timeout=120.0,
-        )
-    except asyncio.TimeoutError:
-        logger.error(
-            "[Vision] OpenAI vision analysis timed out for media_url=%s",
-            _sanitize_url_for_logging(media_url),
-        )
-        raise
+    return await asyncio.wait_for(asyncio.to_thread(_call_openai_vision_api, api_key=api_key, instruction=instruction, media_url=media_url), timeout=120.0)
 
 
 async def _repair_gemini_vision_json(*, api_key: str, raw_text: str) -> str:
-    return await asyncio.wait_for(
-        asyncio.to_thread(
-            _call_gemini_text_api,
-            api_key=api_key,
-            prompt=_GEMINI_VISION_REPAIR_PROMPT + raw_text.strip(),
-        ),
-        timeout=30.0,
-    )
+    return await asyncio.wait_for(asyncio.to_thread(_call_gemini_text_api, api_key=api_key, prompt=_GEMINI_VISION_REPAIR_PROMPT + raw_text.strip()), timeout=30.0)
 
 
 async def _repair_openai_vision_json(*, api_key: str, raw_text: str) -> str:
-    return await asyncio.wait_for(
-        asyncio.to_thread(
-            _call_openai_text_api,
-            api_key=api_key,
-            prompt=_OPENAI_VISION_REPAIR_PROMPT + raw_text.strip(),
-        ),
-        timeout=30.0,
-    )
+    return await asyncio.wait_for(asyncio.to_thread(_call_openai_text_api, api_key=api_key, prompt=_OPENAI_VISION_REPAIR_PROMPT + raw_text.strip()), timeout=30.0)
 
 
 def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, Any]:
-    """Build a compact prompt requesting strictly structured TOON output."""
+    """Build a richer prompt requesting structured TOON output with v3 analytics fields."""
+    media_type = str(context.get("media_type") or "IMAGE").upper()
+    content_type_note = (
+        "This is a REEL (video). Consider algorithmic signals like watch-time hooks, audio trends, "
+        "loop-ability, and first-3-second retention when evaluating engagement potential and giving recommendations."
+        if media_type == "REEL" else
+        "This is an IMAGE post. Consider carousel potential, caption depth, save-worthiness, "
+        "color pop, and scroll-stop visual power when evaluating engagement potential and giving recommendations."
+    )
+    weakest = context.get("score_gap_analysis", {}).get("weakest_dimension") or "unknown"
+    strongest = context.get("score_gap_analysis", {}).get("strongest_dimension") or "unknown"
+    likes = (context.get("core_metrics") or {}).get("likes") or 0
+    comments = (context.get("core_metrics") or {}).get("comments") or 0
+    er = (context.get("derived_metrics") or {}).get("engagement_rate")
+    er_note = f" The post has {likes} likes, {comments} comments" + (f", engagement rate {er:.4f}" if isinstance(er, (int, float)) else "") + "."
     return {
         "system": (
-            "You are an Instagram post analyst. "
+            "You are a world-class Instagram growth strategist and content analyst. "
+            f"{content_type_note} "
+            "Your output must feel like premium, personalized coaching — specific, grounded in the data, "
+            "and immediately actionable. Never use vague advice like 'improve content quality'. "
             "Return ONLY valid TOON format (Token-Oriented Object Notation). "
             "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes. "
-            "For lists of objects, put '-' on its own line and indent fields beneath it. "
             "Example:\n"
             "summary Example summary.\n"
             "drivers\n"
@@ -1255,8 +948,9 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             "recommendations\n"
             "  -\n"
             "    id rec_1\n"
-            "    text Add a clear CTA\n"
+            "    text Add a clear CTA in the first line of your caption\n"
             "    impact_level HIGH\n"
+            "    category CAPTION\n"
             "engagement_potential_score\n"
             "  emotional_resonance 6\n"
             "  shareability 5\n"
@@ -1266,63 +960,41 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             "  total 23\n"
             "  notes\n"
             "    - concise note\n"
+            "caption_improvement\n"
+            "  hook_rewrite A more compelling opening line for the caption\n"
+            "  cta_rewrite A specific, action-oriented call-to-action\n"
+            "posting_intelligence Best posting window for this niche based on the data provided\n"
+            "hashtag_quality_note One-sentence assessment of the hashtag strategy quality\n"
+            "hashtag_analysis\n"
+            "  quality_band Excellent\n"
+            "  issue None\n"
+            "  suggested_count 15\n"
+            "  strategy_tip Specific advice on hashtag mix\n"
+            "viral_opportunity This concept has viral potential. Amplify with a trending audio mechanic.\n"
+            "creator_next_step Immediate action to take to fix the weakest dimension.\n"
             "Return ONLY valid TOON with keys: "
-            "summary (string), "
-            "drivers (array of objects with id, label, type, explanation), "
-            "recommendations (array of objects with id, text, impact_level), "
-            "engagement_potential_score (object with emotional_resonance, shareability, save_worthiness, "
-            "comment_potential, novelty_or_value, total, notes). "
-            "Do not include markdown, comments, or extra keys. "
-            "Summary requirements: 3-5 sentences; must reference concrete values for reach and engagement_rate; "
-            "must reference engagement_rate_percent_vs_avg when available; "
-            "must reference percentile_engagement_rank when available; "
-            "When citing metrics, reference metric keys exactly as they appear in the input payload, including paths "
-            "such as core_metrics.reach, derived_metrics.engagement_rate, "
-            "benchmark_metrics.engagement_rate_percent_vs_avg, and "
-            "benchmark_metrics.percentile_engagement_rank. "
-            "The input includes deterministic S1 visual quality metrics under context.s1_visual_quality. "
-            "Treat context.s1_visual_quality as fixed and authoritative. "
-            "Do not recompute, alter, or replace S1 values. "
-            "The input includes deterministic S2 caption effectiveness metrics under context.s2_caption_effectiveness. "
-            "Treat context.s2_caption_effectiveness as fixed and authoritative. "
-            "Do not recompute, alter, or replace S2 values. "
-            "The input includes deterministic S3 content clarity metrics under context.s3_content_clarity. "
-            "Treat context.s3_content_clarity as fixed and authoritative. "
-            "Do not recompute, alter, or replace S3 values. "
-            "The input includes deterministic S4 audience relevance metrics under context.s4_audience_relevance. "
-            "Treat context.s4_audience_relevance as fixed and authoritative. "
-            "Do not recompute, alter, or replace S4 values. "
-            "The input includes deterministic S6 brand safety metrics under context.s6_brand_safety. "
-            "Treat context.s6_brand_safety as fixed and authoritative. "
-            "Do not recompute, alter, or replace S6 values. "
-            "The input includes deterministic weighted post score under context.weighted_post_score. "
-            "Treat context.weighted_post_score as fixed and authoritative. "
-            "Do not recompute or alter weighted_post_score. "
-            "Engagement potential rubric (0..10 each): "
-            "emotional_resonance = relatability/emotional pull; "
-            "shareability = likelihood users send to a friend; "
-            "save_worthiness = likelihood users bookmark/save; "
-            "comment_potential = likelihood content invites responses/questions; "
-            "novelty_or_value = actionable value/insight/entertainment uniqueness. "
-            "Set engagement_potential_score.total as the sum of these five sub-scores (0..50). "
-            "engagement_potential_score schema is strict with keys exactly: "
-            "emotional_resonance, shareability, save_worthiness, comment_potential, novelty_or_value, total, notes. "
-            "All five sub-scores must be numeric values in range 0..10. "
-            "total must be numeric 0..50. "
-            "notes must be an array of strings (can be empty). "
-            "Forbid extra keys at every level of the TOON output. "
-            "Do not invent new metric names, aliases, or paraphrased metric keys. "
-            "avoid generic statements. "
-            "Driver requirements: max 5 items; each driver must include measurable reasoning tied to provided metrics "
-            "and/or vision signals. "
-            "Recommendation requirements: max 5 items; each must be specific, measurable, and tied to an identified "
-            "gap/opportunity in the provided data; avoid generic phrases such as 'improve content quality'. "
-            "Allowed driver.type values: POSITIVE or LIMITING. "
-            "Allowed recommendation.impact_level values: HIGH, MEDIUM, LOW."
+            "summary, drivers, recommendations, engagement_potential_score, "
+            "caption_improvement, posting_intelligence, hashtag_quality_note, "
+            "hashtag_analysis, viral_opportunity, creator_next_step. "
+            "Do not include markdown. "
+            f"Summary: FIRST sentence must cite actual numbers.{er_note} "
+            f"Name weakest dimension ({weakest}) and why it drags the score. "
+            f"Mention strongest dimension ({strongest}). 3-5 sentences total. "
+            "Driver requirements: max 5 items; reference specific metric value or vision signal. "
+            "Recommendation requirements: 5 to 7 items; category is REQUIRED (CAPTION, VISUAL, TIMING, HASHTAGS, ENGAGEMENT); "
+            "avoid generic phrases. "
+            "caption_improvement: 1-sentence rewritten hook and 1-sentence improved CTA. "
+            "posting_intelligence: 1-sentence comment on optimal timing. "
+            "hashtag_analysis: quality_band (Excellent|Good|Needs Work|Poor), suggested_count (int), strategy_tip (str). "
+            "viral_opportunity: 2 sentences on viral potential and amplification mechanics. "
+            "creator_next_step: single sentence on highest-priority action based on "
+            f"biggest gap ({weakest}). "
+            "Allowed driver.type: POSITIVE or LIMITING. "
+            "Allowed recommendation.impact_level: HIGH, MEDIUM, LOW."
         ),
         "user": json.dumps(
             {
-                "task": "Analyze this single post and provide concise output.",
+                "task": "Analyze this single post and provide premium, creator-specific output.",
                 "context": context,
                 "vision": vision,
             },
@@ -1336,10 +1008,15 @@ def _build_repair_prompt(raw_output: str) -> dict[str, Any]:
         "system": (
             "Repair the assistant output into valid TOON only. "
             "Return ONLY TOON with these keys and no extra keys: "
-            "summary, drivers, recommendations, engagement_potential_score. "
+            "summary, drivers, recommendations, engagement_potential_score, "
+            "caption_improvement, posting_intelligence, hashtag_quality_note, "
+            "hashtag_analysis, viral_opportunity, creator_next_step. "
             "Use 2-space indentation for nesting and '-' for list items. "
             "Rules: driver.type in {POSITIVE,LIMITING}; recommendation.impact_level in {HIGH,MEDIUM,LOW}; "
+            "recommendation.category in {CAPTION,VISUAL,TIMING,HASHTAGS,ENGAGEMENT}; "
             "all five engagement sub-scores numeric 0..10; total numeric 0..50; notes array of strings. "
+            "caption_improvement must have hook_rewrite and cta_rewrite string fields. "
+            "posting_intelligence must be a string. hashtag_quality_note must be a string. "
             "If information is missing, fill safe defaults."
         ),
         "user": json.dumps({"raw_output": raw_output}, ensure_ascii=True),
@@ -1567,27 +1244,49 @@ def _parse_recommendation_item(value: Any) -> AIRecommendation | None:
     if impact_level not in {"HIGH", "MEDIUM", "LOW"}:
         return None
 
-    return {
+    result: AIRecommendation = {
         "id": item_id.strip(),
         "text": text.strip(),
         "impact_level": impact_level,
     }
+    # Optional category field (new in v2)
+    raw_category = value.get("category")
+    if isinstance(raw_category, str) and raw_category.strip().upper() in {
+        "CAPTION", "VISUAL", "TIMING", "HASHTAGS", "ENGAGEMENT"
+    }:
+        result["category"] = raw_category.strip().upper()
+    else:
+        result["category"] = "ENGAGEMENT"
+    return result
 
 
 def _parse_llm_response(
     raw_text: str | None,
-) -> tuple[str | None, list[AIDriver], list[AIRecommendation], dict[str, Any] | None]:
+) -> tuple[
+    str | None,
+    list[AIDriver],
+    list[AIRecommendation],
+    dict[str, Any] | None,
+    dict[str, str] | None,
+    str | None,
+    str | None,
+    dict[str, Any] | None,
+    str | None,
+    str | None,
+]:
     """Parse and strictly validate LLM output schema."""
+    _empty = (None, [], [], None, None, None, None, None, None, None)
+
     if not raw_text:
-        return None, [], [], None
+        return _empty
 
     try:
         payload = toon_loads(raw_text)
     except Exception:
-        return None, [], [], None
+        return _empty
 
     if not isinstance(payload, dict):
-        return None, [], [], None
+        return _empty
 
     summary = payload.get("summary")
     drivers_raw = payload.get("drivers")
@@ -1595,46 +1294,105 @@ def _parse_llm_response(
     engagement_potential_raw = payload.get("engagement_potential_score")
 
     if not isinstance(summary, str) or not summary.strip():
-        return None, [], [], None
+        return _empty
     if not isinstance(drivers_raw, list):
-        return None, [], [], None
+        return _empty
     if not isinstance(recommendations_raw, list):
-        return None, [], [], None
+        return _empty
     if not isinstance(engagement_potential_raw, dict):
-        return None, [], [], None
+        return _empty
 
     drivers: list[AIDriver] = []
     for item in drivers_raw:
         parsed_item = _parse_driver_item(item)
         if parsed_item is None:
-            return None, [], [], None
+            return _empty
         drivers.append(parsed_item)
 
     recommendations: list[AIRecommendation] = []
     for item in recommendations_raw:
         parsed_item = _parse_recommendation_item(item)
         if parsed_item is None:
-            return None, [], [], None
+            return _empty
         recommendations.append(parsed_item)
 
+    # --- New v2 optional fields ---
+    caption_improvement: dict[str, str] | None = None
+    raw_ci = payload.get("caption_improvement")
+    if isinstance(raw_ci, dict):
+        hook_rw = raw_ci.get("hook_rewrite")
+        cta_rw = raw_ci.get("cta_rewrite")
+        if isinstance(hook_rw, str) and hook_rw.strip():
+            caption_improvement = {
+                "hook_rewrite": hook_rw.strip()[:300],
+                "cta_rewrite": cta_rw.strip()[:300] if isinstance(cta_rw, str) else "",
+            }
+
+    posting_intelligence: str | None = None
+    raw_pi = payload.get("posting_intelligence")
+    if isinstance(raw_pi, str) and raw_pi.strip():
+        posting_intelligence = raw_pi.strip()[:400]
+
+    hashtag_quality_note: str | None = None
+    raw_hq = payload.get("hashtag_quality_note")
+    if isinstance(raw_hq, str) and raw_hq.strip():
+        hashtag_quality_note = raw_hq.strip()[:300]
+
+    # --- New v3 optional fields ---
+    hashtag_analysis: dict[str, Any] | None = None
+    raw_ha = payload.get("hashtag_analysis")
+    if isinstance(raw_ha, dict):
+        quality_band = raw_ha.get("quality_band")
+        suggested_count = raw_ha.get("suggested_count")
+        if isinstance(quality_band, str) and quality_band.strip():
+            hashtag_analysis = {
+                "quality_band": quality_band.strip()[:50],
+                "issue": str(raw_ha.get("issue") or "").strip()[:200] or None,
+                "suggested_count": int(suggested_count) if isinstance(suggested_count, (int, float)) else None,
+                "strategy_tip": str(raw_ha.get("strategy_tip") or "").strip()[:300] or None,
+            }
+
+    viral_opportunity: str | None = None
+    raw_vo = payload.get("viral_opportunity")
+    if isinstance(raw_vo, str) and raw_vo.strip():
+        viral_opportunity = raw_vo.strip()[:500]
+
+    creator_next_step: str | None = None
+    raw_cns = payload.get("creator_next_step")
+    if isinstance(raw_cns, str) and raw_cns.strip():
+        creator_next_step = raw_cns.strip()[:300]
+
     summary = summary.strip()
-    return summary, drivers, recommendations, engagement_potential_raw
+    return (summary, drivers, recommendations, engagement_potential_raw,
+            caption_improvement, posting_intelligence, hashtag_quality_note,
+            hashtag_analysis, viral_opportunity, creator_next_step)
 
 
 async def _parse_llm_response_with_repair(
     raw_text: str | None,
     llm_client: LLMClient | None,
-) -> tuple[str | None, list[AIDriver], list[AIRecommendation], dict[str, Any] | None]:
+) -> tuple[
+    str | None,
+    list[AIDriver],
+    list[AIRecommendation],
+    dict[str, Any] | None,
+    dict[str, str] | None,
+    str | None,
+    str | None,
+    dict[str, Any] | None,
+    str | None,
+    str | None,
+]:
     parsed = _parse_llm_response(raw_text)
-    summary, drivers, recommendations, engagement_potential_raw = parsed
+    summary, drivers, recommendations, engagement_potential_raw, caption_improvement, posting_intelligence, hashtag_quality_note, hashtag_analysis, viral_opportunity, creator_next_step = parsed
     if summary is not None:
         primary_payload = sanitize_s5_payload(engagement_potential_raw)
         if primary_payload is not None and _sanitize_engagement_potential_score(primary_payload) is not None:
-            return summary, drivers, recommendations, primary_payload
+            return summary, drivers, recommendations, primary_payload, caption_improvement, posting_intelligence, hashtag_quality_note, hashtag_analysis, viral_opportunity, creator_next_step
 
     repaired_text = await _repair_llm_toon_output(raw_text, llm_client)
     repaired = _parse_llm_response(repaired_text)
-    repaired_summary, repaired_drivers, repaired_recommendations, repaired_engagement = repaired
+    repaired_summary, repaired_drivers, repaired_recommendations, repaired_engagement, repaired_ci, repaired_pi, repaired_hq, repaired_ha, repaired_vo, repaired_cns = repaired
     if repaired_summary is None:
         return parsed
 
@@ -1643,7 +1401,8 @@ async def _parse_llm_response_with_repair(
         return parsed
     if _sanitize_engagement_potential_score(repaired_payload) is None:
         return parsed
-    return repaired_summary, repaired_drivers, repaired_recommendations, repaired_payload
+    return (repaired_summary, repaired_drivers, repaired_recommendations, repaired_payload,
+            repaired_ci, repaired_pi, repaired_hq, repaired_ha, repaired_vo, repaired_cns)
 
 
 def sanitize_s5_payload(raw: Any) -> dict[str, Any] | None:
@@ -1734,12 +1493,130 @@ def _apply_s5_consistency_cap(
     engagement_score: EngagementPotentialScore,
     visual_quality_score: VisualQualityScore,
     content_clarity_score: ContentClarityScore,
+    percentile_rank: float | None = None,
 ) -> EngagementPotentialScore:
-    if visual_quality_score.total < 15.0 and content_clarity_score.total < 15.0 and engagement_score.total > 30.0:
-        notes = list(engagement_score.notes)
+    """Apply consistency caps to S5 score.
+
+    Rules (applied in order, most restrictive wins):
+    1. Low S1 + S3 cap: if both visual and clarity are weak, cap S5 at 30.
+    2. Benchmark percentile cap: if the post is in the bottom 25th percentile, cap S5 at 20.
+    3. Benchmark percentile floor: if the post is in the top 25th percentile, apply a minimum floor of 35.
+    """
+    current_total = engagement_score.total
+    notes = list(engagement_score.notes)
+    updated_total = current_total
+
+    # Rule 1: S1 + S3 consistency cap
+    if visual_quality_score.total < 15.0 and content_clarity_score.total < 15.0 and current_total > 30.0:
+        updated_total = min(updated_total, 30.0)
         notes.append("consistency cap applied: low S1 and S3 limited S5 total")
-        return engagement_score.model_copy(update={"total": 30.0, "notes": notes})
+
+    # Rule 2: Low percentile cap (real ER is poor → S5 cannot be inflated)
+    if isinstance(percentile_rank, (int, float)):
+        if percentile_rank <= 25.0 and updated_total > 20.0:
+            updated_total = min(updated_total, 20.0)
+            notes.append(f"benchmark cap applied: percentile_rank={percentile_rank:.1f} → S5 capped at 20")
+        # Rule 3: High percentile floor (real ER is strong → S5 should reflect it)
+        elif percentile_rank >= 75.0 and updated_total < 35.0:
+            updated_total = max(updated_total, 35.0)
+            notes.append(f"benchmark floor applied: percentile_rank={percentile_rank:.1f} → S5 floored at 35")
+
+    if updated_total != current_total:
+        return engagement_score.model_copy(update={"total": round(updated_total, 2), "notes": notes})
     return engagement_score
+
+
+def _compute_score_analysis(
+    visual_quality_score: VisualQualityScore,
+    content_clarity_score: ContentClarityScore,
+    caption_effectiveness_score: CaptionEffectivenessScore,
+    audience_relevance_score: AudienceRelevanceScore,
+    brand_safety_score: BrandSafetyScore,
+    weighted_post_score: WeightedPostScore,
+) -> dict[str, Any]:
+    """Identify the weakest and strongest scoring dimensions.
+
+    Returns a dict with weakest_dimension, strongest_dimension, and gap_to_average.
+    All S-scores are normalized to the 0..50 scale for comparison.
+    """
+    scores: dict[str, float | None] = {
+        "S1_visual_quality": visual_quality_score.total,
+        "S2_caption_effectiveness": caption_effectiveness_score.total_0_50,
+        "S3_content_clarity": content_clarity_score.total,
+        "S4_audience_relevance": audience_relevance_score.total_0_50,
+        "S6_brand_safety": brand_safety_score.total_0_50,
+    }
+    available = {k: float(v) for k, v in scores.items() if isinstance(v, (int, float))}
+    if not available:
+        return {
+            "weakest_dimension": None,
+            "strongest_dimension": None,
+            "gap_to_average": None,
+        }
+    avg = sum(available.values()) / len(available)
+    weakest = min(available, key=available.__getitem__)
+    strongest = max(available, key=available.__getitem__)
+    gap = round(available[weakest] - avg, 2)
+    return {
+        "weakest_dimension": weakest,
+        "strongest_dimension": strongest,
+        "gap_to_average": gap,
+        "all_scores_0_50": available,
+    }
+
+
+def _compute_predicted_er_blended(
+    tier_avg_er: float | None,
+    s5_total: float | None,
+    account_avg_er: float | None,
+    weighted_score_0_100: float | None,
+) -> tuple[float | None, str, list[str]]:
+    """Blend LLM-derived (S5) and deterministic (weighted score) signals for predicted ER.
+
+    Returns (predicted_er, confidence, notes).
+    """
+    notes: list[str] = []
+
+    signal_a: float | None = None
+    if isinstance(tier_avg_er, (int, float)) and isinstance(s5_total, (int, float)) and tier_avg_er >= 0:
+        s5_clamped = max(0.0, min(50.0, float(s5_total)))
+        signal_a = float(tier_avg_er) * (s5_clamped / 50.0)
+        notes.append("signal_a: tier_avg_er * (S5/50)")
+
+    signal_b: float | None = None
+    if isinstance(account_avg_er, (int, float)) and isinstance(weighted_score_0_100, (int, float)) and account_avg_er >= 0:
+        signal_b = float(account_avg_er) * (max(0.0, min(100.0, float(weighted_score_0_100))) / 100.0)
+        notes.append("signal_b: account_avg_er * (weighted_score/100)")
+
+    if signal_a is not None and signal_b is not None:
+        predicted = 0.5 * signal_a + 0.5 * signal_b
+        confidence = "high"
+        notes.append("blended: 0.5*signal_a + 0.5*signal_b")
+    elif signal_a is not None:
+        predicted = signal_a
+        confidence = "medium"
+    elif signal_b is not None:
+        predicted = signal_b
+        confidence = "medium"
+    else:
+        notes.append("missing all er signals")
+        return None, "low", notes
+
+    # Clamp to fraction (<=1) or percent (<=100) depending on tier_avg_er unit
+    ref_er = tier_avg_er if isinstance(tier_avg_er, (int, float)) else account_avg_er
+    predicted = max(0.0, predicted)
+    if isinstance(ref_er, (int, float)) and ref_er <= 1.0:
+        if predicted > 1.0:
+            notes.append("predicted_er capped at 1.0 (fraction unit)")
+        predicted = min(predicted, 1.0)
+    else:
+        if predicted > 100.0:
+            notes.append("predicted_er capped at 100.0 (percent unit)")
+        predicted = min(predicted, 100.0)
+
+    return round(predicted, 6), confidence, notes
+
+
 
 
 def _fallback_summary(score: int, band: str) -> str:
@@ -2036,6 +1913,197 @@ async def analyze_single_post_ai(
         brand_safety_score.total_0_50,
         weighted_post_score.score,
     )
+
+
+async def analyze_single_post_ai(
+    post: SinglePostInsights,
+    llm_client: LLMClient | None = None,
+) -> AIAnalysisResult:
+    """Run async AI analysis for a single post with caching and regen throttling.
+
+    This function mutates ``post`` in-place by populating computed score fields
+    and intermediate analysis fields (for example: ``visual_quality_score``,
+    ``caption_effectiveness_score``, ``content_clarity_score``,
+    ``audience_relevance_score``, ``brand_safety_score``,
+    ``engagement_potential_score``, ``weighted_post_score``,
+    ``vision_analysis``, and predicted engagement fields).
+    Callers should treat ``post`` as updated after this call returns.
+    If immutability is required, pass a copy before calling (for example
+    ``post.model_copy(deep=True)``, ``copy.copy(...)``, or
+    ``dataclasses.replace(...)`` for dataclass inputs).
+    """
+    from datetime import datetime, timezone
+
+    now_ts = time.time()
+    key = _cache_key(post)
+    logger.info(
+        "[AIAnalysis] Start media_id=%s account_id=%s media_type=%s",
+        post.media_id,
+        post.account_id,
+        post.media_type,
+    )
+    with _ANALYSIS_CACHE_LOCK:
+        _prune_analysis_cache(now_ts)
+        cached = _ANALYSIS_CACHE.get(key) if key is not None else None
+        if cached is not None and _is_fresh(cached, now_ts):
+            logger.debug("[AIAnalysis] Cache hit media_id=%s", post.media_id)
+            return cached.result
+        if cached is not None and (now_ts - cached.last_regen_attempt_at) < MIN_REGEN_SECONDS:
+            logger.debug("[AIAnalysis] Returning throttled cached result media_id=%s", post.media_id)
+            return cached.result
+        if cached is not None:
+            cached.last_regen_attempt_at = now_ts
+            logger.debug("[AIAnalysis] Cache stale; regenerating media_id=%s", post.media_id)
+    visual_quality_score = _resolve_score(post.visual_quality_score, VisualQualityScore)
+    content_clarity_score = _resolve_score(post.content_clarity_score, ContentClarityScore)
+    caption_effectiveness_score = _resolve_score(post.caption_effectiveness_score, CaptionEffectivenessScore)
+    engagement_potential_score = _resolve_score(post.engagement_potential_score, EngagementPotentialScore)
+    weighted_post_score = _resolve_score(post.weighted_post_score, WeightedPostScore)
+    audience_relevance_score = _resolve_score(post.audience_relevance_score, AudienceRelevanceScore)
+    brand_safety_score = _resolve_score(post.brand_safety_score, BrandSafetyScore)
+    tier_avg_engagement_rate = post.tier_avg_engagement_rate
+    predicted_engagement_rate = post.predicted_engagement_rate
+    predicted_engagement_rate_notes = list(post.predicted_engagement_rate_notes)
+
+    score, band = _score_payload(post)
+    post_id = post.media_id if isinstance(post.media_id, str) else None
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    gemini_enabled = bool(isinstance(gemini_api_key, str) and gemini_api_key.strip())
+    openai_enabled = bool(isinstance(openai_api_key, str) and openai_api_key.strip())
+    vision_enabled = gemini_enabled or openai_enabled
+    warnings: list[AIWarning] = []
+    vision_error_reason: str | None = None
+    if not gemini_enabled:
+        warnings.append(
+            _build_ai_warning(
+                code="GEMINI_API_KEY_MISSING",
+                message="Gemini vision is disabled because GEMINI_API_KEY is not set. OpenAI fallback may be used if configured.",
+                post_id=post_id,
+            )
+        )
+    vision_status: Literal["ok", "error", "disabled", "no_media"] = "disabled" if not vision_enabled else "ok"
+    fallback_used = False
+    logger.debug(
+        "[AIAnalysis] Vision config media_id=%s vision_enabled=%s published_at=%s",
+        post.media_id,
+        vision_enabled,
+        post.published_at,
+    )
+
+    if post.published_at is not None:
+        published_at = post.published_at
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+
+        now_utc = datetime.now(timezone.utc)
+        post_age_seconds = (now_utc - published_at).total_seconds()
+        if post_age_seconds < MIN_REGEN_SECONDS:
+            fallback_used = True
+            logger.info(
+                "[AIAnalysis] Skipping AI analysis for very recent post media_id=%s age_seconds=%.2f",
+                post.media_id,
+                post_age_seconds,
+            )
+            result: AIAnalysisResult = {
+                "summary": "AI analysis unavailable. Post is still accumulating data.",
+                "drivers": [],
+                "recommendations": [],
+                "ai_content_score": score,
+                "ai_content_band": band,
+                "caption_effectiveness_score": caption_effectiveness_score.model_dump(),
+                "visual_quality_score": visual_quality_score.model_dump(),
+                "content_clarity_score": content_clarity_score.model_dump(),
+                "engagement_potential_score": engagement_potential_score.model_dump(),
+                "audience_relevance_score": audience_relevance_score.model_dump(),
+                "brand_safety_score": brand_safety_score.model_dump(),
+                "weighted_post_score": weighted_post_score.model_dump(),
+                "vision_analysis": VisionAnalysis(
+                    provider="gemini",
+                    status=str(vision_status),
+                    signals=[],
+                ).model_dump(mode="python"),
+                "tier_avg_engagement_rate": tier_avg_engagement_rate,
+                "predicted_engagement_rate": predicted_engagement_rate,
+                "predicted_engagement_rate_notes": predicted_engagement_rate_notes,
+                "warnings": warnings,
+                "vision_status": vision_status,
+                "fallback_used": fallback_used,
+            }
+            return result
+
+    if not vision_enabled:
+        vision = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+    else:
+        logger.debug("[AIAnalysis] Running Gemini vision media_id=%s", post.media_id)
+        vision = await run_vision_analysis(post)
+        if vision.get("status") == "error":
+            vision_status = "error"
+            raw_error_reason = vision.get("error_reason")
+            if isinstance(raw_error_reason, str) and raw_error_reason.strip():
+                vision_error_reason = raw_error_reason.strip()[:300]
+            warning_message = "Gemini vision request failed; deterministic fallback scoring applied."
+            if vision_error_reason:
+                warning_message = f"{warning_message} reason={vision_error_reason}"
+            warnings.append(
+                _build_ai_warning(
+                    code="VISION_ERROR",
+                    message=warning_message,
+                    post_id=post_id,
+                )
+            )
+        elif vision.get("status") == "ok":
+            vision_status = "ok"
+        elif vision.get("status") == "no_media":
+            vision_status = "no_media"
+    logger.debug("[AIAnalysis] Vision finished media_id=%s status=%s", post.media_id, vision_status)
+
+    visual_quality_score = compute_visual_quality_score(vision)
+    caption_effectiveness_score = (
+        post.caption_effectiveness_score
+        if isinstance(post.caption_effectiveness_score, CaptionEffectivenessScore)
+        else await analyze_caption_via_llm(post.caption_text)
+    )
+    content_clarity_score = await analyze_content_clarity_via_llm(vision, post.caption_text)
+    audience_relevance_score = await analyze_audience_relevance_via_llm(
+        post.post_category,
+        post.creator_dominant_category,
+    )
+    brand_safety_score = compute_s6_brand_safety(
+        caption_text=post.caption_text,
+        vision=vision,
+        s1_total_0_50=visual_quality_score.total,
+        extracted_brand_mentions=post.extracted_brand_mentions,
+        extra_flags=post.safety_extra_flags,
+    )
+    # Mutates `post` in-place to attach computed metrics for downstream use.
+    post.visual_quality_score = visual_quality_score
+    post.caption_effectiveness_score = caption_effectiveness_score
+    post.content_clarity_score = content_clarity_score
+    post.audience_relevance_score = audience_relevance_score
+    post.brand_safety_score = brand_safety_score
+    weighted_post_type = _resolve_weighted_post_type(post.media_type)
+    weighted_post_score = compute_weighted_post_score(
+        post_type=weighted_post_type,
+        s1=visual_quality_score.total,
+        s2=caption_effectiveness_score.total_0_50,
+        s3=content_clarity_score.total,
+        s4=audience_relevance_score.total_0_50,
+        s5=None,
+        s6=brand_safety_score.total_0_50,
+        s7=None,
+    )
+    post.weighted_post_score = weighted_post_score
+    logger.debug(
+        "[AIAnalysis] Deterministic scores media_id=%s s1=%s s2=%s s3=%s s4=%s s6=%s weighted=%s",
+        post.media_id,
+        visual_quality_score.total,
+        caption_effectiveness_score.total_0_50,
+        content_clarity_score.total,
+        audience_relevance_score.total_0_50,
+        brand_safety_score.total_0_50,
+        weighted_post_score.score,
+    )
     try:
         post.vision_analysis = VisionAnalysis.model_validate(vision)
     except Exception:
@@ -2057,11 +2125,32 @@ async def analyze_single_post_ai(
     )
     prompt = _build_prompt(context, vision)
 
-    llm_text = await _call_llm_async(prompt, llm_client)
-    summary, drivers, recommendations, engagement_potential_raw = await _parse_llm_response_with_repair(
-        llm_text,
-        llm_client,
-    )
+    external_ai_enabled = bool(llm_client and (gemini_enabled or openai_enabled)) and os.getenv("AI_EXTERNAL_CALLS_ENABLED", "1").strip() not in ("0", "false", "no", "off")
+    if external_ai_enabled:
+        llm_text = await _call_llm_async(prompt, llm_client)
+        (
+            summary,
+            drivers,
+            recommendations,
+            engagement_potential_raw,
+            caption_improvement,
+            posting_intelligence,
+            hashtag_quality_note,
+            hashtag_analysis,
+            viral_opportunity,
+            creator_next_step,
+        ) = await _parse_llm_response_with_repair(llm_text, llm_client)
+    else:
+        summary = None
+        drivers = []
+        recommendations = []
+        engagement_potential_raw = None
+        caption_improvement = None
+        posting_intelligence = None
+        hashtag_quality_note = None
+        hashtag_analysis = None
+        viral_opportunity = None
+        creator_next_step = None
     logger.debug(
         "[AIAnalysis] LLM parsed media_id=%s summary_present=%s drivers=%d recommendations=%d",
         post.media_id,
@@ -2075,6 +2164,12 @@ async def analyze_single_post_ai(
         drivers = deterministic_drivers
         recommendations = []
         engagement_potential_score = _fallback_engagement_potential_score()
+        caption_improvement = None
+        posting_intelligence = None
+        hashtag_quality_note = None
+        hashtag_analysis = None
+        viral_opportunity = None
+        creator_next_step = None
         fallback_used = True
         logger.info("[AIAnalysis] Using fallback summary media_id=%s", post.media_id)
     else:
@@ -2088,10 +2183,18 @@ async def analyze_single_post_ai(
     if vision_status in {"disabled", "error"}:
         fallback_used = True
 
+    # Extract percentile rank for deterministic S5 grounding
+    percentile_rank: float | None = None
+    if post.benchmark_metrics is not None:
+        raw_percentile = getattr(post.benchmark_metrics, "percentile_engagement_rank", None)
+        if isinstance(raw_percentile, (int, float)):
+            percentile_rank = float(raw_percentile)
+
     engagement_potential_score = _apply_s5_consistency_cap(
         engagement_potential_score,
         visual_quality_score,
         content_clarity_score,
+        percentile_rank=percentile_rank,
     )
     post.engagement_potential_score = engagement_potential_score
     weighted_post_score = compute_weighted_post_score(
@@ -2113,14 +2216,59 @@ async def analyze_single_post_ai(
         fallback_used,
     )
     tier_avg_engagement_rate, tier_notes = _resolve_tier_avg_engagement_rate(post)
-    predicted_engagement_rate, prediction_notes = compute_predicted_engagement_rate(
-        tier_avg_engagement_rate,
-        engagement_potential_score.total,
+    account_avg_er = None
+    if post.benchmark_metrics is not None:
+        raw_acct = getattr(post.benchmark_metrics, "account_avg_engagement_rate", None)
+        if isinstance(raw_acct, (int, float)):
+            account_avg_er = float(raw_acct)
+
+    predicted_engagement_rate, predicted_er_confidence, prediction_notes = _compute_predicted_er_blended(
+        tier_avg_er=tier_avg_engagement_rate,
+        s5_total=engagement_potential_score.total,
+        account_avg_er=account_avg_er,
+        weighted_score_0_100=weighted_post_score.score,
     )
     predicted_engagement_rate_notes = tier_notes + prediction_notes
     post.tier_avg_engagement_rate = tier_avg_engagement_rate
     post.predicted_engagement_rate = predicted_engagement_rate
     post.predicted_engagement_rate_notes = predicted_engagement_rate_notes
+
+    # Deterministic score gap analysis
+    score_analysis = _compute_score_analysis(
+        visual_quality_score,
+        content_clarity_score,
+        caption_effectiveness_score,
+        audience_relevance_score,
+        brand_safety_score,
+        weighted_post_score,
+    )
+
+    # Build creator-friendly score explanation
+    _score_label_map = {
+        "S1_visual_quality": "Visual Quality",
+        "S2_caption_effectiveness": "Caption Effectiveness",
+        "S3_content_clarity": "Content Clarity",
+        "S4_audience_relevance": "Audience Relevance",
+        "S6_brand_safety": "Brand Safety",
+    }
+    _all_scores = score_analysis.get("all_scores_0_50") or {}
+    score_explanation: dict[str, Any] = {
+        key: {
+            "label": _score_label_map.get(key, key),
+            "score": round(float(v), 1),
+            "max": 50,
+            "pct": round(float(v) / 50.0 * 100),
+        }
+        for key, v in _all_scores.items()
+        if isinstance(v, (int, float))
+    }
+
+    # Extract cringe signals from vision for creator-facing card
+    cringe_summary: dict[str, Any] | None = None
+    if isinstance(vision.get("signals"), list) and vision["signals"]:
+        _sig = vision["signals"][0]
+        if isinstance(_sig, dict):
+            cringe_summary = _extract_cringe_summary(_sig)
 
     result: AIAnalysisResult = {
         "summary": summary,
@@ -2142,9 +2290,23 @@ async def analyze_single_post_ai(
         "warnings": warnings,
         "vision_status": vision_status,
         "fallback_used": fallback_used,
+        # v2 enhanced analytics fields
+        "caption_improvement": caption_improvement,
+        "posting_intelligence": posting_intelligence,
+        "hashtag_quality_note": hashtag_quality_note,
+        "predicted_er_confidence": predicted_er_confidence,
+        # v3 creator-facing enhancement fields
+        "hashtag_analysis": hashtag_analysis,
+        "viral_opportunity": viral_opportunity,
+        "creator_next_step": creator_next_step,
+        "cringe_summary": cringe_summary,
+        "score_explanation": score_explanation,
     }
     if vision_error_reason:
         result["vision_error_reason"] = vision_error_reason
+
+    # Attach score_analysis as a top-level key on the result dict
+    result["score_analysis"] = score_analysis  # type: ignore[typeddict-unknown-key]
 
     if key is not None:
         with _ANALYSIS_CACHE_LOCK:
@@ -2155,11 +2317,11 @@ async def analyze_single_post_ai(
             )
             _prune_analysis_cache(now_ts)
     logger.info(
-        "[AIAnalysis] Completed media_id=%s vision_status=%s warnings=%d fallback_used=%s",
+        "[AIAnalysis] Completed media_id=%s vision_status=%s warnings=%d fallback_used=%s predicted_er_confidence=%s",
         post.media_id,
         vision_status,
         len(warnings),
         fallback_used,
+        predicted_er_confidence,
     )
     return result
-

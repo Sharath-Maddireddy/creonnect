@@ -10,14 +10,15 @@ from __future__ import annotations
 from typing import List
 from datetime import datetime
 
+import asyncio
 from backend.app.analytics.niche_discovery_engine import discover_creator_niche
 from backend.app.analytics.global_trend_engine import fetch_global_trends
 from backend.app.analytics.trend_recommendation_engine import generate_trend_recommendations
 from backend.app.domain.post_models import SinglePostInsights
-from backend.app.domain.account_models import CreatorIntelligence
 from backend.app.domain.trend_models import TrendAnalysisResult
 from backend.app.infra.database import get_sync_sessionmaker
 from backend.app.infra.models import CreatorTrendResult
+from backend.app.services.account_ai_intelligence import generate_creator_intelligence
 from backend.app.services.draft_history_service import load_draft_history_context
 from backend.app.services.trend_cache import TrendAnalysisCache
 from backend.app.utils.logger import logger
@@ -52,20 +53,29 @@ def run_trend_analysis(account_id: str) -> dict:
         bio = history_context.account_data.get("bio")
         username = history_context.account_data.get("username")
 
-        # Mock creator intelligence (placeholder)
-        creator_intelligence = CreatorIntelligence()
+        # Build real creator intelligence from account data
+        logger.debug(f"[TrendAnalysisJob] Building creator intelligence for account={account_id}")
+        creator_intelligence = asyncio.run(generate_creator_intelligence(
+            posts=posts,
+            account_id=account_id,
+            username=username,
+            bio=bio,
+            niche_tags=history_context.account_data.get("niche_tags") or [],
+            creator_dominant_category=history_context.account_data.get("creator_dominant_category"),
+            follower_count=history_context.account_data.get("follower_count"),
+        ))
 
         # Discover niche
         logger.debug(f"[TrendAnalysisJob] Discovering niche for account={account_id}")
-        niche = discover_creator_niche(posts, bio, username)
+        niche = asyncio.run(discover_creator_niche(posts, bio, username))
 
         # Fetch global trends
         logger.debug(f"[TrendAnalysisJob] Fetching trends for account={account_id}")
-        trends = fetch_global_trends(niche)
+        trends = asyncio.run(fetch_global_trends(niche))
 
         # Generate recommendations
         logger.debug(f"[TrendAnalysisJob] Generating recommendations for account={account_id}")
-        recs = generate_trend_recommendations(creator_intelligence, trends)
+        recs = asyncio.run(generate_trend_recommendations(creator_intelligence, trends))
 
         # Build result
         result = TrendAnalysisResult(niche=niche, global_trends=trends, recommendations=recs)

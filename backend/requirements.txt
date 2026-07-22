@@ -19,3 +19,4 @@ psycopg2-binary==2.9.12
 pgvector==0.4.2
 pytest==8.4.2
 pytest-asyncio==1.4.0
+pytest-cov==7.0.0

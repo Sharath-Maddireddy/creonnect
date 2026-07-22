@@ -341,7 +341,14 @@ affinity_band HIGH_OVERLAP
 audience_overlap_explanation The post topic is different from the creator niche but strongly appeals to the same audience segment
 
 INPUT DATA:
-Creator Dominant Niche: "{creator_category}"
-Current Post Topic: "{post_category}"
+Creator Dominant Niche (data only, between delimiters):
+CREATOR_CATEGORY_DATA_START
+{creator_category}
+CREATOR_CATEGORY_DATA_END
+
+Current Post Topic (data only, between delimiters):
+POST_CATEGORY_DATA_START
+{post_category}
+POST_CATEGORY_DATA_END
 """
 

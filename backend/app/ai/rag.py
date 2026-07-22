@@ -39,9 +39,43 @@ RAG_EMBEDDING_DIMENSION = 384
 CACHE_DIR = Path(os.getenv("RAG_CACHE_DIR", ".rag_cache"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 EMBEDDINGS_CACHE = CACHE_DIR / ".rag_embeddings.npy"
-CHUNKS_CACHE = CACHE_DIR / ".rag_chunks.json"
+CHUNKS_CACHE = CACHE_DIR / '.rag_chunks.json'
+CACHE_META = CACHE_DIR / '.rag_cache_meta.json'
 
 
+
+
+def _knowledge_cache_signature() -> dict[str, object]:
+    files: list[dict[str, object]] = []
+    for md_file in sorted(KNOWLEDGE_DIR.glob("*.md"), key=lambda path: path.name):
+        try:
+            stat = md_file.stat()
+        except OSError:
+            continue
+        files.append(
+            {
+                "name": md_file.name,
+                "mtime_ns": int(stat.st_mtime_ns),
+                "size": int(stat.st_size),
+            }
+        )
+    return {
+        "knowledge_dir": str(KNOWLEDGE_DIR.resolve()),
+        "files": files,
+    }
+
+
+def _cache_signature_matches() -> bool:
+    if not CACHE_META.exists():
+        return False
+    try:
+        with open(CACHE_META, "r", encoding="utf-8") as f:
+            cached_meta = json.load(f)
+    except Exception:
+        return False
+    if not isinstance(cached_meta, dict):
+        return False
+    return cached_meta == _knowledge_cache_signature()
 # ------------------------------------------------
 # Text Chunking
 # ------------------------------------------------
@@ -117,7 +151,7 @@ class RAGEngine:
             return
 
         # Try to load from cache first
-        if EMBEDDINGS_CACHE.exists() and CHUNKS_CACHE.exists():
+        if EMBEDDINGS_CACHE.exists() and CHUNKS_CACHE.exists() and _cache_signature_matches():
             try:
                 self._embeddings = np.load(EMBEDDINGS_CACHE)
                 with open(CHUNKS_CACHE, "r", encoding="utf-8") as f:
@@ -163,6 +197,8 @@ class RAGEngine:
                 np.save(EMBEDDINGS_CACHE, self._embeddings)
                 with open(CHUNKS_CACHE, "w", encoding="utf-8") as f:
                     json.dump(self._chunks, f)
+                with open(CACHE_META, "w", encoding="utf-8") as f:
+                    json.dump(_knowledge_cache_signature(), f, sort_keys=True)
                 print(f"[RAG] Saved {len(all_chunks)} chunks to cache")
             except Exception as e:
                 print(f"[RAG] Failed to save cache: {e}")

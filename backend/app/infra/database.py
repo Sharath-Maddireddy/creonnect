@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import threading
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
@@ -19,7 +20,7 @@ from backend.app.utils.env_numbers import get_int_env
 from backend.app.utils.logger import logger
 
 
-DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/creonnect"
+DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./backend/local.db"
 _ASYNC_DRIVERS = {"asyncpg", "aiosqlite", "aiomysql", "asyncmy", "aiopg"}
 
 _ASYNC_ENGINE = None
@@ -35,6 +36,29 @@ load_app_env(override=False)
 def get_database_url() -> str:
     """Return the configured database URL."""
     return os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL).strip() or DEFAULT_DATABASE_URL
+
+
+def redact_database_url(database_url: str) -> str:
+    """Hide credentials from a DB URL before logging/errors."""
+    try:
+        return make_url(database_url).render_as_string(hide_password=True)
+    except Exception:
+        return "<invalid-database-url>"
+
+
+def redact_database_urls(value: str) -> str:
+    """Hide credentials from any DB URLs embedded in a larger message."""
+    if not isinstance(value, str) or not value:
+        return ""
+
+    def _redact_match(match: re.Match[str]) -> str:
+        return redact_database_url(match.group(0))
+
+    return re.sub(
+        r"\b(?:postgresql|postgres|mysql|mariadb)(?:\+[A-Za-z0-9_]+)?://[^\s'\"<>]+",
+        _redact_match,
+        value,
+    )
 
 
 def get_sync_database_url() -> str:
@@ -91,7 +115,10 @@ def get_async_engine():
             if _ASYNC_ENGINE is None:
                 database_url = get_database_url()
                 if not _has_async_driver(database_url):
-                    raise RuntimeError(f"DATABASE_URL must include an async driver for async engine use: {database_url}")
+                    raise RuntimeError(
+                        "DATABASE_URL must include an async driver for async engine use: "
+                        + redact_database_url(database_url)
+                    )
                 _ASYNC_ENGINE = create_async_engine(
                     database_url,
                     **_get_engine_kwargs(database_url, is_async=True),
@@ -183,7 +210,7 @@ async def init_db(*, strict: bool = False) -> None:
                 await connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
             await connection.run_sync(Base.metadata.create_all)
     except (RuntimeError, SQLAlchemyError, OSError) as exc:
-        logger.warning("[Database] Skipping init_db because database setup failed: %s", exc)
+        logger.warning("[Database] Skipping init_db because database setup failed: %s", redact_database_urls(str(exc)))
         if strict:
             raise
 
@@ -228,4 +255,3 @@ async def reset_database_engines_async() -> None:
         await async_engine.dispose()
     if sync_engine is not None:
         sync_engine.dispose()
-

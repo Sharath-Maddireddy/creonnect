@@ -91,13 +91,17 @@ class LLMClient:
         temperature: float = 0.4,
         max_tokens: int = 1200,
         timeout: int = 30,
-        max_retries: int = 1
+        max_retries: int = 1,
+        retry_base_delay_seconds: float = 0.5,
+        retry_max_delay_seconds: float = 8.0,
     ):
         self.model_name = model_name or os.getenv("LLM_MODEL_NAME", self.DEFAULT_MODEL)
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.max_retries = max_retries
+        self.retry_base_delay_seconds = retry_base_delay_seconds
+        self.retry_max_delay_seconds = retry_max_delay_seconds
         self._is_azure = False
 
         # Lazy import so this file doesn't hard-depend on OpenAI
@@ -238,7 +242,7 @@ class LLMClient:
                 duration = time.time() - start_time
                 logger.warning(f"[LLM] Request failed after {duration:.2f}s: {e}")
                 if attempt < self.max_retries:
-                    logger.info("[LLM] Retrying...")
+                    self._sleep_before_retry(attempt, "request")
                     continue
 
         # All retries exhausted
@@ -311,18 +315,32 @@ class LLMClient:
                 duration = time.time() - start_time
                 logger.warning("[LLM] Tool request failed after %.2fs: %s", duration, exc)
                 if attempt < self.max_retries:
-                    logger.info("[LLM] Retrying tool request...")
+                    self._sleep_before_retry(attempt, "tool request")
                     continue
 
         raise LLMClientError(
             f"LLM tool request failed after {self.max_retries + 1} attempts: {last_error}"
         )
 
-    def embed(self, text: str) -> list[float] | None:
+    def _sleep_before_retry(self, attempt: int, label: str) -> None:
+        """Sleep with capped exponential backoff before the next retry."""
+        delay = min(
+            self.retry_max_delay_seconds,
+            self.retry_base_delay_seconds * (2 ** max(0, attempt)),
+        )
+        if delay <= 0:
+            logger.info("[LLM] Retrying %s immediately...", label)
+            return
+        logger.info("[LLM] Retrying %s in %.2fs...", label, delay)
+        time.sleep(delay)
+
+    def embed(self, text: str) -> list[float]:
         """Generate a creator-pool embedding vector for the given text."""
         if self._client is None:
-            logger.error("[LLM] Embedding request failed: client not initialized")
-            return None
+            raise LLMClientError(
+                "LLM client not initialized. "
+                "Ensure OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT is set."
+            )
 
         # On Azure, use the embedding deployment name; on direct OpenAI, use the model name
         embedding_model = (
@@ -342,17 +360,17 @@ class LLMClient:
             logger.info(f"[LLM] Embedding request completed in {duration:.2f}s")
             embedding = response.data[0].embedding
             if len(embedding) != EMBEDDING_DIMENSION:
-                logger.error(
-                    "[LLM] Embedding dimension mismatch: expected %s values from %s, received %s",
-                    EMBEDDING_DIMENSION,
-                    embedding_model,
-                    len(embedding),
+                raise LLMClientError(
+                    "Embedding dimension mismatch: "
+                    f"expected {EMBEDDING_DIMENSION} values from {embedding_model}, "
+                    f"received {len(embedding)}"
                 )
-                return None
             return embedding
         except Exception as e:
             duration = time.time() - start_time
             logger.warning(f"[LLM] Embedding request failed after {duration:.2f}s: {e}")
-            return None
+            if isinstance(e, LLMClientError):
+                raise
+            raise LLMClientError(f"Embedding request failed: {e}") from e
 
 

@@ -9,23 +9,10 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.infra.database import get_sync_sessionmaker
+from backend.app.infra.job_defaults import ACTIVE_REUSABLE_STATUSES
 from backend.app.infra.models import BackgroundJob
+from backend.app.utils.datetime_utils import parse_iso_datetime
 from backend.app.utils.logger import logger
-
-
-ACTIVE_REUSABLE_STATUSES = {"queued", "started", "succeeded"}
-
-
-def _parse_iso_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def initialize_job_state(
@@ -100,9 +87,9 @@ def update_job_state(job_id: str, **updates: Any) -> dict[str, Any]:
         if "quality" in updates:
             row.quality_json = updates["quality"]
         if "started_at" in updates:
-            row.started_at = _parse_iso_datetime(updates["started_at"])
+            row.started_at = parse_iso_datetime(updates["started_at"])
         if "finished_at" in updates:
-            row.finished_at = _parse_iso_datetime(updates["finished_at"])
+            row.finished_at = parse_iso_datetime(updates["finished_at"])
         session.commit()
         session.refresh(row)
         return serialize_job_state(row)

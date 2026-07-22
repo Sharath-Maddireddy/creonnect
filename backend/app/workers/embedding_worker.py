@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.app.ai.llm_client import LLMClient
+from backend.app.ai.llm_client import LLMClient, LLMClientError
 from backend.app.analytics.audience_quality import calculate_authenticity_score
 from backend.app.infra.database import get_sync_sessionmaker
 from backend.app.infra.job_queue import (
@@ -38,9 +38,13 @@ def generate_creator_embedding(account_id: str) -> None:
                 return
 
             source_text = _build_source_text(meta)
-            embedding = LLMClient().embed(source_text) if source_text else None
-            if embedding is None:
+            if not source_text:
                 logger.warning("[EmbeddingWorker] Embed returned no vector for account_id=%s; skipping.", account_id)
+                return
+            try:
+                embedding = LLMClient().embed(source_text)
+            except LLMClientError as exc:
+                logger.warning("[EmbeddingWorker] Embed failed for account_id=%s; skipping: %s", account_id, exc)
                 return
 
             vector_row = session.get(CreatorVector, account_id)

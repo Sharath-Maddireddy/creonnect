@@ -166,6 +166,180 @@ class ContentTypePerformance(BaseModel):
         return text[:300] if text else None
 
 
+class BrandReadiness(BaseModel):
+    """Brand readiness assessment for the account owner."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    score: float = Field(default=0.0, ge=0.0, le=100.0)
+    label: str = Field(default="Not Assessed")
+    est_rate_per_post: float | None = Field(default=None, ge=0.0)
+    est_rate_per_post_min: float | None = Field(default=None, ge=0.0)
+    est_rate_per_post_max: float | None = Field(default=None, ge=0.0)
+    est_cpm: float | None = Field(default=None, ge=0.0)
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def _clamp_score(cls, value: int | float | str | None) -> float:
+        if value is None:
+            return 0.0
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return round(max(0.0, min(100.0, numeric)), 2)
+
+
+class MetricWithTrend(BaseModel):
+    """A single metric value with a human-readable trend indicator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_value: float | None = None
+    trend_percentage: float | None = None
+    label: str | None = None
+
+
+class CoreMetricsDashboard(BaseModel):
+    """Dashboard-facing core metrics mapped 1:1 with the UI cards."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    followers: MetricWithTrend | None = None
+    reach_30d: MetricWithTrend | None = None
+    impressions_30d: MetricWithTrend | None = None
+    engagement_rate: MetricWithTrend | None = None
+    profile_visits_30d: MetricWithTrend | None = None
+    visit_to_follow_rate: MetricWithTrend | None = None
+
+
+class ChartSeries(BaseModel):
+    """Time-series data point for the growth overview chart."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: str | None = Field(default=None, description="ISO-8601 date string.")
+    followers: float | None = None
+    reach: float | None = None
+    impressions: float | None = None
+
+
+class ContentPillar(BaseModel):
+    """Content pillar with engagement share."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    engagement_percentage: float = Field(default=0.0, ge=0.0, le=100.0)
+
+
+class HeatmapData(BaseModel):
+    """Engagement heatmap cell."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    day_of_week: int = Field(default=0, ge=0, le=6)
+    hour_of_day: int = Field(default=0, ge=0, le=23)
+    intensity: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class HashtagPerformance(BaseModel):
+    """Performance summary for a single hashtag."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hashtag: str
+    post_count: int = Field(default=0, ge=0)
+    reach: float | None = None
+    engagement_rate: float | None = None
+    impact: Literal["Keep", "Test", "Drop"] = Field(default="Keep")
+
+
+class AudienceInsights(BaseModel):
+    """Aggregated audience insights."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_viewers_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    returning_viewers_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    follower_quality_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    non_follower_reach_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    comment_sentiment_positive_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    comment_sentiment_neutral_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    comment_sentiment_negative_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    is_estimated: bool = Field(default=False, description="True when values are synthetic estimates, not real API data.")
+
+
+class NicheBenchmark(BaseModel):
+    """Account vs niche averages comparison."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    engagement_rate_vs_niche: float | None = Field(default=None, description="Ratio vs niche engagement rate.")
+    reach_vs_niche: float | None = Field(default=None, description="Ratio vs niche reach.")
+    growth_vs_niche: float | None = Field(default=None, description="Ratio vs niche growth rate.")
+
+
+class AudienceDemographics(BaseModel):
+    """Top country demographic data."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    country: str
+    percentage: float = Field(default=0.0, ge=0.0, le=100.0)
+
+
+class ConversionFunnel(BaseModel):
+    """Profile-to-conversion funnel metrics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    profile_visits: int | None = None
+    website_clicks: int | None = None
+    follows: int | None = None
+    profile_visit_to_follow_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+
+
+class TopPostSummary(BaseModel):
+    """Summary of a top-performing post for the dashboard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    media_id: str | None = None
+    caption_preview: str | None = None
+    media_type: str | None = None
+    published_at: str | None = None
+    engagement_rate: float | None = None
+    reach: float | None = None
+
+    @field_validator("caption_preview", mode="before")
+    @classmethod
+    def _truncate_caption(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        return value.strip()[:120] or None
+
+
+class AISummary(BaseModel):
+    """AI-generated narrative summary of the account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text_summary: str | None = None
+    top_content_type: str | None = None
+    best_posting_time: str | None = None
+    top_content_pillar: str | None = None
+    growth_potential: str | None = None
+
+    @field_validator("text_summary", mode="before")
+    @classmethod
+    def _sanitize_summary(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.strip().split())
+        return text[:600] or None
+
+
 class AccountHealthScore(BaseModel):
     """Composite deterministic account health score."""
 
@@ -181,6 +355,21 @@ class AccountHealthScore(BaseModel):
     vision_summary: AccountVisionSummary | None = None
     engagement_signals: AccountEngagementSignals | None = None
     content_type_performance: ContentTypePerformance | None = None
+
+    # --- New dashboard-facing fields (all optional for backward compatibility) ---
+    growth_stage: str | None = Field(default=None, description="Human-readable growth stage label derived from AHS band.")
+    brand_readiness: BrandReadiness | None = None
+    core_metrics: CoreMetricsDashboard | None = None
+    growth_overview_chart: list[ChartSeries] | None = None
+    content_pillars: list[ContentPillar] | None = None
+    engagement_heatmap: list[HeatmapData] | None = None
+    top_hashtags: list[HashtagPerformance] | None = None
+    top_posts: list[TopPostSummary] | None = None
+    audience_insights: AudienceInsights | None = None
+    niche_benchmark: NicheBenchmark | None = None
+    audience_demographics: list[AudienceDemographics] | None = None
+    conversion_funnel: ConversionFunnel | None = None
+    ai_summary: AISummary | None = None
 
     @field_validator("ahs_score", mode="before")
     @classmethod

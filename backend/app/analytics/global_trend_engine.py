@@ -15,13 +15,49 @@ resilient.
 """
 
 import asyncio
-from typing import List
 
 from backend.app.analytics.trend_signals_fetcher import fetch_live_trend_signals
 from backend.app.ai.llm_client import LLMClient
-from backend.app.ai.toon import loads as toon_loads
+from backend.app.ai.toon_helpers import toon_parse_list
 from backend.app.domain.trend_models import CreatorNiche, GlobalTrend
 from backend.app.utils.logger import logger
+
+
+# ── Normalisation helpers ─────────────────────────────────────────────────────
+
+_TREND_TYPE_MAP: dict[str, str] = {
+    "topic": "topic", "topical": "topic", "topical meme": "topic",
+    "subject": "topic", "content topic": "topic",
+    "format": "format", "video format": "format", "content format": "format", "style": "format",
+    "audio": "audio", "sound": "audio", "music": "audio", "trending audio": "audio",
+    "hashtag": "hashtag", "challenge": "hashtag", "tag": "hashtag", "trend tag": "hashtag",
+}
+
+_MOMENTUM_MAP: dict[str, str] = {
+    "rising": "rising", "growing": "rising", "gaining": "rising", "emerging": "rising",
+    "peaking": "peaking", "peaked": "peaking", "peak": "peaking", "at peak": "peaking",
+    "falling": "falling", "declining": "falling", "fading": "falling", "dropping": "falling",
+}
+
+
+def _normalise_trend_type(raw: str) -> str:
+    clean = raw.lower().strip()
+    if clean in _TREND_TYPE_MAP:
+        return _TREND_TYPE_MAP[clean]
+    for key, value in _TREND_TYPE_MAP.items():
+        if key in clean or clean in key:
+            return value
+    return "topic"  # safe default
+
+
+def _normalise_momentum(raw: str) -> str:
+    clean = raw.lower().strip()
+    if clean in _MOMENTUM_MAP:
+        return _MOMENTUM_MAP[clean]
+    for key, value in _MOMENTUM_MAP.items():
+        if key in clean:
+            return value
+    return "rising"  # safe default
 
 
 async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
@@ -38,11 +74,16 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
 
     system_prompt = (
         "You are a viral trend spotter. Identify 3 to 5 hyper-current, rising trends "
-        "(formats, audio cues, topical memes, or hashtags) specifically tailored to the "
-        "provided creator niche. Return ONLY valid TOON format (Token-Oriented "
+        "specifically tailored to the provided creator niche. "
+        "Return ONLY valid TOON format (Token-Oriented "
         "Object Notation, YAML-like indentation, no braces, no quotes). "
         "Use 2-space indentation for nesting and '-' for list items. "
         "Do not include markdown, commentary, or extra keys.\n\n"
+        "IMPORTANT: trend_type MUST be exactly one of: topic, format, audio, hashtag\n"
+        "  topic   = subject-matter trends (e.g. mental health, AI tools)\n"
+        "  format  = video structure trends (e.g. POV, day-in-life, talking head)\n"
+        "  audio   = sound/music trends (e.g. trending audio, voiceover styles)\n"
+        "  hashtag = hashtag/challenge-driven trends (e.g. #75hard, #GlowUp)\n\n"
         "OUTPUT EXAMPLE (STRICT TOON ONLY):\n"
         "trends\n"
         "  -\n"
@@ -80,42 +121,15 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
         if not isinstance(raw, str) or not raw.strip():
             raise ValueError("Empty LLM response")
 
-        # The project's TOON parser expects a dict root. If LLM returned a
-        # top-level list (lines starting with '-'), wrap it under a `trends`
-        # key so toon.loads can parse it into a dict that contains the list.
-        text = raw.strip()
-        if text.startswith("-"):
-            wrapped = "trends\n" + "\n".join("  " + line for line in text.splitlines())
-            parsed = toon_loads(wrapped)
-            trends_raw = parsed.get("trends", []) if isinstance(parsed, dict) else []
-        else:
-            parsed = toon_loads(text)
-            # Locate the first list value in the parsed dict to treat as trends
-            if isinstance(parsed, dict):
-                trends_raw = None
-                for v in parsed.values():
-                    if isinstance(v, list):
-                        trends_raw = v
-                        break
-                if trends_raw is None:
-                    # If the parsed dict itself represents a single object,
-                    # attempt to coerce into a single-element list
-                    trends_raw = [parsed]
-            else:
-                trends_raw = []
+                # Parse TOON response using shared helper
+        trends_raw = toon_parse_list(raw, root_key="trends", model_cls=GlobalTrend)
 
-        results: List[GlobalTrend] = []
-        for item in trends_raw:
-            if not isinstance(item, dict):
-                continue
-            try:
-                try:
-                    trend = GlobalTrend.model_validate(item)  # type: ignore[attr-defined]
-                except Exception:
-                    trend = GlobalTrend(**item)
-                results.append(trend)
-            except Exception as e:
-                logger.warning("Skipping invalid trend item: %s", e)
+        # Normalise trend_type and momentum for each parsed item
+        results: list[GlobalTrend] = []
+        for trend in trends_raw:
+            trend.trend_type = _normalise_trend_type(trend.trend_type)
+            trend.momentum = _normalise_momentum(trend.momentum)
+            results.append(trend)
 
         if not results:
             raise ValueError("No valid trends parsed from LLM output")

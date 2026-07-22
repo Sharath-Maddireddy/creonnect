@@ -99,6 +99,165 @@ def _score_three_band(flags: list[str], good_label: str, weak_label: str) -> flo
     return 50.0
 
 
+def _extract_first_numeric(account_data: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key not in account_data:
+            continue
+        numeric = _safe_float(account_data.get(key))
+        if numeric is not None:
+            return numeric
+    return None
+
+
+def _extract_growth_history(account_data: dict[str, Any]) -> list[float]:
+    raw_history = account_data.get("follower_history") or account_data.get("followers_history")
+    if not isinstance(raw_history, list):
+        return []
+
+    values: list[float] = []
+    for item in raw_history:
+        if isinstance(item, dict):
+            numeric = _extract_first_numeric(item, "followers", "follower_count", "followers_count", "count")
+        else:
+            numeric = _safe_float(item)
+        if numeric is not None and numeric >= 0:
+            values.append(numeric)
+    return values
+
+
+def _extract_growth_deltas(account_data: dict[str, Any], history: list[float]) -> list[float]:
+    raw_deltas = account_data.get("daily_follower_deltas") or account_data.get("follower_deltas")
+    deltas: list[float] = []
+    if isinstance(raw_deltas, list):
+        for item in raw_deltas:
+            numeric = _safe_float(item)
+            if numeric is not None:
+                deltas.append(numeric)
+    if deltas:
+        return deltas
+    if len(history) >= 2:
+        return [current - previous for previous, current in zip(history, history[1:], strict=False)]
+    return []
+
+
+def _build_growth_metrics(account_data: dict[str, Any], followers: float) -> tuple[CreatorGrowthMetrics, float, bool]:
+    current_followers = followers if followers > 0 else _extract_numeric(account_data, "followers", "follower_count", "followers_count")
+    previous_followers = _extract_first_numeric(
+        account_data,
+        "previous_followers",
+        "previous_follower_count",
+        "followers_previous",
+        "follower_count_previous",
+    )
+    gained = _extract_first_numeric(
+        account_data,
+        "followers_gained",
+        "new_followers",
+        "follower_gain",
+        "follower_delta",
+        "followers_delta",
+        "net_follower_growth",
+        "net_growth",
+    )
+    lost = _extract_first_numeric(account_data, "followers_lost", "unfollowers", "unfollow_count", "lost_followers")
+    growth_rate = _extract_first_numeric(
+        account_data,
+        "follower_growth_rate_percent",
+        "follower_growth_percent",
+        "growth_rate_percent",
+        "growth_percent",
+        "follower_growth_30d_percent",
+    )
+    decimal_growth_rate = _extract_first_numeric(account_data, "follower_growth_rate", "growth_rate")
+    if growth_rate is None and decimal_growth_rate is not None:
+        growth_rate = decimal_growth_rate * 100.0 if abs(decimal_growth_rate) <= 1.0 else decimal_growth_rate
+
+    if gained is None and previous_followers is not None and current_followers > 0:
+        gained = current_followers - previous_followers
+    if growth_rate is None and previous_followers is not None and previous_followers > 0 and gained is not None:
+        growth_rate = (gained / previous_followers) * 100.0
+
+    history = _extract_growth_history(account_data)
+    if growth_rate is None and len(history) >= 2 and history[0] > 0:
+        growth_rate = ((history[-1] - history[0]) / history[0]) * 100.0
+    deltas = _extract_growth_deltas(account_data, history)
+
+    has_growth_signal = any(value is not None for value in (gained, lost, growth_rate)) or bool(deltas)
+
+    follower_growth_flag: Literal["Steady", "Huge Spikes", "Neutral"] = "Neutral"
+    if growth_rate is not None:
+        if growth_rate >= 20.0:
+            follower_growth_flag = "Huge Spikes"
+        elif growth_rate > 0.0:
+            follower_growth_flag = "Steady"
+    elif gained is not None and current_followers > 0:
+        gained_rate = (gained / current_followers) * 100.0
+        if gained_rate >= 20.0:
+            follower_growth_flag = "Huge Spikes"
+        elif gained_rate > 0.0:
+            follower_growth_flag = "Steady"
+
+    net_growth_flag: Literal["Positive", "Negative", "Neutral"] = "Neutral"
+    if gained is not None:
+        net_growth_flag = "Positive" if gained > 0 else "Negative" if gained < 0 else "Neutral"
+    elif growth_rate is not None:
+        net_growth_flag = "Positive" if growth_rate > 0 else "Negative" if growth_rate < 0 else "Neutral"
+
+    growth_velocity_flag: Literal["Consistent", "Sudden Jumps", "Neutral"] = "Neutral"
+    positive_deltas = [delta for delta in deltas if delta > 0]
+    if len(positive_deltas) >= 3:
+        avg_positive_delta = mean(positive_deltas)
+        max_positive_delta = max(positive_deltas)
+        if avg_positive_delta > 0 and max_positive_delta >= avg_positive_delta * 4.0:
+            growth_velocity_flag = "Sudden Jumps"
+        else:
+            growth_velocity_flag = "Consistent"
+    elif follower_growth_flag == "Huge Spikes":
+        growth_velocity_flag = "Sudden Jumps"
+
+    unfollow_rate_flag: Literal["Healthy", "Bad Signal", "Neutral"] = "Neutral"
+    if lost is not None:
+        lost_rate = (lost / current_followers) * 100.0 if current_followers > 0 else None
+        churn_rate = (lost / max(1.0, (gained or 0.0) + lost)) * 100.0 if lost >= 0 else None
+        if (lost_rate is not None and lost_rate >= 5.0) or (churn_rate is not None and churn_rate >= 45.0):
+            unfollow_rate_flag = "Bad Signal"
+        elif lost >= 0:
+            unfollow_rate_flag = "Healthy"
+
+    score = 50.0
+    score += {
+        "Steady": 15.0,
+        "Huge Spikes": -20.0,
+        "Neutral": 0.0,
+    }[follower_growth_flag]
+    score += {
+        "Positive": 15.0,
+        "Negative": -20.0,
+        "Neutral": 0.0,
+    }[net_growth_flag]
+    score += {
+        "Consistent": 10.0,
+        "Sudden Jumps": -15.0,
+        "Neutral": 0.0,
+    }[growth_velocity_flag]
+    score += {
+        "Healthy": 10.0,
+        "Bad Signal": -20.0,
+        "Neutral": 0.0,
+    }[unfollow_rate_flag]
+
+    return (
+        CreatorGrowthMetrics(
+            follower_growth_flag=follower_growth_flag,
+            net_growth_flag=net_growth_flag,
+            growth_velocity_flag=growth_velocity_flag,
+            unfollow_rate_flag=unfollow_rate_flag,
+        ),
+        max(0.0, min(100.0, score)),
+        has_growth_signal,
+    )
+
+
 def _interpret(score: float) -> Literal[
     "Elite Creator",
     "Strong Creator",
@@ -279,12 +438,7 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         watch_time_ratio_flag=_classify_good_weak(watch_time_ratio_avg, valid_watch_time, good_min=60.0, weak_max_exclusive=30.0),
     )
 
-    growth_metrics = CreatorGrowthMetrics(
-        follower_growth_flag="Neutral",
-        net_growth_flag="Neutral",
-        growth_velocity_flag="Neutral",
-        unfollow_rate_flag="Neutral",
-    )
+    growth_metrics, growth_sub_score, growth_has_signal = _build_growth_metrics(account_data, followers_from_account)
 
     ai_predictions = generate_ai_feature_predictions_sync(posts, account_data)
     avg_reach = _avg(avg_reach_values)
@@ -340,7 +494,6 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         )
     )
     authenticity_sub_score = max(0.0, 100.0 - (25.0 * true_fake_signals))
-    growth_sub_score = 50.0
     brand_fit_sub_score = 50.0
 
     final_score = (
@@ -366,6 +519,8 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         confidence_reasons.append("missing_post_metrics")
     if ai_predictions.prediction_status == "degraded":
         confidence_reasons.append("ai_predictions_degraded")
+    if not growth_has_signal:
+        confidence_reasons.append("missing_growth_metrics")
     confidence_score = max(0.0, min(1.0, 1.0 - (0.08 * len(confidence_reasons))))
     confidence = AnalysisConfidence(
         confidence_score=round(confidence_score, 3),

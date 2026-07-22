@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.analytics.brand_match_engine import score_creator_against_brand
-from backend.app.ai.llm_client import LLMClient
+from backend.app.ai.llm_client import LLMClient, LLMClientError
 from backend.app.api.auth import verify_api_key
 from backend.app.api.rate_limiter import InMemoryRateLimiter
 from backend.app.domain.brand_models import BrandProfile, CreatorMatchScore
@@ -186,7 +186,11 @@ def ai_campaign_discover(
             brand = build_brand_profile_from_parsed(parsed_brief)
 
         llm = LLMClient()
-        brand_search_embedding = llm.embed(campaign_request.prompt)
+        try:
+            brand_search_embedding = llm.embed(campaign_request.prompt)
+        except LLMClientError as exc:
+            logger.warning("[CampaignRoutes] Brand search embedding failed; continuing without vector: %s", exc)
+            brand_search_embedding = None
 
         candidates = query_creator_pool(
             niche=brand.niche,

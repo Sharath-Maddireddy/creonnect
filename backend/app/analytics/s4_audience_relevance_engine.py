@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from backend.app.ai.llm_client import LLMClient, LLMClientError
-from backend.app.ai.prompts import S4_AUDIENCE_RELEVANCE_PROMPT
+from backend.app.ai.prompts import S4_AUDIENCE_RELEVANCE_PROMPT, format_user_text_block
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.domain.post_models import AudienceRelevanceScore
 
@@ -35,6 +35,8 @@ CATEGORY_GROUPS: dict[str, str] = {
     "education": "education_learning",
     "learning": "education_learning",
 }
+
+_LLM_CLIENT = LLMClient()
 
 
 def _normalize_category(value: str | None) -> str | None:
@@ -70,13 +72,13 @@ async def analyze_audience_relevance_via_llm(
             "Return only valid TOON format (Token-Oriented Object Notation). "
             "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
         ),
-        "user": S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", normalized_creator).replace(
-            "{post_category}", normalized_post
+        "user": S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", format_user_text_block(normalized_creator)).replace(
+            "{post_category}", format_user_text_block(normalized_post)
         ),
     }
 
     try:
-        raw_text = await asyncio.to_thread(LLMClient().generate, prompt)
+        raw_text = await asyncio.to_thread(_LLM_CLIENT.generate, prompt)
         if not isinstance(raw_text, str) or not raw_text.strip():
             raise LLMClientError("LLM returned empty response.")
         payload = toon_loads(raw_text)

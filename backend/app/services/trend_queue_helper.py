@@ -68,7 +68,7 @@ def get_trend_analysis_job_status(job_id: str) -> dict:
             "queued": "queued",
             "started": "processing",
             "deferred": "scheduled",
-            "finished": "completed",
+            "finished": "finished",
             "stopped": "stopped",
             "scheduled": "scheduled",
             "failed": "failed",
