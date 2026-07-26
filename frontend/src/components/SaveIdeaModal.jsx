@@ -6,6 +6,7 @@ export default function SaveIdeaModal({ ideaId, accountUrl, onClose, onSave }) {
     const [newName, setNewName] = useState('')
     const [showCreate, setShowCreate] = useState(false)
     const [loading, setLoading] = useState(true)
+    const [saving, setSaving] = useState(false)
 
     useEffect(() => {
         fetchCollections()
@@ -13,7 +14,8 @@ export default function SaveIdeaModal({ ideaId, accountUrl, onClose, onSave }) {
 
     const fetchCollections = async () => {
         try {
-            const res = await fetch(`${accountUrl}/collections`, { credentials: 'include' })
+            const baseUrl = accountUrl || '/api/v1/accounts/placeholder'
+            const res = await fetch(`${baseUrl}/collections`, { credentials: 'include' })
             if (res.ok) {
                 const data = await res.json()
                 setCollections(data)
@@ -34,7 +36,8 @@ export default function SaveIdeaModal({ ideaId, accountUrl, onClose, onSave }) {
     const handleCreate = async () => {
         if (!newName.trim()) return
         try {
-            const res = await fetch(`${accountUrl}/collections`, {
+            const baseUrl = accountUrl || '/api/v1/accounts/placeholder'
+            const res = await fetch(`${baseUrl}/collections`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -53,9 +56,11 @@ export default function SaveIdeaModal({ ideaId, accountUrl, onClose, onSave }) {
     }
 
     const handleSave = async () => {
+        setSaving(true)
         for (const collId of selected) {
             try {
-                await fetch(`${accountUrl}/collections/${collId}/ideas`, {
+                const baseUrl = accountUrl || '/api/v1/accounts/placeholder'
+                await fetch(`${baseUrl}/collections/${collId}/ideas`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     credentials: 'include',
@@ -65,6 +70,7 @@ export default function SaveIdeaModal({ ideaId, accountUrl, onClose, onSave }) {
                 console.error('Failed to save idea:', e)
             }
         }
+        setSaving(false)
         onSave(selected)
         onClose()
     }
@@ -128,9 +134,9 @@ export default function SaveIdeaModal({ ideaId, accountUrl, onClose, onSave }) {
                     <button
                         className="cs-btn cs-btn--primary"
                         onClick={handleSave}
-                        disabled={selected.length === 0}
+                        disabled={selected.length === 0 || saving}
                     >
-                        Save Idea
+                        {saving ? 'Saving...' : 'Save Idea'}
                     </button>
                 </div>
             </div>

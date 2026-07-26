@@ -94,7 +94,7 @@ export default function CalendarView({ accountUrl, onSelectItem }) {
                                             className="cs-calendar__item"
                                             onClick={() => onSelectItem?.(item)}
                                         >
-                                            <span className="cs-calendar__item-time">{item.scheduled_at}</span>
+                                            <span className="cs-calendar__item-time">{item.scheduled_time || item.scheduled_at}</span>
                                             <span className="cs-calendar__item-title">{item.idea_title || 'Post'}</span>
                                         </div>
                                     ))

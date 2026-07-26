@@ -4729,3 +4729,25 @@ a {
 
 
 
+
+/* Schedule Preview */
+.cs-schedule-preview {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+.cs-schedule-preview h4 {
+    margin: 0;
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+/* Caption Preview Container */
+.cs-caption-preview {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--border-color);
+}

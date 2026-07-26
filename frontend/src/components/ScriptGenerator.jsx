@@ -23,7 +23,7 @@ export default function ScriptGenerator({ ideaId, ideaTitle, hook, accountUrl, o
         setError(null)
         try {
             const baseUrl = accountUrl || '/api/v1/accounts/placeholder'
-            const res = await fetch(`${baseUrl}/trends/generate-script`, {
+            const res = await fetch(`${baseUrl}/ideas/${encodeURIComponent(ideaId)}/script`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',

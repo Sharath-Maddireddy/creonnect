@@ -175,7 +175,7 @@ function Sidebar({ account }) {
 }
 
 // ─── Opportunity Banner ───────────────────────────────────────────────────────
-function OpportunityBanner({ niche, opportunityBullets, onRefresh, busy }) {
+function OpportunityBanner({ niche, opportunityBullets, onRefresh, busy, hasAccount }) {
     const score = niche ? Math.round((niche.confidence_score || 0.7) * 100) : 0
     // Use real opportunity_bullets from backend, fallback to niche-based insights
     const insights = (opportunityBullets && opportunityBullets.length > 0)
@@ -217,9 +217,9 @@ function OpportunityBanner({ niche, opportunityBullets, onRefresh, busy }) {
                         <p className="cs-banner__score-label">
                             {score >= 80 ? 'Very High' : score >= 60 ? 'High' : 'Moderate'}
                         </p>
-                        <button className="cs-generate-btn" onClick={onRefresh} disabled={busy}>
-                                                    {busy ? 'Analysing…' : 'Generate Weekly Plan →'}
-                                                </button>
+                                                <button className="cs-generate-btn" onClick={onRefresh} disabled={busy || !hasAccount} title={!hasAccount ? 'Load an account first' : 'Generate weekly plan'}>
+                            {busy ? 'Analysing…' : 'Generate Weekly Plan →'}
+                        </button>
                     </>
                 ) : (
                     <div className="cs-banner__empty-art">✨</div>
@@ -778,12 +778,12 @@ export default function TrendRecommendations() {
         })
     }
 
-    function handleGenerate(kind, trend, rec) {
+        function handleGenerate(kind, trend, rec) {
         const title = rec?.suggested_title || trend?.topic_name || 'Content Idea'
         const hook = rec?.hook || null
-
+        // Note: trend-based ideas use temporary IDs — backend may return 404 for non-UUID idea IDs.
+        // Click "Generate New Ideas" first to create DB-persisted ideas that support full script/caption generation.
         if (kind === 'script') {
-            // Use a temporary idea ID for trend-based ideas (not from DB)
             setShowScriptGen({ ideaId: `trend-${Date.now()}`, title, hook })
         } else if (kind === 'caption') {
             setShowCaptionGen({ ideaId: `trend-${Date.now()}`, title })
@@ -797,10 +797,10 @@ export default function TrendRecommendations() {
 
     // ── New handlers for content suggestion features ──
 
-    async function handleGenerateIdeas(request) {
+        async function handleGenerateIdeas(request) {
         setShowGenerateModal(false)
         try {
-            const res = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/generate-ideas`, {
+            const res = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/ideas/generate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -809,9 +809,14 @@ export default function TrendRecommendations() {
             const data = await res.json()
             if (res.ok) {
                 setGenerationJob(data)
+            } else {
+                const errMsg = data.detail || `Server error (${res.status})`
+                setError(`Generation failed: ${errMsg}`)
+                setShowGenerateModal(true)
             }
         } catch (e) {
-            console.error('Failed to start generation:', e)
+            setError(`Generation failed: ${e.message}`)
+            setShowGenerateModal(true)
         }
     }
 
@@ -847,23 +852,22 @@ export default function TrendRecommendations() {
         setShowMoreOptions({ ideaId, title })
     }
 
-    async function handleMoreOptionAction(actionId, ideaId) {
-        console.log('Action:', actionId, 'Idea:', ideaId)
+        async function handleMoreOptionAction(actionId, ideaId) {
         const baseUrl = `/api/v1/accounts/${encodeURIComponent(accountId)}`
 
         try {
             switch (actionId) {
                 case 'improve':
                     setShowMoreOptions(null)
-                    // Open improve dialog or call API directly
                     const improveRes = await fetch(`${baseUrl}/ideas/${ideaId}/improve`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
                         body: JSON.stringify({ feedback: 'Make it more engaging', aspect: 'full' }),
                     })
-                    if (improveRes.ok) {
-                        alert('Idea improvement started! Check back in a moment.')
+                    if (!improveRes.ok) {
+                        const errJson = await improveRes.json().catch(() => ({}))
+                        setError(`Improve failed: ${errJson.detail || improveRes.status}`)
                     }
                     break
                 case 'variations':
@@ -874,8 +878,9 @@ export default function TrendRecommendations() {
                         credentials: 'include',
                         body: JSON.stringify({ count: 3 }),
                     })
-                    if (varRes.ok) {
-                        alert('Variations generation started!')
+                    if (!varRes.ok) {
+                        const errJson = await varRes.json().catch(() => ({}))
+                        setError(`Variations failed: ${errJson.detail || varRes.status}`)
                     }
                     break
                 case 'regenerate':
@@ -886,8 +891,9 @@ export default function TrendRecommendations() {
                         credentials: 'include',
                         body: JSON.stringify({}),
                     })
-                    if (regenRes.ok) {
-                        alert('Idea regeneration started!')
+                    if (!regenRes.ok) {
+                        const errJson = await regenRes.json().catch(() => ({}))
+                        setError(`Regenerate failed: ${errJson.detail || regenRes.status}`)
                     }
                     break
                 case 'schedule':
@@ -899,10 +905,10 @@ export default function TrendRecommendations() {
                     setShowSaveModal(ideaId)
                     break
                 default:
-                    console.log('Unknown action:', actionId)
+                    break
             }
         } catch (e) {
-            console.error('Action failed:', e)
+            setError(`Action failed: ${e.message}`)
         }
     }
 
@@ -929,7 +935,7 @@ export default function TrendRecommendations() {
                             />
                             <kbd className="cs-topbar__kbd">⌘ K</kbd>
                         </form>
-                        <button className="cs-generate-btn" onClick={() => setShowGenerateModal(true)} disabled={busy}>
+                                                <button className="cs-generate-btn" onClick={() => accountId && setShowGenerateModal(true)} disabled={busy || !accountId} title={!accountId ? 'Load an account first' : 'Generate new content ideas'}>
                             ✨ {busy ? 'Analysing…' : 'Generate New Ideas'}
                         </button>
                         <button className="cs-topbar__refresh-icon" onClick={() => accountId && fetchExisting(accountId)} disabled={busy} title="Refresh">↻</button>
@@ -952,7 +958,7 @@ export default function TrendRecommendations() {
                     )}
 
                     {/* ── Opportunity Banner ── */}
-                    <OpportunityBanner niche={niche} opportunityBullets={data?.opportunity_bullets} onRefresh={() => setShowGenerateModal(true)} busy={busy} />
+                    <OpportunityBanner niche={niche} opportunityBullets={data?.opportunity_bullets} onRefresh={() => accountId && setShowGenerateModal(true)} busy={busy} hasAccount={!!accountId} />
 
                     {/* ── Filter Tabs + Sort ── */}
                     <div className="cs-filters-row">
@@ -1000,6 +1006,65 @@ export default function TrendRecommendations() {
                             }}
                         />
                     ))}
+
+                                        {/* ── Generated Ideas Section ── */}
+                    {generatedIdeas.length > 0 && (
+                        <>
+                            <div className="cs-feed-header">
+                                <h2 className="cs-feed-header__title">✨ Newly Generated Ideas <span className="cs-feed-header__info">ℹ</span></h2>
+                                <p className="cs-feed-header__sub">
+                                    AI has generated {generatedIdeas.length} new idea{generatedIdeas.length > 1 ? 's' : ''} for you. Each idea can be saved, scheduled, or expanded.
+                                </p>
+                            </div>
+                            {generatedIdeas.map((idea, i) => (
+                                <div key={idea.id || i} className="cs-card cs-card--generated">
+                                    <div className="cs-card__thumb">
+                                        <div className="cs-card__thumb-inner cs-card__thumb-inner--topic">
+                                            <span className="cs-card__thumb-icon">✨</span>
+                                        </div>
+                                    </div>
+                                    <div className="cs-card__body">
+                                        <div className="cs-card__top">
+                                            <span className={`cs-pot-badge cs-pot-badge--rising`}>
+                                                🆕 New Idea
+                                            </span>
+                                        </div>
+                                        <h3 className="cs-card__title">{idea.suggested_title || idea.title || `Idea ${i + 1}`}</h3>
+                                        <div className="cs-card__tags">
+                                            {idea.content_type && <span className="cs-tag cs-tag--format">{idea.content_type}</span>}
+                                            {idea.hook && <span className="cs-tag cs-tag--neutral">{idea.hook.slice(0, 60)}{idea.hook.length > 60 ? '…' : ''}</span>}
+                                        </div>
+                                        {idea.rationale && (
+                                            <p className="cs-card__desc">{idea.rationale.slice(0, 120)}{idea.rationale.length > 120 ? '…' : ''}</p>
+                                        )}
+                                    </div>
+                                    <div className="cs-card__stats">
+                                        {idea.opportunity_score != null && (
+                                            <div className="cs-stat">
+                                                <span className="cs-stat__label">Opportunity Score</span>
+                                                <span className="cs-stat__score">{Math.round(idea.opportunity_score)} / 100</span>
+                                                <div className="cs-stat__bar-bg">
+                                                    <div className="cs-stat__bar-fill" style={{ width: `${idea.opportunity_score}%` }} />
+                                                </div>
+                                            </div>
+                                        )}
+                                        {idea.difficulty && (
+                                            <div className="cs-stat">
+                                                <span className="cs-stat__label">Difficulty</span>
+                                                <span className="cs-stat__val">{idea.difficulty}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="cs-card__actions">
+                                        <button className="cs-action-btn cs-action-btn--primary" onClick={() => setShowScriptGen({ ideaId: idea.id, title: idea.suggested_title || idea.title, hook: idea.hook })}>Generate Script</button>
+                                        <button className="cs-action-btn cs-action-btn--ghost" onClick={() => setShowCaptionGen({ ideaId: idea.id, title: idea.suggested_title || idea.title })}>Generate Caption</button>
+                                        <button className="cs-action-btn cs-action-btn--save" onClick={() => setShowSaveModal(idea.id)}>Save Idea</button>
+                                        <button className="cs-action-btn cs-action-btn--ghost" onClick={() => setShowScheduler({ ideaId: idea.id, title: idea.suggested_title || idea.title })}>Schedule</button>
+                                    </div>
+                                </div>
+                            ))}
+                        </>
+                    )}
 
                     {/* ── Empty/Initial state ── */}
                     {!data && !busy && !error && (
@@ -1147,15 +1212,17 @@ export default function TrendRecommendations() {
                 />
             )}
 
-            {/* ── Content Planner ── */}
+                        {/* ── Content Planner ── */}
             {showScheduler && (
                 <ContentPlanner
                     ideaId={showScheduler.ideaId}
                     ideaTitle={showScheduler.title}
+                    accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
                     onClose={() => setShowScheduler(null)}
                     onSchedule={(result) => {
                         console.log('Scheduled:', result)
                         setShowScheduler(null)
+                        setShowCalendar(true)
                     }}
                 />
             )}

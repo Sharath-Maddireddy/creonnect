@@ -12,7 +12,7 @@ const CONFLICT_MODES = [
     { id: 'force', label: 'Force', description: 'Reschedule conflicting items' },
 ]
 
-export default function ContentPlanner({ ideaId, ideaTitle, onClose, onSchedule }) {
+export default function ContentPlanner({ ideaId, ideaTitle, accountUrl, onClose, onSchedule }) {
     const [date, setDate] = useState('')
     const [time, setTime] = useState('12:00')
     const [platform, setPlatform] = useState('instagram')
@@ -28,7 +28,7 @@ export default function ContentPlanner({ ideaId, ideaTitle, onClose, onSchedule 
         setConflict(null)
 
         try {
-            const res = await fetch(`/api/v1/accounts/placeholder/planner/schedule`, {
+            const res = await fetch(`${accountUrl || '/api/v1/accounts/placeholder'}/planner/schedule`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
