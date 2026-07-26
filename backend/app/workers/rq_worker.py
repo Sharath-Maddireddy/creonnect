@@ -18,13 +18,14 @@ from backend.app.infra.redis_client import get_rq_redis
 from backend.app.services import account_analysis_jobs as _account_analysis_jobs  # noqa: F401
 from backend.app.services import reel_analysis_jobs as _reel_analysis_jobs  # noqa: F401
 from backend.app.services import single_post_analysis_jobs as _single_post_analysis_jobs  # noqa: F401
+from backend.app.services import content_suggestion_jobs as _content_suggestion_jobs  # noqa: F401
 from backend.app.workers import embedding_worker as _embedding_worker  # noqa: F401
 
 
 def main() -> None:
     print(f"worker vision_enabled={bool((os.getenv('GEMINI_API_KEY') or '').strip())}")
     connection = get_rq_redis()
-    queue_names = ["account-analysis", "single-post-analysis", "embedding-ingestion", "trend-analysis"]
+    queue_names = ["account-analysis", "single-post-analysis", "embedding-ingestion", "trend-analysis", "content-suggestions"]
     # macOS and Windows are safer with SimpleWorker because forked work-horses
     # can crash when Objective-C runtime state is already initialized.
     worker_cls = SimpleWorker if platform.system() in {"Windows", "Darwin"} else Worker

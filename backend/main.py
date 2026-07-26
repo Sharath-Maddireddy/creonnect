@@ -15,6 +15,8 @@ from backend.app.utils.env import load_app_env
 load_app_env(override=True)
 
 from backend.app.api.account_analysis_routes import router as account_analysis_router
+from backend.app.api.content_suggestion_routes import router as content_suggestion_router
+from backend.app.api.advanced_analysis_routes import router as advanced_analysis_router
 from backend.app.api.campaign_routes import router as campaign_router
 from backend.app.api.dashboard import router as dashboard_router
 from backend.app.api.draft_analysis_routes import router as draft_analysis_router
@@ -140,6 +142,7 @@ app.add_middleware(
 # Register routers
 app.include_router(dashboard_router)
 app.include_router(account_analysis_router)
+app.include_router(advanced_analysis_router)
 app.include_router(campaign_router)
 app.include_router(post_analysis_router)
 app.include_router(reel_analysis_router)
@@ -147,6 +150,7 @@ app.include_router(draft_analysis_router)
 app.include_router(instagram_auth_router)
 app.include_router(trend_router)
 app.include_router(creo_intelligence_router)
+app.include_router(content_suggestion_router)
 
 # Dev-only: session bypass for testing without Instagram OAuth
 if not _is_production_environment():

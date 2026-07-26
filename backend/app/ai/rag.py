@@ -146,7 +146,7 @@ class RAGEngine:
             return
 
         if not KNOWLEDGE_DIR.exists():
-                        logger.warning("[RAG] Warning: Knowledge directory not found: %s", KNOWLEDGE_DIR)
+            logger.warning("[RAG] Warning: Knowledge directory not found: %s", KNOWLEDGE_DIR)
             self._loaded = True
             return
 

@@ -146,10 +146,10 @@ async def seed_database():
     async with session_maker() as session:
         for idx, rec in enumerate(records_to_insert):
             logger.info(f"[{idx+1}/{len(records_to_insert)}] Generating embedding for {rec['username']}...")
-            embedding = llm_client.embed(rec["source_text"])
-            
-            if not embedding:
-                logger.error(f"Failed to generate embedding for {rec['username']}, skipping.")
+            try:
+                embedding = llm_client.embed(rec["source_text"])
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Failed to generate embedding for {rec['username']}, skipping: {exc}")
                 continue
                 
             # Upsert into CreatorVector

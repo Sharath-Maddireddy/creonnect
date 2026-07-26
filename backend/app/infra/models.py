@@ -229,6 +229,9 @@ class CreatorTrendResult(Base):
     niche_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     global_trends_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     recommendations_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    content_gaps_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    daily_insights_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    opportunity_bullets_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -237,4 +240,138 @@ class CreatorTrendResult(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+# ── Content Suggestion Models ──────────────────────────────────────────────────
+
+
+class Idea(Base):
+    """Stores AI-generated content ideas with JSONB for flexible AI outputs."""
+
+    __tablename__ = "ideas"
+    __table_args__ = (
+        Index("ix_ideas_account_id", "account_id"),
+        Index("ix_ideas_status", "status"),
+        Index("ix_ideas_created_at", "created_at"),
+        Index("ix_ideas_content_type", "content_type"),
+        Index("ix_ideas_opportunity_score", "opportunity_score"),
+        Index("ix_ideas_parent_idea_id", "parent_idea_id"),
+        Index("ix_ideas_generation_job_id", "generation_job_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_idea_id: Mapped[str | None] = mapped_column(Text, ForeignKey("ideas.id", ondelete="SET NULL"), nullable=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    platform: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hook: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False, default="reel")
+    script: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    captions: Mapped[list[dict[str, Any]] | None] = mapped_column(JsonListType, nullable=True)
+    variations: Mapped[list[dict[str, Any]]] = mapped_column(JsonListType, nullable=False, default=list)
+    engagement_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    opportunity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expected_reach_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_reach_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_views_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_views_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_saves_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_saves_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_shares_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_shares_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    difficulty: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    best_time_to_post: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trend_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[list[str]] = mapped_column(JsonListType, nullable=False, default=list)
+    generation_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    generation_job_id: Mapped[str | None] = mapped_column(Text, ForeignKey("idea_generation_jobs.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class Collection(Base):
+    """User-created collections for organizing ideas."""
+
+    __tablename__ = "collections"
+    __table_args__ = (
+        Index("ix_collections_account_id", "account_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class CollectionIdea(Base):
+    """Junction table for collection-idea relationships."""
+
+    __tablename__ = "collection_ideas"
+
+    collection_id: Mapped[str] = mapped_column(Text, ForeignKey("collections.id", ondelete="CASCADE"), primary_key=True)
+    idea_id: Mapped[str] = mapped_column(Text, ForeignKey("ideas.id", ondelete="CASCADE"), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ScheduledItem(Base):
+    """Scheduled content items for the planner."""
+
+    __tablename__ = "scheduled_items"
+    __table_args__ = (
+        Index("ix_scheduled_items_account_id", "account_id"),
+        Index("ix_scheduled_items_scheduled_at", "scheduled_at"),
+        Index("ix_scheduled_items_scheduled_date", "scheduled_date"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    idea_id: Mapped[str] = mapped_column(Text, ForeignKey("ideas.id"), nullable=False)
+    platform: Mapped[str] = mapped_column(Text, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scheduled_date: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scheduled_time: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="scheduled")
+    conflict_acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class IdeaGenerationJob(Base):
+    """Tracks async idea generation job progress."""
+
+    __tablename__ = "idea_generation_jobs"
+    __table_args__ = (
+        Index("ix_idea_generation_jobs_account_id", "account_id"),
+        Index("ix_idea_generation_jobs_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="queued")
+    current_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    step_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    percent_complete: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    optimization_goals: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    topic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audience: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tone_of_voice: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    total_requested: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    total_generated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

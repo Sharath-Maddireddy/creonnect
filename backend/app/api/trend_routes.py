@@ -59,6 +59,9 @@ async def get_trends(
                 "niche": row.niche_json if isinstance(row.niche_json, dict) else {},
                 "global_trends": row.global_trends_json or [],
                 "recommendations": row.recommendations_json or [],
+                "content_gaps": row.content_gaps_json or [],
+                "daily_insights": row.daily_insights_json if isinstance(row.daily_insights_json, dict) else None,
+                "opportunity_bullets": row.opportunity_bullets_json or [],
             }
             return TrendAnalysisResult.model_validate(payload)
         except Exception:
@@ -66,7 +69,7 @@ async def get_trends(
             raise HTTPException(status_code=500, detail="Failed to parse stored trend result")
 
     # Missing: trigger a refresh and return its result
-    return await refresh_trends(account_id=account_id, db=db)
+    return await refresh_trends(account_id=account_id, db=db, count=5)
 
 
 @router.post("/{account_id}/trends/refresh", response_model=TrendAnalysisResult | dict)
@@ -88,7 +91,7 @@ async def refresh_trends(
         )
         rate_count = 1
 
-    if rate_count > 1:
+    if rate_count > 100:  # Temporarily increased to 100 for UI testing
         logger.warning(
             "[TrendRoutes] Rate limit exceeded for account=%s — returning 429",
             account_id,
@@ -155,7 +158,7 @@ async def refresh_trends(
             bio=history_context.account_data.get("bio"),
             username=history_context.account_data.get("username"),
             creator_intelligence=creator_intelligence,
-            recommendation_count=count,
+            recommendation_count=int(count) if isinstance(count, (int, float, str)) else 5,
         )
     except Exception:
         logger.exception("[TrendRoutes] Trend service failed for account=%s", account_id)
@@ -174,6 +177,9 @@ async def refresh_trends(
         niche_payload = result.niche.model_dump(mode="python") if hasattr(result.niche, "model_dump") else {}
         global_trends_payload = [t.model_dump(mode="python") for t in result.global_trends]
         recommendations_payload = [r.model_dump(mode="python") for r in result.recommendations]
+        content_gaps_payload = [g.model_dump(mode="python") for g in result.content_gaps] if result.content_gaps else []
+        daily_insights_payload = result.daily_insights.model_dump(mode="python") if result.daily_insights and hasattr(result.daily_insights, "model_dump") else None
+        opportunity_bullets_payload = result.opportunity_bullets if result.opportunity_bullets else []
 
         if existing is None:
             new_row = CreatorTrendResult(
@@ -181,12 +187,18 @@ async def refresh_trends(
                 niche_json=niche_payload,
                 global_trends_json=global_trends_payload,
                 recommendations_json=recommendations_payload,
+                content_gaps_json=content_gaps_payload,
+                daily_insights_json=daily_insights_payload,
+                opportunity_bullets_json=opportunity_bullets_payload,
             )
             db.add(new_row)
         else:
             existing.niche_json = niche_payload
             existing.global_trends_json = global_trends_payload
             existing.recommendations_json = recommendations_payload
+            existing.content_gaps_json = content_gaps_payload
+            existing.daily_insights_json = daily_insights_payload
+            existing.opportunity_bullets_json = opportunity_bullets_payload
             db.add(existing)
         await db.commit()
     except Exception:

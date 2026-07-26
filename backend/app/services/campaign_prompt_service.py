@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from backend.app.ai.llm_client import LLMClient
-from backend.app.ai.prompts_brand import CAMPAIGN_BRIEF_EXTRACTION_PROMPT
+from backend.app.ai.prompts_brand import CAMPAIGN_BRIEF_EXTRACTION_PROMPT, sanitize_brand_prompt
 from backend.app.ai.toon import loads as parse_toon
 from backend.app.domain.brand_models import BrandProfile
 from backend.app.utils.logger import logger
@@ -48,7 +48,7 @@ def parse_campaign_prompt(prompt: str, brand_name: str | None = None) -> dict:
 
     llm = LLMClient(temperature=0.3, max_tokens=500)
     system_prompt = "You are an expert brand marketing campaign strategist."
-    user_prompt = CAMPAIGN_BRIEF_EXTRACTION_PROMPT.replace("{user_prompt}", prompt)
+    user_prompt = CAMPAIGN_BRIEF_EXTRACTION_PROMPT.replace("{user_prompt}", sanitize_brand_prompt(prompt))
 
     try:
         response_text = llm.generate({
@@ -134,7 +134,7 @@ def build_ai_campaign_summary(prompt: str, parsed_brief: dict, brand: BrandProfi
                 "system": "You summarize parsed campaign briefs in one sentence for a brand user.",
                 "user": (
                     "Write one concise sentence that explains what creator profile we will search for. "
-                    f"Original prompt: {prompt}\n"
+                    f"Original prompt: {sanitize_brand_prompt(prompt)}\n"
                     f"Parsed brief: {parsed_brief}\n"
                     f"Validated profile: {brand.model_dump(mode='json')}"
                 ),

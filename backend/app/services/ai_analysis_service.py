@@ -561,7 +561,7 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
     if not isinstance(hook_strength_score, (int, float)):
         hook_strength_score = 0.5
     if not isinstance(virality_potential, (int, float)):
-        virality_potential = 5
+        virality_potential = 5.0
 
     objects = [item.strip() for item in objects if isinstance(item, str) and item.strip()]
     dominant_focus = dominant_focus.strip() if isinstance(dominant_focus, str) else None
@@ -572,7 +572,7 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
 
     normalized_visual_quality = _clamp_vq(visual_quality_score)
     clamped_hook_strength_score = max(0.0, min(1.0, float(hook_strength_score)))
-    clamped_virality = int(max(0, min(10, int(virality_potential))))
+    clamped_virality = max(0.0, min(10.0, float(virality_potential)))
     dominant_object = payload.get("dominant_object")
     lighting_quality = normalized_visual_quality.get("lighting") if isinstance(normalized_visual_quality, dict) else None
     subject_clarity = (
@@ -1132,7 +1132,7 @@ async def run_audience_relevance_llm(
         post_text or None,
     )
 
-    user_prompt = S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", creator_text).replace("{post_category}", post_text)
+    user_prompt = S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", format_user_text_block(creator_text)).replace("{post_category}", format_user_text_block(post_text))
     prompt = {
         "system": (
             "Return only valid TOON format (Token-Oriented Object Notation). "
@@ -1722,197 +1722,6 @@ def _build_deterministic_clarity_drivers(content_clarity_score: ContentClaritySc
         )
 
     return drivers
-
-
-async def analyze_single_post_ai(
-    post: SinglePostInsights,
-    llm_client: LLMClient | None = None,
-) -> AIAnalysisResult:
-    """Run async AI analysis for a single post with caching and regen throttling.
-
-    This function mutates ``post`` in-place by populating computed score fields
-    and intermediate analysis fields (for example: ``visual_quality_score``,
-    ``caption_effectiveness_score``, ``content_clarity_score``,
-    ``audience_relevance_score``, ``brand_safety_score``,
-    ``engagement_potential_score``, ``weighted_post_score``,
-    ``vision_analysis``, and predicted engagement fields).
-    Callers should treat ``post`` as updated after this call returns.
-    If immutability is required, pass a copy before calling (for example
-    ``post.model_copy(deep=True)``, ``copy.copy(...)``, or
-    ``dataclasses.replace(...)`` for dataclass inputs).
-    """
-    from datetime import datetime, timezone
-
-    now_ts = time.time()
-    key = _cache_key(post)
-    logger.info(
-        "[AIAnalysis] Start media_id=%s account_id=%s media_type=%s",
-        post.media_id,
-        post.account_id,
-        post.media_type,
-    )
-    with _ANALYSIS_CACHE_LOCK:
-        _prune_analysis_cache(now_ts)
-        cached = _ANALYSIS_CACHE.get(key) if key is not None else None
-        if cached is not None and _is_fresh(cached, now_ts):
-            logger.debug("[AIAnalysis] Cache hit media_id=%s", post.media_id)
-            return cached.result
-        if cached is not None and (now_ts - cached.last_regen_attempt_at) < MIN_REGEN_SECONDS:
-            logger.debug("[AIAnalysis] Returning throttled cached result media_id=%s", post.media_id)
-            return cached.result
-        if cached is not None:
-            cached.last_regen_attempt_at = now_ts
-            logger.debug("[AIAnalysis] Cache stale; regenerating media_id=%s", post.media_id)
-    visual_quality_score = _resolve_score(post.visual_quality_score, VisualQualityScore)
-    content_clarity_score = _resolve_score(post.content_clarity_score, ContentClarityScore)
-    caption_effectiveness_score = _resolve_score(post.caption_effectiveness_score, CaptionEffectivenessScore)
-    engagement_potential_score = _resolve_score(post.engagement_potential_score, EngagementPotentialScore)
-    weighted_post_score = _resolve_score(post.weighted_post_score, WeightedPostScore)
-    audience_relevance_score = _resolve_score(post.audience_relevance_score, AudienceRelevanceScore)
-    brand_safety_score = _resolve_score(post.brand_safety_score, BrandSafetyScore)
-    tier_avg_engagement_rate = post.tier_avg_engagement_rate
-    predicted_engagement_rate = post.predicted_engagement_rate
-    predicted_engagement_rate_notes = list(post.predicted_engagement_rate_notes)
-
-    score, band = _score_payload(post)
-    post_id = post.media_id if isinstance(post.media_id, str) else None
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    gemini_enabled = bool(isinstance(gemini_api_key, str) and gemini_api_key.strip())
-    openai_enabled = bool(isinstance(openai_api_key, str) and openai_api_key.strip())
-    vision_enabled = gemini_enabled or openai_enabled
-    warnings: list[AIWarning] = []
-    vision_error_reason: str | None = None
-    if not gemini_enabled:
-        warnings.append(
-            _build_ai_warning(
-                code="GEMINI_API_KEY_MISSING",
-                message="Gemini vision is disabled because GEMINI_API_KEY is not set. OpenAI fallback may be used if configured.",
-                post_id=post_id,
-            )
-        )
-    vision_status: Literal["ok", "error", "disabled", "no_media"] = "disabled" if not vision_enabled else "ok"
-    fallback_used = False
-    logger.debug(
-        "[AIAnalysis] Vision config media_id=%s vision_enabled=%s published_at=%s",
-        post.media_id,
-        vision_enabled,
-        post.published_at,
-    )
-
-    if post.published_at is not None:
-        published_at = post.published_at
-        if published_at.tzinfo is None:
-            published_at = published_at.replace(tzinfo=timezone.utc)
-
-        now_utc = datetime.now(timezone.utc)
-        post_age_seconds = (now_utc - published_at).total_seconds()
-        if post_age_seconds < MIN_REGEN_SECONDS:
-            fallback_used = True
-            logger.info(
-                "[AIAnalysis] Skipping AI analysis for very recent post media_id=%s age_seconds=%.2f",
-                post.media_id,
-                post_age_seconds,
-            )
-            result: AIAnalysisResult = {
-                "summary": "AI analysis unavailable. Post is still accumulating data.",
-                "drivers": [],
-                "recommendations": [],
-                "ai_content_score": score,
-                "ai_content_band": band,
-                "caption_effectiveness_score": caption_effectiveness_score.model_dump(),
-                "visual_quality_score": visual_quality_score.model_dump(),
-                "content_clarity_score": content_clarity_score.model_dump(),
-                "engagement_potential_score": engagement_potential_score.model_dump(),
-                "audience_relevance_score": audience_relevance_score.model_dump(),
-                "brand_safety_score": brand_safety_score.model_dump(),
-                "weighted_post_score": weighted_post_score.model_dump(),
-                "vision_analysis": VisionAnalysis(
-                    provider="gemini",
-                    status=str(vision_status),
-                    signals=[],
-                ).model_dump(mode="python"),
-                "tier_avg_engagement_rate": tier_avg_engagement_rate,
-                "predicted_engagement_rate": predicted_engagement_rate,
-                "predicted_engagement_rate_notes": predicted_engagement_rate_notes,
-                "warnings": warnings,
-                "vision_status": vision_status,
-                "fallback_used": fallback_used,
-            }
-            return result
-
-    if not vision_enabled:
-        vision = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
-    else:
-        logger.debug("[AIAnalysis] Running Gemini vision media_id=%s", post.media_id)
-        vision = await run_vision_analysis(post)
-        if vision.get("status") == "error":
-            vision_status = "error"
-            raw_error_reason = vision.get("error_reason")
-            if isinstance(raw_error_reason, str) and raw_error_reason.strip():
-                vision_error_reason = raw_error_reason.strip()[:300]
-            warning_message = "Gemini vision request failed; deterministic fallback scoring applied."
-            if vision_error_reason:
-                warning_message = f"{warning_message} reason={vision_error_reason}"
-            warnings.append(
-                _build_ai_warning(
-                    code="VISION_ERROR",
-                    message=warning_message,
-                    post_id=post_id,
-                )
-            )
-        elif vision.get("status") == "ok":
-            vision_status = "ok"
-        elif vision.get("status") == "no_media":
-            vision_status = "no_media"
-    logger.debug("[AIAnalysis] Vision finished media_id=%s status=%s", post.media_id, vision_status)
-
-    visual_quality_score = compute_visual_quality_score(vision)
-    caption_effectiveness_score = (
-        post.caption_effectiveness_score
-        if isinstance(post.caption_effectiveness_score, CaptionEffectivenessScore)
-        else await analyze_caption_via_llm(post.caption_text)
-    )
-    content_clarity_score = await analyze_content_clarity_via_llm(vision, post.caption_text)
-    audience_relevance_score = await analyze_audience_relevance_via_llm(
-        post.post_category,
-        post.creator_dominant_category,
-    )
-    brand_safety_score = compute_s6_brand_safety(
-        caption_text=post.caption_text,
-        vision=vision,
-        s1_total_0_50=visual_quality_score.total,
-        extracted_brand_mentions=post.extracted_brand_mentions,
-        extra_flags=post.safety_extra_flags,
-    )
-    # Mutates `post` in-place to attach computed metrics for downstream use.
-    post.visual_quality_score = visual_quality_score
-    post.caption_effectiveness_score = caption_effectiveness_score
-    post.content_clarity_score = content_clarity_score
-    post.audience_relevance_score = audience_relevance_score
-    post.brand_safety_score = brand_safety_score
-    weighted_post_type = _resolve_weighted_post_type(post.media_type)
-    weighted_post_score = compute_weighted_post_score(
-        post_type=weighted_post_type,
-        s1=visual_quality_score.total,
-        s2=caption_effectiveness_score.total_0_50,
-        s3=content_clarity_score.total,
-        s4=audience_relevance_score.total_0_50,
-        s5=None,
-        s6=brand_safety_score.total_0_50,
-        s7=None,
-    )
-    post.weighted_post_score = weighted_post_score
-    logger.debug(
-        "[AIAnalysis] Deterministic scores media_id=%s s1=%s s2=%s s3=%s s4=%s s6=%s weighted=%s",
-        post.media_id,
-        visual_quality_score.total,
-        caption_effectiveness_score.total_0_50,
-        content_clarity_score.total,
-        audience_relevance_score.total_0_50,
-        brand_safety_score.total_0_50,
-        weighted_post_score.score,
-    )
 
 
 async def analyze_single_post_ai(

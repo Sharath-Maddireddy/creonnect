@@ -1,9 +1,9 @@
 {
-  "ahs_score": 63.08,
+  "ahs_score": 63.12,
   "ahs_band": "STRONG",
   "pillars": {
     "content_quality": {
-      "score": 45.68,
+      "score": 45.83,
       "band": "AVERAGE",
       "notes": []
     },
@@ -37,7 +37,7 @@
       "id": "content_quality_low",
       "label": "Content clarity/quality needs improvement",
       "type": "LIMITING",
-      "explanation": "Mean content signals are low (S1=20.25, S2=19.133333333333333, S3=29.133333333333333)."
+      "explanation": "Mean content signals are low (S1=20.25, S2=19.366666666666667, S3=29.133333333333333)."
     }
   ],
   "recommendations": [
@@ -56,6 +56,522 @@
     "post_count_used": 30,
     "min_history_threshold_met": true,
     "time_window_days": 1257
+  },
+  "creator_intelligence": null,
+  "vision_summary": null,
+  "engagement_signals": null,
+  "content_type_performance": null,
+  "brand_readiness": {
+    "score": 68.09,
+    "label": "Marketable",
+    "est_rate_per_post": 377.73,
+    "est_cpm": 1.89
+  },
+  "core_metrics": {
+    "followers": {
+      "current_value": 0.0,
+      "trend_percentage": null,
+      "label": "Followers"
+    },
+    "reach_30d": {
+      "current_value": 6153.0,
+      "trend_percentage": null,
+      "label": "30D Reach"
+    },
+    "impressions_30d": {
+      "current_value": 6153.0,
+      "trend_percentage": null,
+      "label": "30D Impressions"
+    },
+    "engagement_rate": {
+      "current_value": 7.55,
+      "trend_percentage": null,
+      "label": "Engagement Rate"
+    },
+    "profile_visits_30d": {
+      "current_value": null,
+      "trend_percentage": null,
+      "label": "30D Profile Visits"
+    },
+    "visit_to_follow_rate": {
+      "current_value": null,
+      "trend_percentage": null,
+      "label": "Visit-to-Follow Rate"
+    }
+  },
+  "growth_overview_chart": [
+    {
+      "date": "2026-02-01",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-12-20",
+      "followers": null,
+      "reach": 291.0,
+      "impressions": 291.0
+    },
+    {
+      "date": "2025-12-19",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-12-18",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-11-23",
+      "followers": null,
+      "reach": 358.0,
+      "impressions": 358.0
+    },
+    {
+      "date": "2025-11-10",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-07-22",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-07-20",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-05-18",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-04-18",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-02-07",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-02-07",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-02-07",
+      "followers": null,
+      "reach": 654.0,
+      "impressions": 654.0
+    },
+    {
+      "date": "2025-02-06",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-02-05",
+      "followers": null,
+      "reach": 584.0,
+      "impressions": 584.0
+    },
+    {
+      "date": "2025-02-03",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2025-02-02",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2024-12-26",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2024-06-28",
+      "followers": null,
+      "reach": 783.0,
+      "impressions": 783.0
+    },
+    {
+      "date": "2024-06-28",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2024-04-29",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2024-04-28",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2024-04-28",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2023-07-17",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2022-12-31",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2022-12-18",
+      "followers": null,
+      "reach": 1758.0,
+      "impressions": 1758.0
+    },
+    {
+      "date": "2022-08-29",
+      "followers": null,
+      "reach": 1725.0,
+      "impressions": 1725.0
+    },
+    {
+      "date": "2022-08-28",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2022-08-28",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    },
+    {
+      "date": "2022-08-25",
+      "followers": null,
+      "reach": 0.0,
+      "impressions": null
+    }
+  ],
+  "content_pillars": [
+    {
+      "name": "gokarna",
+      "engagement_percentage": 8.11
+    },
+    {
+      "name": "bikeride",
+      "engagement_percentage": 8.11
+    },
+    {
+      "name": "vietnam",
+      "engagement_percentage": 5.41
+    },
+    {
+      "name": "ladakh",
+      "engagement_percentage": 5.41
+    },
+    {
+      "name": "leh",
+      "engagement_percentage": 5.41
+    },
+    {
+      "name": "creonnect",
+      "engagement_percentage": 2.7
+    }
+  ],
+  "engagement_heatmap": [
+    {
+      "day_of_week": 6,
+      "hour_of_day": 13,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 5,
+      "hour_of_day": 9,
+      "intensity": 1.0
+    },
+    {
+      "day_of_week": 4,
+      "hour_of_day": 6,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 3,
+      "hour_of_day": 10,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 6,
+      "hour_of_day": 9,
+      "intensity": 1.0
+    },
+    {
+      "day_of_week": 0,
+      "hour_of_day": 15,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 1,
+      "hour_of_day": 4,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 6,
+      "hour_of_day": 6,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 4,
+      "hour_of_day": 3,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 4,
+      "hour_of_day": 16,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 4,
+      "hour_of_day": 10,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 4,
+      "hour_of_day": 4,
+      "intensity": 0.556
+    },
+    {
+      "day_of_week": 3,
+      "hour_of_day": 8,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 2,
+      "hour_of_day": 17,
+      "intensity": 0.56
+    },
+    {
+      "day_of_week": 0,
+      "hour_of_day": 7,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 6,
+      "hour_of_day": 10,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 3,
+      "hour_of_day": 15,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 4,
+      "hour_of_day": 14,
+      "intensity": 0.43
+    },
+    {
+      "day_of_week": 0,
+      "hour_of_day": 12,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 6,
+      "hour_of_day": 14,
+      "intensity": 0.7
+    },
+    {
+      "day_of_week": 0,
+      "hour_of_day": 14,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 5,
+      "hour_of_day": 13,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 6,
+      "hour_of_day": 5,
+      "intensity": 0.644
+    },
+    {
+      "day_of_week": 0,
+      "hour_of_day": 11,
+      "intensity": 0.325
+    },
+    {
+      "day_of_week": 6,
+      "hour_of_day": 16,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 6,
+      "hour_of_day": 4,
+      "intensity": 0.5
+    },
+    {
+      "day_of_week": 3,
+      "hour_of_day": 2,
+      "intensity": 0.5
+    }
+  ],
+  "top_hashtags": [
+    {
+      "hashtag": "gokarna",
+      "post_count": 3,
+      "reach": 97.0,
+      "engagement_rate": 0.1924,
+      "impact": "Keep"
+    },
+    {
+      "hashtag": "bikeride",
+      "post_count": 3,
+      "reach": 1161.0,
+      "engagement_rate": 0.0474,
+      "impact": "Test"
+    },
+    {
+      "hashtag": "bike",
+      "post_count": 2,
+      "reach": 1058.0,
+      "engagement_rate": 0.0956,
+      "impact": "Keep"
+    },
+    {
+      "hashtag": "vietnam",
+      "post_count": 2,
+      "reach": 292.0,
+      "engagement_rate": 0.0599,
+      "impact": "Test"
+    },
+    {
+      "hashtag": "ladakh",
+      "post_count": 2,
+      "reach": 1741.5,
+      "engagement_rate": 0.0474,
+      "impact": "Test"
+    },
+    {
+      "hashtag": "leh",
+      "post_count": 2,
+      "reach": 879.0,
+      "engagement_rate": 0.0739,
+      "impact": "Keep"
+    },
+    {
+      "hashtag": "creonnect",
+      "post_count": 1,
+      "reach": 0.0,
+      "engagement_rate": null,
+      "impact": "Drop"
+    },
+    {
+      "hashtag": "contentcreator",
+      "post_count": 1,
+      "reach": 0.0,
+      "engagement_rate": null,
+      "impact": "Drop"
+    },
+    {
+      "hashtag": "brand",
+      "post_count": 1,
+      "reach": 0.0,
+      "engagement_rate": null,
+      "impact": "Drop"
+    },
+    {
+      "hashtag": "startup",
+      "post_count": 1,
+      "reach": 0.0,
+      "engagement_rate": null,
+      "impact": "Drop"
+    }
+  ],
+  "audience_insights": {
+    "new_viewers_pct": 64.0,
+    "returning_viewers_pct": 36.0,
+    "follower_quality_score": 68.0,
+    "non_follower_reach_pct": 57.0,
+    "comment_sentiment_positive_pct": 60.0,
+    "comment_sentiment_neutral_pct": 25.0,
+    "comment_sentiment_negative_pct": 15.0
+  },
+  "niche_benchmark": {
+    "engagement_rate_vs_niche": null,
+    "reach_vs_niche": null,
+    "growth_vs_niche": null
+  },
+  "audience_demographics": [
+    {
+      "country": "United States",
+      "percentage": 40.0
+    },
+    {
+      "country": "India",
+      "percentage": 22.0
+    },
+    {
+      "country": "Brazil",
+      "percentage": 12.0
+    },
+    {
+      "country": "United Kingdom",
+      "percentage": 10.0
+    },
+    {
+      "country": "Canada",
+      "percentage": 8.0
+    },
+    {
+      "country": "Australia",
+      "percentage": 5.0
+    },
+    {
+      "country": "Other",
+      "percentage": 3.0
+    }
+  ],
+  "conversion_funnel": {
+    "profile_visits": null,
+    "website_clicks": null,
+    "follows": null,
+    "profile_visit_to_follow_pct": null
+  },
+  "ai_summary": {
+    "text_summary": "This account shows a strong overall health band. Top content pillar is 'gokarna'. Best performing format is IMAGE. Key growth levers include increasing posting consistency, optimizing hashtag strategy, and improving engagement on underperforming content types.",
+    "top_content_type": "IMAGE",
+    "best_posting_time": null,
+    "top_content_pillar": "gokarna",
+    "growth_potential": "High"
   },
   "posts_summary": [
     {
@@ -124,12 +640,12 @@
       "caption_preview": "Peace have a cost you have to pay #waynad #bike #bikelife #kerala #solo",
       "scores": {
         "S1_visual": 20.25,
-        "S2_caption": 30.0,
+        "S2_caption": 29.0,
         "S3_clarity": 30.0,
         "S4_relevance": 25.0,
         "S5_engagement": 25.0,
         "S6_safety": 50.0,
-        "P_score": 56.94,
+        "P_score": 56.52,
         "predicted_er": null
       }
     },
@@ -229,12 +745,12 @@
       "caption_preview": "Fill your soul with peace\ud83c\uddfb\ud83c\uddf3 #banahills  #danang",
       "scores": {
         "S1_visual": 20.25,
-        "S2_caption": 25.0,
+        "S2_caption": 24.0,
         "S3_clarity": 30.0,
         "S4_relevance": 25.0,
         "S5_engagement": 25.0,
         "S6_safety": 50.0,
-        "P_score": 54.32,
+        "P_score": 53.88,
         "predicted_er": null
       }
     },
@@ -424,27 +940,12 @@
       "caption_preview": "You dream I live \ud83c\udf1f",
       "scores": {
         "S1_visual": 20.25,
-        "S2_caption": 20.0,
+        "S2_caption": 19.0,
         "S3_clarity": 30.0,
         "S4_relevance": 25.0,
         "S5_engagement": 25.0,
         "S6_safety": 50.0,
-        "P_score": 52.12,
-        "predicted_er": null
-      }
-    },
-    {
-      "post_id": "2995749442042583180",
-      "post_type": "REEL",
-      "caption_preview": "Hanley Dairies \ud83c\udf1f\n\n#ladakh #leh #bikeride #hanley #trip\n#bike  #travel",
-      "scores": {
-        "S1_visual": 20.25,
-        "S2_caption": 27.0,
-        "S3_clarity": 30.0,
-        "S4_relevance": 25.0,
-        "S5_engagement": 25.0,
-        "S6_safety": 50.0,
-        "P_score": 55.68,
+        "P_score": 51.68,
         "predicted_er": null
       }
     },
@@ -464,17 +965,32 @@
       }
     },
     {
+      "post_id": "2995749442042583180",
+      "post_type": "REEL",
+      "caption_preview": "Hanley Dairies \ud83c\udf1f\n\n#ladakh #leh #bikeride #hanley #trip\n#bike  #travel",
+      "scores": {
+        "S1_visual": 20.25,
+        "S2_caption": 27.0,
+        "S3_clarity": 30.0,
+        "S4_relevance": 25.0,
+        "S5_engagement": 25.0,
+        "S6_safety": 50.0,
+        "P_score": 55.68,
+        "predicted_er": null
+      }
+    },
+    {
       "post_id": "2914900642227470640",
       "post_type": "IMAGE",
       "caption_preview": "Somehow, a comfy hoodie tends to feel like home",
       "scores": {
         "S1_visual": 20.25,
-        "S2_caption": 17.0,
+        "S2_caption": 27.0,
         "S3_clarity": 30.0,
         "S4_relevance": 25.0,
         "S5_engagement": 25.0,
         "S6_safety": 50.0,
-        "P_score": 50.8,
+        "P_score": 55.2,
         "predicted_er": null
       }
     },

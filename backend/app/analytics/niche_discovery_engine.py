@@ -365,6 +365,13 @@ async def discover_creator_niche(
         if not isinstance(parsed, dict):
             raise ValueError("TOON did not parse to a dict")
 
+        # Fix sub_niches: LLM sometimes returns comma-separated string instead of list
+        sub_niches = parsed.get("sub_niches")
+        if isinstance(sub_niches, str):
+            parsed["sub_niches"] = [s.strip() for s in sub_niches.split(",") if s.strip()]
+        elif not isinstance(sub_niches, list):
+            parsed["sub_niches"] = []
+
         # Safely validate/massage into CreatorNiche using Pydantic.
         try:
             # Prefer pydantic v2-style model validation if available

@@ -1160,7 +1160,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             len(warnings_global),
         )
         _progress(stage="aggregate", done=len(processed_posts), total=max(1, len(posts)))
-                        result = analyze_account_health(
+        result = analyze_account_health(
             posts=processed_posts,
             account_avg_engagement_rate=payload.get("account_avg_engagement_rate"),
             niche_avg_engagement_rate=payload.get("niche_avg_engagement_rate"),
@@ -1208,7 +1208,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
 
             creator_intelligence = CreatorIntelligence()
 
-                content_type_performance = _try_nonfatal(
+        content_type_performance = _try_nonfatal(
             "content type performance",
             lambda: compute_content_type_performance(processed_posts),
             account_id,

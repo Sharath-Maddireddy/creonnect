@@ -29,6 +29,9 @@ def upsert_trend_result_sync(account_id: str, result) -> None:
         niche_payload = result.niche.model_dump(mode="python") if hasattr(result.niche, "model_dump") else {}
         global_trends_payload = [t.model_dump(mode="python") for t in result.global_trends]
         recommendations_payload = [r.model_dump(mode="python") for r in result.recommendations]
+        content_gaps_payload = [g.model_dump(mode="python") for g in result.content_gaps] if result.content_gaps else []
+        daily_insights_payload = result.daily_insights.model_dump(mode="python") if result.daily_insights and hasattr(result.daily_insights, "model_dump") else None
+        opportunity_bullets_payload = result.opportunity_bullets if result.opportunity_bullets else []
 
         if existing is None:
             new_row = CreatorTrendResult(
@@ -36,12 +39,18 @@ def upsert_trend_result_sync(account_id: str, result) -> None:
                 niche_json=niche_payload,
                 global_trends_json=global_trends_payload,
                 recommendations_json=recommendations_payload,
+                content_gaps_json=content_gaps_payload,
+                daily_insights_json=daily_insights_payload,
+                opportunity_bullets_json=opportunity_bullets_payload,
             )
             session.add(new_row)
         else:
             existing.niche_json = niche_payload
             existing.global_trends_json = global_trends_payload
             existing.recommendations_json = recommendations_payload
+            existing.content_gaps_json = content_gaps_payload
+            existing.daily_insights_json = daily_insights_payload
+            existing.opportunity_bullets_json = opportunity_bullets_payload
             session.add(existing)
         session.commit()
 

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import GenerateIdeasModal from '../components/GenerateIdeasModal'
+import GenerationProgress from '../components/GenerationProgress'
+import ScriptGenerator from '../components/ScriptGenerator'
+import CaptionGenerator from '../components/CaptionGenerator'
+import ContentPlanner from '../components/ContentPlanner'
+import CalendarView from '../components/CalendarView'
+import SaveIdeaModal from '../components/SaveIdeaModal'
+import MoreOptionsMenu from '../components/MoreOptionsMenu'
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 // All calls go through Vite proxy (/api → http://localhost:8000)
@@ -210,8 +218,8 @@ function OpportunityBanner({ niche, opportunityBullets, onRefresh, busy }) {
                             {score >= 80 ? 'Very High' : score >= 60 ? 'High' : 'Moderate'}
                         </p>
                         <button className="cs-generate-btn" onClick={onRefresh} disabled={busy}>
-                            {busy ? 'Analysing…' : 'Generate Weekly Plan →'}
-                        </button>
+                                                    {busy ? 'Analysing…' : 'Generate Weekly Plan →'}
+                                                </button>
                     </>
                 ) : (
                     <div className="cs-banner__empty-art">✨</div>
@@ -241,7 +249,7 @@ function FilterTabs({ active, onChange }) {
 }
 
 // ─── Trend + Rec combined card ─────────────────────────────────────────────────
-function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate }) {
+function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate, onMoreOptions }) {
     const m = MOMENTUM[trend?.momentum] || MOMENTUM.rising
     const t = TREND_TYPE[trend?.trend_type] || TREND_TYPE.topic
     // Use real opportunity_score from backend, fallback to momentum-based
@@ -330,13 +338,20 @@ function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate }) 
 
             {/* Actions col */}
             <div className="cs-card__actions">
-                <button className="cs-action-btn cs-action-btn--primary" onClick={() => onGenerate('script', trend, rec)}>✨ Generate Script</button>
-                <button className="cs-action-btn cs-action-btn--ghost" onClick={() => onGenerate('caption', trend, rec)}>📝 Generate Caption</button>
+                <button className="cs-action-btn cs-action-btn--primary" onClick={() => onGenerate('script', trend, rec)}>Generate Script</button>
+                <button className="cs-action-btn cs-action-btn--ghost" onClick={() => onGenerate('caption', trend, rec)}>Generate Caption</button>
                 <button
                     className={`cs-action-btn cs-action-btn--save${saved ? ' cs-action-btn--saved' : ''}`}
                     onClick={() => onToggleSave(trend, rec)}
                 >
-                    {saved ? '✅ Saved' : '🔖 Save Idea'}
+                    {saved ? 'Saved' : 'Save Idea'}
+                </button>
+                <button
+                    className="cs-action-btn cs-action-btn--ghost"
+                    onClick={() => onMoreOptions?.(trend, rec)}
+                    title="More options"
+                >
+                    ...
                 </button>
             </div>
         </div>
@@ -362,14 +377,20 @@ function RightPanel({ niche, trends, data, onShowAllTrends, onShowContentGaps, a
                 <div className="cs-right-card">
                     <div className="cs-right-card__header">
                         <span className="cs-right-card__title">Today's Insights</span>
+                        <span className="cs-right-card__link">📅 View Calendar</span>
                     </div>
-                    <div className="cs-insights-grid">
-                        {dailyInsights.audience_active_window && (
-                            <div className="cs-insight-item">
-                                <span className="cs-insight-label">Audience Active</span>
-                                <span className="cs-insight-value">{dailyInsights.audience_active_window}</span>
+                    {/* Audience Active - prominent full-width card */}
+                    {dailyInsights.audience_active_window && (
+                        <div className="cs-insight-highlight">
+                            <span className="cs-insight-label">Audience Active</span>
+                            <div className="cs-insight-highlight__row">
+                                <span className="cs-insight-highlight__value">{dailyInsights.audience_active_window}</span>
+                                <span className="cs-insight-today-badge">Today</span>
                             </div>
-                        )}
+                        </div>
+                    )}
+                    {/* 2-column grid for remaining insights */}
+                    <div className="cs-insights-pair">
                         {dailyInsights.best_content_type && (
                             <div className="cs-insight-item">
                                 <span className="cs-insight-label">Best Content Type</span>
@@ -379,9 +400,13 @@ function RightPanel({ niche, trends, data, onShowAllTrends, onShowContentGaps, a
                         {dailyInsights.trending_audio_count != null && (
                             <div className="cs-insight-item">
                                 <span className="cs-insight-label">Trending Audio</span>
-                                <span className="cs-insight-value">{dailyInsights.trending_audio_count}</span>
+                                <span className="cs-insight-value">
+                                    <span className="cs-insight-audio-icon">♪</span> {dailyInsights.trending_audio_count}
+                                </span>
                             </div>
                         )}
+                    </div>
+                    <div className="cs-insights-pair">
                         {dailyInsights.competition_level && (
                             <div className="cs-insight-item">
                                 <span className="cs-insight-label">Competition</span>
@@ -562,6 +587,19 @@ export default function TrendRecommendations() {
     const [assistantReply, setAssistantReply] = useState('')
     const [showContentGaps, setShowContentGaps] = useState(false)
 
+    // New modal states
+    const [showGenerateModal, setShowGenerateModal] = useState(false)
+    const [generationJob, setGenerationJob] = useState(null)
+    const [generatedIdeas, setGeneratedIdeas] = useState([])
+    const [showScriptGen, setShowScriptGen] = useState(null) // { ideaId, title, hook }
+    const [showCaptionGen, setShowCaptionGen] = useState(null) // { ideaId, title }
+    const [showScheduler, setShowScheduler] = useState(null) // { ideaId, title }
+    const [showSaveModal, setShowSaveModal] = useState(null) // ideaId
+    const [showMoreOptions, setShowMoreOptions] = useState(null) // { ideaId, title }
+    const [showCalendar, setShowCalendar] = useState(false)
+    const [ideaPage, setIdeaPage] = useState(1)
+    const [ideaLoading, setIdeaLoading] = useState(false)
+
     // ── On mount: load user_id from localStorage (set by Dashboard/OAuth flow) ──
     useEffect(() => {
         const storedUserId = localStorage.getItem('user_id') || ''
@@ -741,16 +779,131 @@ export default function TrendRecommendations() {
     }
 
     function handleGenerate(kind, trend, rec) {
-        setGenerated({
-            kind,
-            title: kind === 'script' ? 'Generated Script' : 'Generated Caption',
-            body: kind === 'script' ? buildScript(trend, rec) : buildCaption(trend, rec),
-        })
+        const title = rec?.suggested_title || trend?.topic_name || 'Content Idea'
+        const hook = rec?.hook || null
+
+        if (kind === 'script') {
+            // Use a temporary idea ID for trend-based ideas (not from DB)
+            setShowScriptGen({ ideaId: `trend-${Date.now()}`, title, hook })
+        } else if (kind === 'caption') {
+            setShowCaptionGen({ ideaId: `trend-${Date.now()}`, title })
+        }
     }
 
     function handleAskAI(prompt) {
         setAssistantPrompt(prompt)
         setAssistantReply(buildAssistantReply(prompt, data))
+    }
+
+    // ── New handlers for content suggestion features ──
+
+    async function handleGenerateIdeas(request) {
+        setShowGenerateModal(false)
+        try {
+            const res = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/generate-ideas`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify(request),
+            })
+            const data = await res.json()
+            if (res.ok) {
+                setGenerationJob(data)
+            }
+        } catch (e) {
+            console.error('Failed to start generation:', e)
+        }
+    }
+
+    function handleGenerationComplete(ideas) {
+        setGenerationJob(null)
+        setGeneratedIdeas(ideas)
+        // Refresh the data
+        if (accountId) fetchExisting(accountId)
+    }
+
+    function handleGenerationError(error) {
+        setGenerationJob(null)
+        setError(error)
+    }
+
+    function handleOpenScript(ideaId, title, hook) {
+        setShowScriptGen({ ideaId, title, hook })
+    }
+
+    function handleOpenCaption(ideaId, title) {
+        setShowCaptionGen({ ideaId, title })
+    }
+
+    function handleOpenScheduler(ideaId, title) {
+        setShowScheduler({ ideaId, title })
+    }
+
+    function handleOpenSave(ideaId) {
+        setShowSaveModal(ideaId)
+    }
+
+    function handleOpenMoreOptions(ideaId, title) {
+        setShowMoreOptions({ ideaId, title })
+    }
+
+    async function handleMoreOptionAction(actionId, ideaId) {
+        console.log('Action:', actionId, 'Idea:', ideaId)
+        const baseUrl = `/api/v1/accounts/${encodeURIComponent(accountId)}`
+
+        try {
+            switch (actionId) {
+                case 'improve':
+                    setShowMoreOptions(null)
+                    // Open improve dialog or call API directly
+                    const improveRes = await fetch(`${baseUrl}/ideas/${ideaId}/improve`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ feedback: 'Make it more engaging', aspect: 'full' }),
+                    })
+                    if (improveRes.ok) {
+                        alert('Idea improvement started! Check back in a moment.')
+                    }
+                    break
+                case 'variations':
+                    setShowMoreOptions(null)
+                    const varRes = await fetch(`${baseUrl}/ideas/${ideaId}/variations`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ count: 3 }),
+                    })
+                    if (varRes.ok) {
+                        alert('Variations generation started!')
+                    }
+                    break
+                case 'regenerate':
+                    setShowMoreOptions(null)
+                    const regenRes = await fetch(`${baseUrl}/ideas/${ideaId}/regenerate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({}),
+                    })
+                    if (regenRes.ok) {
+                        alert('Idea regeneration started!')
+                    }
+                    break
+                case 'schedule':
+                    setShowMoreOptions(null)
+                    setShowScheduler({ ideaId, title: 'Content Idea' })
+                    break
+                case 'save':
+                    setShowMoreOptions(null)
+                    setShowSaveModal(ideaId)
+                    break
+                default:
+                    console.log('Unknown action:', actionId)
+            }
+        } catch (e) {
+            console.error('Action failed:', e)
+        }
     }
 
     return (
@@ -776,7 +929,7 @@ export default function TrendRecommendations() {
                             />
                             <kbd className="cs-topbar__kbd">⌘ K</kbd>
                         </form>
-                        <button className="cs-generate-btn" onClick={() => accountId && triggerRefresh(accountId)} disabled={busy}>
+                        <button className="cs-generate-btn" onClick={() => setShowGenerateModal(true)} disabled={busy}>
                             ✨ {busy ? 'Analysing…' : 'Generate New Ideas'}
                         </button>
                         <button className="cs-topbar__refresh-icon" onClick={() => accountId && fetchExisting(accountId)} disabled={busy} title="Refresh">↻</button>
@@ -799,7 +952,7 @@ export default function TrendRecommendations() {
                     )}
 
                     {/* ── Opportunity Banner ── */}
-                    <OpportunityBanner niche={niche} opportunityBullets={data?.opportunity_bullets} onRefresh={() => accountId && triggerRefresh(accountId)} busy={busy} />
+                    <OpportunityBanner niche={niche} opportunityBullets={data?.opportunity_bullets} onRefresh={() => setShowGenerateModal(true)} busy={busy} />
 
                     {/* ── Filter Tabs + Sort ── */}
                     <div className="cs-filters-row">
@@ -841,6 +994,10 @@ export default function TrendRecommendations() {
                             saved={savedIdeas.some(item => item.key === ideaKey(c.trend, c.rec))}
                             onToggleSave={toggleSave}
                             onGenerate={handleGenerate}
+                            onMoreOptions={(trend, rec) => {
+                                const title = rec?.suggested_title || trend?.topic_name || 'Content Idea'
+                                setShowMoreOptions({ ideaId: `trend-${Date.now()}`, title })
+                            }}
                         />
                     ))}
 
@@ -869,6 +1026,26 @@ export default function TrendRecommendations() {
                         >
                             ↻ {visibleCount < allCards.length ? 'Load More Trends' : 'Refresh Trends'}
                         </button>
+                    )}
+
+                    {/* ── Calendar View Toggle ── */}
+                    {accountId && (
+                        <div className="cs-calendar-section">
+                            <button
+                                className="cs-btn cs-btn--secondary"
+                                onClick={() => setShowCalendar(!showCalendar)}
+                            >
+                                {showCalendar ? 'Hide Calendar' : 'View Content Calendar'}
+                            </button>
+                            {showCalendar && (
+                                <CalendarView
+                                    accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
+                                    onSelectItem={(item) => {
+                                        console.log('Selected calendar item:', item)
+                                    }}
+                                />
+                            )}
+                        </div>
                     )}
                 </div>
 
@@ -927,6 +1104,83 @@ export default function TrendRecommendations() {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* ── Generate Ideas Modal ── */}
+            {showGenerateModal && (
+                <GenerateIdeasModal
+                    onClose={() => setShowGenerateModal(false)}
+                    onGenerate={handleGenerateIdeas}
+                />
+            )}
+
+            {/* ── Generation Progress ── */}
+            {generationJob && (
+                <GenerationProgress
+                    jobId={generationJob.job_id}
+                    accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
+                    onComplete={handleGenerationComplete}
+                    onError={handleGenerationError}
+                />
+            )}
+
+            {/* ── Script Generator ── */}
+            {showScriptGen && (
+                <ScriptGenerator
+                    ideaId={showScriptGen.ideaId}
+                    ideaTitle={showScriptGen.title}
+                    hook={showScriptGen.hook}
+                    accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
+                    onClose={() => setShowScriptGen(null)}
+                    onCopy={() => console.log('Script copied')}
+                />
+            )}
+
+            {/* ── Caption Generator ── */}
+            {showCaptionGen && (
+                <CaptionGenerator
+                    ideaId={showCaptionGen.ideaId}
+                    ideaTitle={showCaptionGen.title}
+                    accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
+                    onClose={() => setShowCaptionGen(null)}
+                    onCopy={() => console.log('Caption copied')}
+                />
+            )}
+
+            {/* ── Content Planner ── */}
+            {showScheduler && (
+                <ContentPlanner
+                    ideaId={showScheduler.ideaId}
+                    ideaTitle={showScheduler.title}
+                    onClose={() => setShowScheduler(null)}
+                    onSchedule={(result) => {
+                        console.log('Scheduled:', result)
+                        setShowScheduler(null)
+                    }}
+                />
+            )}
+
+            {/* ── Save Idea Modal ── */}
+            {showSaveModal && (
+                <SaveIdeaModal
+                    ideaId={showSaveModal}
+                    accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
+                    onClose={() => setShowSaveModal(null)}
+                    onSave={(collections) => {
+                        console.log('Saved to collections:', collections)
+                        setShowSaveModal(null)
+                    }}
+                />
+            )}
+
+            {/* ── More Options Menu ── */}
+            {showMoreOptions && (
+                <MoreOptionsMenu
+                    ideaId={showMoreOptions.ideaId}
+                    ideaTitle={showMoreOptions.title}
+                    onAction={handleMoreOptionAction}
+                    onClose={() => setShowMoreOptions(null)}
+                />
             )}
         </>
     )

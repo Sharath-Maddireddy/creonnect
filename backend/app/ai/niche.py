@@ -66,14 +66,24 @@ _SECONDARY_EVIDENCE_KEYWORDS: dict[str, tuple[str, ...]] = {
 def _normalize_text(text: str) -> str:
     return " ".join(text.lower().split())
 
+_keyword_pattern_cache: dict[str, re.Pattern] = {}
+
+def _get_keyword_pattern(keyword: str) -> re.Pattern:
+    """Return a compiled regex pattern for a keyword, caching results."""
+    key = keyword.strip().lower()
+    if key not in _keyword_pattern_cache:
+        escaped = re.escape(key).replace(r"\ ", r"\s+")
+        pattern = re.compile(rf"\b{escaped}(?:s|es)?\b")
+        _keyword_pattern_cache[key] = pattern
+    return _keyword_pattern_cache[key]
+
 
 def _keyword_hit_count(text: str, keywords: tuple[str, ...]) -> int:
     if not text:
         return 0
     hits = 0
     for keyword in keywords:
-        escaped = re.escape(keyword.strip().lower()).replace(r"\ ", r"\s+")
-        pattern = re.compile(rf"\b{escaped}(?:s|es)?\b")
+        pattern = _get_keyword_pattern(keyword)
         if pattern.search(text):
             hits += 1
     return hits
@@ -108,6 +118,21 @@ def _get_model() -> "SentenceTransformer":
                 _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
+_niche_embeddings_cache: np.ndarray | None = None
+_niche_embeddings_lock = Lock()
+
+def _get_niche_embeddings(model: "SentenceTransformer") -> np.ndarray:
+    """Return cached niche embeddings, computing them if necessary."""
+    global _niche_embeddings_cache
+    if _niche_embeddings_cache is None:
+        with _niche_embeddings_lock:
+            if _niche_embeddings_cache is None:
+                _niche_embeddings_cache = model.encode(
+                    NICHES,
+                    normalize_embeddings=True
+                )
+    return _niche_embeddings_cache
+
 
 # -----------------------------
 # Public API
@@ -141,10 +166,7 @@ def detect_creator_niche(
         normalize_embeddings=True
     )
 
-    niche_embeddings = model.encode(
-        NICHES,
-        normalize_embeddings=True
-    )
+    niche_embeddings = _get_niche_embeddings(model)
 
     similarities = np.dot(niche_embeddings, text_embedding)
 
