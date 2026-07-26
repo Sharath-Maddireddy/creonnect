@@ -146,7 +146,7 @@ class RAGEngine:
             return
 
         if not KNOWLEDGE_DIR.exists():
-            print(f"[RAG] Warning: Knowledge directory not found: {KNOWLEDGE_DIR}")
+                        logger.warning("[RAG] Warning: Knowledge directory not found: %s", KNOWLEDGE_DIR)
             self._loaded = True
             return
 
@@ -156,11 +156,11 @@ class RAGEngine:
                 self._embeddings = np.load(EMBEDDINGS_CACHE)
                 with open(CHUNKS_CACHE, "r", encoding="utf-8") as f:
                     self._chunks = json.load(f)
-                print(f"[RAG] Loaded {len(self._chunks)} chunks from cache")
+                logger.info("[RAG] Loaded %d chunks from cache", len(self._chunks))
                 self._loaded = True
                 return
             except Exception as e:
-                print(f"[RAG] Cache load failed, recomputing: {e}")
+                logger.warning("[RAG] Cache load failed, recomputing: %s", e)
 
         # Compute embeddings from source files
         all_chunks = []
@@ -174,7 +174,7 @@ class RAGEngine:
                     if chunk.strip():
                         all_chunks.append(f"[{md_file.stem}] {chunk}")
             except Exception as e:
-                print(f"[RAG] Error loading {md_file}: {e}")
+                logger.warning("[RAG] Error loading %s: %s", md_file, e)
 
         self._chunks = all_chunks
 
@@ -199,13 +199,13 @@ class RAGEngine:
                     json.dump(self._chunks, f)
                 with open(CACHE_META, "w", encoding="utf-8") as f:
                     json.dump(_knowledge_cache_signature(), f, sort_keys=True)
-                print(f"[RAG] Saved {len(all_chunks)} chunks to cache")
+                logger.info("[RAG] Saved %d chunks to cache", len(all_chunks))
             except Exception as e:
-                print(f"[RAG] Failed to save cache: {e}")
-            print(f"[RAG] Loaded {len(all_chunks)} chunks from {len(list(KNOWLEDGE_DIR.glob('*.md')))} files")
+                logger.warning("[RAG] Failed to save cache: %s", e)
+            logger.info("[RAG] Loaded %d chunks from %d files", len(all_chunks), len(list(KNOWLEDGE_DIR.glob('*.md'))))
         else:
             self._embeddings = np.array([])
-            print("[RAG] No knowledge chunks loaded")
+            logger.info("[RAG] No knowledge chunks loaded")
 
         self._loaded = True
 

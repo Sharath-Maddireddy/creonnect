@@ -121,7 +121,7 @@ def compute_growth_score(
     """
 
     followers = profile.followers_count or 0
-    posts_per_week = profile.posts_per_week or profile.posting_frequency_per_week or 0
+    posts_per_week = (profile.posts_per_week if profile.posts_per_week is not None else profile.posting_frequency_per_week if profile.posting_frequency_per_week is not None else 0)
 
     # Calculate average engagement rate by views from posts
     avg_engagement_rate_by_views = _calculate_avg_engagement_rate_by_views(posts)
@@ -139,8 +139,8 @@ def compute_growth_score(
     consistency = _score_consistency(posts_per_week)
     audience = _score_audience_size(followers)
 
-    # Growth trend placeholder (would need historical data)
-    growth_trend = 7
+        # Growth trend — no historical data available, default to 0
+    growth_trend = 0  # TODO: Compute from historical follower growth when available
 
     # Total score
     total = engagement + content + consistency + audience + growth_trend

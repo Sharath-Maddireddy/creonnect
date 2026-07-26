@@ -228,6 +228,8 @@ class LLMClient:
                 duration = time.time() - start_time
                 logger.info(f"[LLM] Request completed in {duration:.2f}s")
                 
+                if not response.choices:
+                    raise LLMClientError("LLM returned empty choices -- no response generated")
                 content = response.choices[0].message.content.strip()
                 try:
                     if _should_log_finetune_dataset():
@@ -355,9 +357,11 @@ class LLMClient:
             response = self._client.embeddings.create(
                 input=text,
                 model=embedding_model,
-            )
+                        )
             duration = time.time() - start_time
             logger.info(f"[LLM] Embedding request completed in {duration:.2f}s")
+            if not response.data:
+                raise LLMClientError("LLM returned empty data -- no embedding generated")
             embedding = response.data[0].embedding
             if len(embedding) != EMBEDDING_DIMENSION:
                 raise LLMClientError(

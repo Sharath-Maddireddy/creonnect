@@ -1,4 +1,5 @@
 from typing import Dict, List
+from backend.app.ai.prompts import format_user_text_block
 
 
 # ------------------------------------------------
@@ -40,19 +41,19 @@ def build_creator_explanation_prompt(context: Dict) -> Dict:
         else "N/A"
     )
 
-    user_message = f"""
+        user_message = f"""
 Creator Summary:
-- Username: {creator['username']}
-- Platform: {creator['platform']}
+- Username: {format_user_text_block(creator.get('username', ''))}
+- Platform: {format_user_text_block(creator.get('platform', ''))}
 - Followers: {creator['followers']:,}
-- Primary niche: {primary_niche}
+- Primary niche: {format_user_text_block(primary_niche)}
 - Growth score: {ai.get('growth_score', 'N/A')}/100
 - Avg engagement by views: {avg_engagement_pct}
 - Views/followers ratio: {ai.get('views_to_followers_ratio', 'N/A')}
 
 Creator Profile:
-- Platform: {creator['platform']}
-- Username: {creator['username']}
+- Platform: {format_user_text_block(creator.get('platform', ''))}
+- Username: {format_user_text_block(creator.get('username', ''))}
 - Followers: {creator['followers']:,}
 - Avg Views: {creator.get('avg_views', 'N/A')}
 - Posting frequency: {creator.get('posting_frequency_per_week', 'N/A')} posts/week
@@ -60,7 +61,7 @@ Creator Profile:
 Key Metrics:
 - Avg Engagement Rate by Views: {avg_engagement_pct}
 - Views to Followers Ratio: {ai.get('views_to_followers_ratio', 'N/A')}
-- Primary Niche: {primary_niche}
+- Primary Niche: {format_user_text_block(primary_niche)}
 - Growth Score: {ai.get('growth_score', 'N/A')}/100
 
 Growth Score Breakdown:
@@ -125,7 +126,7 @@ def _format_post_insights(insights: list) -> str:
             continue
 
         perf = p.get("relative_performance")
-        perf_str = f"{perf}x average" if perf else "N/A"
+        perf_str = f"{perf}x average" if perf is not None else "N/A"
 
         engagement = p.get("engagement_rate_by_views")
         engagement_str = (

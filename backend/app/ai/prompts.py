@@ -40,7 +40,7 @@ def creator_profile_explanation(
 
     return f"""
 You are primarily a {primary} creator, with secondary relevance in {secondary}.
-This classification has a confidence of {confidence * 100:.0f}%.
+This classification has a confidence of {(confidence or 0.0) * 100:.0f}%.
 
 Your overall growth score is {score}/100.
 

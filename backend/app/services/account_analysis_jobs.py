@@ -23,6 +23,7 @@ from backend.app.analytics.account_health_engine import (
     compute_content_type_performance,
 )
 from backend.app.analytics.creator_scoring_engine import calculate_creator_score
+from backend.app.analytics.peer_ranking_engine import build_creator_rankings
 from backend.app.analytics.reel_analysis_service import compute_reel_analysis
 from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
 from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
@@ -1159,7 +1160,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             len(warnings_global),
         )
         _progress(stage="aggregate", done=len(processed_posts), total=max(1, len(posts)))
-        result = analyze_account_health(
+                        result = analyze_account_health(
             posts=processed_posts,
             account_avg_engagement_rate=payload.get("account_avg_engagement_rate"),
             niche_avg_engagement_rate=payload.get("niche_avg_engagement_rate"),
@@ -1207,17 +1208,35 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
 
             creator_intelligence = CreatorIntelligence()
 
-        content_type_performance = _try_nonfatal(
+                content_type_performance = _try_nonfatal(
             "content type performance",
             lambda: compute_content_type_performance(processed_posts),
             account_id,
         )
+
+        # ── Peer rankings ──
+        creator_rankings_raw = _try_nonfatal(
+            "peer rankings",
+            lambda: build_creator_rankings(
+                posts=processed_posts,
+                follower_count=payload.get("follower_count"),
+            ),
+            account_id,
+        )
+        creator_rankings: object = None
+        if isinstance(creator_rankings_raw, dict):
+            from backend.app.domain.account_models import CreatorPeerRankings
+            try:
+                creator_rankings = CreatorPeerRankings(**creator_rankings_raw)
+            except Exception:
+                creator_rankings = None
 
         def _attach_signals() -> None:
             result.creator_intelligence = creator_intelligence
             result.vision_summary = vision_summary
             result.engagement_signals = engagement_signals
             result.content_type_performance = content_type_performance
+            result.creator_rankings = creator_rankings
         _try_nonfatal("attaching account signals", _attach_signals, account_id)
 
         result_payload = result.model_dump(mode="python")

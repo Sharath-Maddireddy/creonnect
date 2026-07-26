@@ -1,6 +1,7 @@
 """Prompt templates for brand campaign features."""
 
 from __future__ import annotations
+from backend.app.ai.prompts import format_user_text_block
 
 
 CAMPAIGN_BRIEF_EXTRACTION_PROMPT = """You are an expert brand marketing campaign strategist. Extract structured campaign requirements from a brand's natural language description of their ideal creator or campaign.
@@ -60,3 +61,12 @@ additional_requirements:
 --- TARGET INPUT TO PARSE ---
 {user_prompt}
 """
+
+
+def sanitize_brand_prompt(user_prompt: str) -> str:
+    """Sanitize user input before inserting into the brand campaign prompt.
+
+    Uses JSON-encoding via format_user_text_block to prevent prompt injection.
+    """
+    return format_user_text_block(user_prompt)
+

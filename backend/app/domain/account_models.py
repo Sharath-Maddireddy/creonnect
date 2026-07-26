@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -355,6 +356,7 @@ class AccountHealthScore(BaseModel):
     vision_summary: AccountVisionSummary | None = None
     engagement_signals: AccountEngagementSignals | None = None
     content_type_performance: ContentTypePerformance | None = None
+    creator_rankings: CreatorPeerRankings | None = None
 
     # --- New dashboard-facing fields (all optional for backward compatibility) ---
     growth_stage: str | None = Field(default=None, description="Human-readable growth stage label derived from AHS band.")
@@ -527,7 +529,9 @@ class CreatorIntelligence(BaseModel):
 
 
 
-AccountHealthScore.model_rebuild()
+
+
+
 
 
 class CreatorEngagementMetrics(BaseModel):
@@ -639,3 +643,205 @@ class CreatorScore(BaseModel):
     ai_predictions: AIFeaturePredictions | None = None
     coverage: AnalysisCoverage | None = None
     confidence: AnalysisConfidence | None = None
+
+
+# ── Advanced Account Analysis Models ──────────────────────────────────────────
+
+
+class RateBreakdown(BaseModel):
+    """Breakdown of rate calculation components."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_rate: float = Field(default=0.0, description="Base rate from engagement rate")
+    engagement_component: float = Field(default=0.0, description="Rate from engagement signals")
+    follower_component: float = Field(default=0.0, description="Multiplier from follower count")
+    niche_component: float = Field(default=0.0, description="Niche market multiplier")
+    quality_premium: float = Field(default=0.0, description="Quality/safety premium")
+
+
+class RevenueProjections(BaseModel):
+    """Revenue projections based on deal volume."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    monthly_deals_4: tuple[float, float] = Field(default=(0.0, 0.0), description="Revenue with 4 deals/month")
+    monthly_deals_8: tuple[float, float] = Field(default=(0.0, 0.0), description="Revenue with 8 deals/month")
+    annual_potential: tuple[float, float] = Field(default=(0.0, 0.0), description="Annual revenue potential")
+
+
+class RateRecommendation(BaseModel):
+    """Rate recommendation with optimization tips."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_rate: float = Field(default=0.0, description="Base rate from engagement")
+    recommended_rate: float = Field(default=0.0, description="Recommended rate per post")
+    rate_min: float = Field(default=0.0, description="Minimum recommended rate")
+    rate_max: float = Field(default=0.0, description="Maximum recommended rate")
+    cpm_estimate: float = Field(default=0.0, description="Estimated CPM")
+    breakdown: RateBreakdown = Field(default_factory=RateBreakdown)
+    optimization_tips: list[str] = Field(default_factory=list)
+    revenue_projections: RevenueProjections = Field(default_factory=RevenueProjections)
+
+
+class RiskLevel(str, Enum):
+    """Risk severity levels."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class RiskCategory(str, Enum):
+    """Risk categories for assessment."""
+
+    BRAND_SAFETY = "brand_safety"
+    ENGAGEMENT_DECLINE = "engagement_decline"
+    GROWTH_SLOWDOWN = "growth_slowdown"
+    CONTENT_PERFORMANCE = "content_performance"
+    AUDIENCE_QUALITY = "audience_quality"
+
+
+class Risk(BaseModel):
+    """Individual risk item."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    category: RiskCategory
+    level: RiskLevel
+    title: str
+    description: str
+    metric_affected: str
+    current_value: float | None = None
+    previous_value: float | None = None
+    change_percentage: float | None = None
+    recommended_actions: list[str] = Field(default_factory=list)
+
+
+class RiskAssessment(BaseModel):
+    """Complete risk assessment for an account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    overall_risk_level: RiskLevel = Field(default=RiskLevel.LOW)
+    risks: list[Risk] = Field(default_factory=list)
+    risk_count: int = Field(default=0, ge=0)
+    recommended_actions: list[str] = Field(default_factory=list)
+
+
+class CompetitivePercentile(BaseModel):
+    """Percentile ranking for a metric."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: float = Field(default=0.0, description="Your metric value")
+    percentile: float = Field(default=50.0, ge=0.0, le=100.0, description="Your percentile rank")
+    segment_average: float = Field(default=0.0, description="Average for your segment")
+    segment_count: int = Field(default=0, description="Number of accounts in segment")
+
+
+class CompetitiveBenchmark(BaseModel):
+    """Competitive benchmarking data."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    segment_name: str = Field(default="", description="Your competitor segment")
+    sample_size: int = Field(default=0, description="Number of accounts in segment")
+    engagement_rate: CompetitivePercentile = Field(default_factory=CompetitivePercentile)
+    content_quality: CompetitivePercentile = Field(default_factory=CompetitivePercentile)
+    posting_frequency: CompetitivePercentile = Field(default_factory=CompetitivePercentile)
+    brand_safety: CompetitivePercentile = Field(default_factory=CompetitivePercentile)
+    overall_percentile: float = Field(default=50.0, ge=0.0, le=100.0)
+    strengths_vs_peers: list[str] = Field(default_factory=list)
+    opportunities_vs_peers: list[str] = Field(default_factory=list)
+
+
+class BrandReadinessBreakdown(BaseModel):
+    """Detailed brand readiness score breakdown."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    overall_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    overall_label: str = Field(default="Early Stage")
+    content_quality_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    brand_safety_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    engagement_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    consistency_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    niche_clarity_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    audience_quality_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    percentile_rank: float = Field(default=50.0, ge=0.0, le=100.0)
+    improvement_opportunities: list[str] = Field(default_factory=list)
+
+
+class ImprovementOpportunity(BaseModel):
+    """Specific improvement opportunity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    area: str
+    current_score: float
+    potential_increase: float
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    estimated_timeframe: str = ""
+    specific_actions: list[str] = Field(default_factory=list)
+
+
+# -- Peer Ranking Models --
+
+
+class TierThreshold(BaseModel):
+    """A single threshold bucket for a peer-ranking metric."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(default="", description="Label for this tier, e.g. 'Top 10%'.")
+    range_label: str = Field(default="", description="Human-friendly range like '>45k'.")
+    upper_bound: float | None = Field(default=None, description="Upper bound (exclusive) or null.")
+    lower_bound: float | None = Field(default=None, description="Lower bound (inclusive) or null.")
+    is_creator_tier: bool = Field(default=False, description="True when the creator falls in this bucket.")
+
+
+class PeerRankingMetric(BaseModel):
+    """Percentile ranking for a single metric vs peer cohort."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric_key: str = Field(default="", description="Internal key: reach, engagement_rate, etc.")
+    metric_label: str = Field(default="", description="Display label for the metric.")
+    creator_value: float = Field(default=0.0, description="The creator's actual value.")
+    percentile: float = Field(default=50.0, ge=0.0, le=100.0, description="Estimated percentile rank.")
+    tier_label: str = Field(default="", description="Human-readable tier like 'Top 25%'.")
+    cohort_average: float = Field(default=0.0, description="Typical average for this follower tier.")
+    thresholds: list[TierThreshold] = Field(default_factory=list, description="3-tier threshold buckets.")
+
+
+class AudienceScorePercentile(BaseModel):
+    """Percentile ranking for the audience relevance / quality score."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    score: float = Field(default=50.0, ge=0.0, le=100.0, description="Audience score value.")
+    percentile: float = Field(default=50.0, ge=0.0, le=100.0, description="Percentile rank.")
+    tier_label: str = Field(default="", description="Human-readable tier.")
+    cohort_average: float = Field(default=50.0, description="Typical average for this tier.")
+    thresholds: list[TierThreshold] = Field(default_factory=list, description="3-tier threshold buckets.")
+
+
+class CreatorPeerRankings(BaseModel):
+    """Complete peer rankings result for a creator."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    rankings: list[PeerRankingMetric] = Field(default_factory=list, description="Per-metric rankings.")
+    audience_score: AudienceScorePercentile = Field(default_factory=AudienceScorePercentile)
+    best_stat_key: str = Field(default="", description="Which metric ranks highest.")
+    comparison_context: str = Field(default="", description="Human-readable comparison context sentence.")
+    fallback_used: bool = Field(default=False, description="True when deterministic fallback was used.")
+
+
+AccountHealthScore.model_rebuild()
+
+
