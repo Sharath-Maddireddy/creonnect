@@ -50,6 +50,7 @@ from backend.app.services.content_suggestion_jobs import (
     get_idea_generation_status,
 )
 from backend.app.utils.logger import logger
+from backend.app.utils.env import is_feature_enabled
 from backend.app.utils.telemetry import emit_counter, emit_histogram, emit_event, timed
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["content-suggestions"])
@@ -65,6 +66,8 @@ async def start_idea_generation(
     db: AsyncSession = Depends(get_db),
 ) -> GenerateIdeasResponse:
     """Start idea generation job."""
+    if not is_feature_enabled("TREND_RECOMMENDATIONS_V2"):
+        raise HTTPException(status_code=503, detail="Trend Recommendations V2 is not yet available. Check back soon.")
     logger.info("[ContentSuggestionRoutes] Starting idea generation for account=%s", account_id)
     emit_event("trend_generate_clicked", account_id=account_id, properties={"count": request.count, "content_type": request.content_type})
     emit_counter("trends_generation_started", account_id=account_id)
@@ -200,6 +203,8 @@ async def generate_script_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> GenerateScriptResponse:
     """Generate script for an idea."""
+    if not is_feature_enabled("TREND_RECOMMENDATIONS_V2"):
+        raise HTTPException(status_code=503, detail="Trend Recommendations V2 is not yet available. Check back soon.")
     logger.info("[ContentSuggestionRoutes] Generating script for idea=%s", request.idea_id)
 
     # Fetch the idea to get title and hook
@@ -240,6 +245,8 @@ async def generate_caption_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> GenerateCaptionResponse:
     """Generate caption for an idea."""
+    if not is_feature_enabled("TREND_RECOMMENDATIONS_V2"):
+        raise HTTPException(status_code=503, detail="Trend Recommendations V2 is not yet available. Check back soon.")
     logger.info("[ContentSuggestionRoutes] Generating caption for idea=%s", request.idea_id)
 
     # Fetch the idea to get title, hook, and script context
@@ -542,6 +549,8 @@ async def schedule_idea_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Schedule idea to planner."""
+    if not is_feature_enabled("TREND_RECOMMENDATIONS_V2"):
+        raise HTTPException(status_code=503, detail="Trend Recommendations V2 is not yet available. Check back soon.")
     logger.info("[ContentSuggestionRoutes] Scheduling idea=%s for %s %s", request.idea_id, request.scheduled_date, request.scheduled_time)
     emit_event("planner_schedule_clicked", account_id=account_id, properties={"idea_id": request.idea_id, "platform": request.platform, "scheduled_at": f"{request.scheduled_date}T{request.scheduled_time}"})
 

@@ -10,12 +10,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from backend.app.utils.env import load_app_env
+from backend.app.utils.env import is_production_environment, load_app_env
 
 load_app_env(override=True)
 
 from backend.app.api.account_analysis_routes import router as account_analysis_router
 from backend.app.api.content_suggestion_routes import router as content_suggestion_router
+from backend.app.api.monitoring_routes import router as monitoring_router
 from backend.app.api.advanced_analysis_routes import router as advanced_analysis_router
 from backend.app.api.campaign_routes import router as campaign_router
 from backend.app.api.dashboard import router as dashboard_router
@@ -33,16 +34,13 @@ from backend.app.utils.logger import logger
 _DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 
-def _is_production_environment() -> bool:
-    return os.getenv("ENV", "dev").lower() not in {"dev", "development", "test"}
-
 
 def _resolve_session_secret() -> str:
     configured_secret = (os.getenv("CREONNECT_SESSION_SECRET") or "").strip()
     if configured_secret:
         return configured_secret
 
-    if _is_production_environment():
+    if is_production_environment():
         raise RuntimeError("CREONNECT_SESSION_SECRET must be set in production environments")
 
     logger.warning("CREONNECT_SESSION_SECRET is not set; using ephemeral secret (dev only).")
@@ -66,7 +64,7 @@ def _validate_internal_hmac_secret_configuration() -> bool:
             "CREONNECT_INTERNAL_HMAC_SECRET is not set. gRPC internal HMAC auth will be disabled "
             "until this environment variable is configured."
         )
-        if _is_production_environment():
+        if is_production_environment():
             raise RuntimeError(message)
         logger.error(message)
         return False
@@ -80,7 +78,7 @@ def _validate_internal_hmac_secret_configuration() -> bool:
     }
     if secret.lower() in weak_values:
         message = "CREONNECT_INTERNAL_HMAC_SECRET is set to a placeholder/weak value."
-        if _is_production_environment():
+        if is_production_environment():
             raise RuntimeError(message)
         logger.error(message)
         return False
@@ -96,7 +94,7 @@ def _validate_brand_api_key_configuration() -> bool:
         "BRAND_API_KEY is not set. Brand-protected endpoints will reject requests until this "
         "environment variable is configured."
     )
-    if _is_production_environment():
+    if is_production_environment():
         raise RuntimeError(message)
 
     logger.error(message)
@@ -136,7 +134,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
     same_site="lax",
-    https_only=_is_production_environment(),
+    https_only=is_production_environment(),
 )
 
 # Register routers
@@ -151,9 +149,10 @@ app.include_router(instagram_auth_router)
 app.include_router(trend_router)
 app.include_router(creo_intelligence_router)
 app.include_router(content_suggestion_router)
+app.include_router(monitoring_router)
 
 # Dev-only: session bypass for testing without Instagram OAuth
-if not _is_production_environment():
+if not is_production_environment():
     from backend.app.api.dev_auth_routes import router as dev_auth_router
     app.include_router(dev_auth_router)
     logger.info("[Dev] /api/dev/* routes registered (non-production only)")
