@@ -8,6 +8,7 @@ import ContentPlanner from '../components/ContentPlanner'
 import CalendarView from '../components/CalendarView'
 import SaveIdeaModal from '../components/SaveIdeaModal'
 import MoreOptionsMenu from '../components/MoreOptionsMenu'
+import IdeaDetailDrawer from '../components/IdeaDetailDrawer'
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 // All calls go through Vite proxy (/api → http://localhost:8000)
@@ -249,7 +250,7 @@ function FilterTabs({ active, onChange }) {
 }
 
 // ─── Trend + Rec combined card ─────────────────────────────────────────────────
-function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate, onMoreOptions }) {
+function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate, onMoreOptions, onCardClick }) {
     const m = MOMENTUM[trend?.momentum] || MOMENTUM.rising
     const t = TREND_TYPE[trend?.trend_type] || TREND_TYPE.topic
     // Use real opportunity_score from backend, fallback to momentum-based
@@ -258,7 +259,7 @@ function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate, on
     const diff = difficultyMap[rec?.difficulty] || null
     const contentStyle = rec?.content_style || t.label
     return (
-        <div className="cs-card">
+        <div className="cs-card" onClick={onCardClick} style={onCardClick ? { cursor: 'pointer' } : undefined}>
             {/* Left thumbnail */}
             <div className="cs-card__thumb">
                 <div className={`cs-card__thumb-inner cs-card__thumb-inner--${t.cls}`}>
@@ -596,6 +597,7 @@ export default function TrendRecommendations() {
     const [showScheduler, setShowScheduler] = useState(null) // { ideaId, title }
     const [showSaveModal, setShowSaveModal] = useState(null) // ideaId
     const [showMoreOptions, setShowMoreOptions] = useState(null) // { ideaId, title }
+    const [showIdeaDetail, setShowIdeaDetail] = useState(null) // full idea object
     const [showCalendar, setShowCalendar] = useState(false)
     const [ideaPage, setIdeaPage] = useState(1)
     const [ideaLoading, setIdeaLoading] = useState(false)
@@ -1000,7 +1002,7 @@ export default function TrendRecommendations() {
 
                     {visibleCards.map((c, i) => (
                         <SuggestionCard
-                            key={`${c.trend?.topic_name || i}-${c.rec?.suggested_title || i}`}
+                                                        key={`${c.trend?.topic_name || i}-${c.rec?.suggested_title || i}`}
                             trend={c.trend}
                             rec={c.rec}
                             index={i}
@@ -1011,6 +1013,7 @@ export default function TrendRecommendations() {
                                 const title = rec?.suggested_title || trend?.topic_name || 'Content Idea'
                                 setShowMoreOptions({ ideaId: `trend-${Date.now()}`, title })
                             }}
+                            onCardClick={() => setShowIdeaDetail({ ...c.rec, ...c.trend, id: `trend-${i}` })}
                         />
                     ))}
 
@@ -1249,11 +1252,26 @@ export default function TrendRecommendations() {
 
             {/* ── More Options Menu ── */}
             {showMoreOptions && (
-                <MoreOptionsMenu
+                                <MoreOptionsMenu
                     ideaId={showMoreOptions.ideaId}
                     ideaTitle={showMoreOptions.title}
                     onAction={handleMoreOptionAction}
                     onClose={() => setShowMoreOptions(null)}
+                />
+            )}
+
+            {/* ── Screen 1: Idea Detail Drawer ── */}
+            {showIdeaDetail && (
+                <IdeaDetailDrawer
+                    idea={showIdeaDetail}
+                    accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
+                    onClose={() => setShowIdeaDetail(null)}
+                    onCopy={(idea) => {
+                        // Save to clipboard or trigger save flow
+                        const text = `${idea.title || idea.suggested_title}\nHook: ${idea.hook || ''}\nDescription: ${idea.description || idea.rationale || ''}`
+                        navigator.clipboard?.writeText(text)
+                        alert('Idea copied to clipboard!')
+                    }}
                 />
             )}
         </>
