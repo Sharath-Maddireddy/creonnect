@@ -49,6 +49,14 @@ export default function ContentPlanner({ ideaId, ideaTitle, accountUrl, onClose,
             } else if (res.ok) {
                 onSchedule(data)
                 onClose()
+            } else {
+                const errJson = await res.json().catch(() => ({}))
+                const errMsg = errJson.detail || `Schedule failed (status ${res.status})`
+                if (res.status === 404) {
+                    alert('Idea not found in database. Use "Generate New Ideas" first to create a persisted idea, then schedule it.')
+                } else {
+                    alert(`Schedule failed: ${errMsg}`)
+                }
             }
         } catch (e) {
             console.error('Schedule failed:', e)

@@ -336,10 +336,10 @@ function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate, on
                 </div>
             </div>
 
-            {/* Actions col */}
+                        {/* Actions col */}
             <div className="cs-card__actions">
-                <button className="cs-action-btn cs-action-btn--primary" onClick={() => onGenerate('script', trend, rec)}>Generate Script</button>
-                <button className="cs-action-btn cs-action-btn--ghost" onClick={() => onGenerate('caption', trend, rec)}>Generate Caption</button>
+                <button className="cs-action-btn cs-action-btn--primary" onClick={() => onGenerate('script', trend, rec)} title="Generate New Ideas first to unlock full script generation">Generate Script</button>
+                <button className="cs-action-btn cs-action-btn--ghost" onClick={() => onGenerate('caption', trend, rec)} title="Generate New Ideas first to unlock full caption generation">Generate Caption</button>
                 <button
                     className={`cs-action-btn cs-action-btn--save${saved ? ' cs-action-btn--saved' : ''}`}
                     onClick={() => onToggleSave(trend, rec)}
@@ -800,7 +800,7 @@ export default function TrendRecommendations() {
         async function handleGenerateIdeas(request) {
         setShowGenerateModal(false)
         try {
-            const res = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/ideas/generate`, {
+            const res = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/generate-ideas`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',

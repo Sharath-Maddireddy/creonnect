@@ -28,7 +28,7 @@ export default function CaptionGenerator({ ideaId, ideaTitle, hook, accountUrl, 
         setError(null)
         try {
             const baseUrl = accountUrl || '/api/v1/accounts/placeholder'
-            const res = await fetch(`${baseUrl}/ideas/${encodeURIComponent(ideaId)}/caption`, {
+            const res = await fetch(`${baseUrl}/trends/generate-caption`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -47,7 +47,12 @@ export default function CaptionGenerator({ ideaId, ideaTitle, hook, accountUrl, 
                 setActiveCaption(data.captions[0])
             } else {
                 const err = await res.json().catch(() => ({ detail: 'Generation failed' }))
-                setError(err.detail || 'Failed to generate caption')
+                const errMsg = err.detail || `Failed to generate caption (status ${res.status})`
+                if (res.status === 404) {
+                    setError('Idea not found in database. Use "Generate New Ideas" first to create a persisted idea, then generate a caption from it.')
+                } else {
+                    setError(errMsg)
+                }
             }
         } catch (e) {
             console.error('Caption generation failed:', e)
