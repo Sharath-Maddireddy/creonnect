@@ -379,3 +379,127 @@ class AssistantResponse(BaseModel):
 
     reply: str
     suggested_ideas: list[dict[str, Any]] | None = None
+
+
+# ── Screen 2: Script Block Improvement ───────────────────────────────────────
+
+
+class ImproveScriptBlockRequest(BaseModel):
+    """Improve a single scene block in a script."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    block_id: str = Field(description="Scene block ID (e.g., 'hook', 'scene_1', 'cta')")
+    text: str = Field(description="Current text of the block")
+    tone: str = Field(default="friendly")
+    instruction: str = Field(default="improve", description="Improvement instruction")
+
+
+class ImproveScriptBlockResponse(BaseModel):
+    """Improved script block."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    block_id: str
+    improved_text: str
+
+
+# ── Screen 3: Caption Variants ────────────────────────────────────────────────
+
+
+class CaptionVariantsRequest(BaseModel):
+    """Generate caption variants."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    count: int = Field(default=3, ge=1, le=5)
+    styles: list[str] | None = Field(default=None, description="Caption styles: friendly, funny, professional, etc.")
+
+
+class CaptionVariant(BaseModel):
+    """A single caption variant."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    style: str
+    caption_text: str
+    hashtags: list[str]
+    character_count: int
+
+
+class CaptionVariantsResponse(BaseModel):
+    """Multiple caption variants."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    idea_id: str
+    variants: list[CaptionVariant]
+
+
+# ── Screen 4: Thumbnails ──────────────────────────────────────────────────────
+
+
+class ThumbnailOption(BaseModel):
+    """A thumbnail concept option."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    image_url: str
+    label: str
+    prompt: str
+    resolution: str = "1080x1080"
+
+
+class ThumbnailsResponse(BaseModel):
+    """Generated thumbnails."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    idea_id: str
+    thumbnails: list[ThumbnailOption]
+
+
+# ── Screen 5: Multi-Collection Save ───────────────────────────────────────────
+
+
+class MultiSaveRequest(BaseModel):
+    """Save idea to multiple collections."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    collection_ids: list[str] = Field(min_length=1)
+
+
+class MultiSaveResponse(BaseModel):
+    """Multi-save result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    saved_to: list[str]
+    idea_id: str
+
+
+# ── Screen 9: Niche Details ───────────────────────────────────────────────────
+
+
+class SubNiche(BaseModel):
+    """A sub-niche tag."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    confidence: float
+
+
+class NicheDetails(BaseModel):
+    """Full niche analysis for a creator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    primary_niche: str
+    sub_niches: list[SubNiche]
+    confidence_score: float
+    explanation: str
+    content_style_summary: str
+    creator_strengths: list[str]
