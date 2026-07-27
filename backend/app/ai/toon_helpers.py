@@ -68,7 +68,7 @@ def toon_parse_list(text: str, root_key: str, model_cls: Type[T]) -> list[T]:
     results: list[T] = []
     for item in raw_items:
         if not isinstance(item, dict):
-            continue
+                        continue
         try:
             try:
                 instance = model_cls.model_validate(item)  # type: ignore[attr-defined]
@@ -77,6 +77,8 @@ def toon_parse_list(text: str, root_key: str, model_cls: Type[T]) -> list[T]:
             results.append(instance)
         except Exception as exc:
             from backend.app.utils.logger import logger
+            from backend.app.utils.telemetry import emit_counter
             logger.warning("toon_parse_list: skipped invalid item for %s: %s", model_cls.__name__, exc)
+            emit_counter("toon_parse_failure", tags={"model": model_cls.__name__})
 
     return results

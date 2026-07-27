@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,10 +21,36 @@ from backend.app.services.creator_trend_service import CreatorTrendService
 from backend.app.services.draft_history_service import DraftHistoryContext, load_draft_history_context
 from backend.app.services.trend_cache import TrendAnalysisCache
 from backend.app.services.trend_queue_helper import get_trend_analysis_job_status
+from backend.app.utils.env import is_production_environment
 from backend.app.utils.logger import logger
+from backend.app.utils.telemetry import emit_counter, emit_histogram, timed
 
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["trends"])
+
+_DEFAULT_TRENDS_REFRESH_LIMIT = 3
+_HIGH_TEST_REFRESH_LIMIT = 100
+
+
+def _get_trends_refresh_limit() -> int:
+    configured = (os.getenv("TREND_REFRESH_RATE_LIMIT") or "").strip()
+    if configured:
+        try:
+            parsed = int(configured)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            logger.warning("[TrendRoutes] Invalid TREND_REFRESH_RATE_LIMIT=%r; using default.", configured)
+
+    allow_high_limit = (os.getenv("TREND_REFRESH_ALLOW_HIGH_LIMIT_FOR_TESTS") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if allow_high_limit and not is_production_environment():
+        return _HIGH_TEST_REFRESH_LIMIT
+    return _DEFAULT_TRENDS_REFRESH_LIMIT
 
 
 def _fallback_history_context(account_id: str) -> DraftHistoryContext:
@@ -43,6 +70,12 @@ async def get_trends(
     db: AsyncSession = Depends(get_db),
 ) -> TrendAnalysisResult | dict:
     """Return trend analysis and recommendations from DB, or trigger refresh if missing."""
+    with timed("trends_endpoint_latency_seconds", account_id=account_id, operation="get"):
+        result = await _get_trends_inner(account_id, db)
+    return result
+
+
+async def _get_trends_inner(account_id: str, db: AsyncSession) -> TrendAnalysisResult | dict:
     try:
         row = await db.get(CreatorTrendResult, account_id)
     except Exception:
@@ -80,7 +113,10 @@ async def refresh_trends(
 ) -> TrendAnalysisResult | dict:
     """Force a recalculation of trends. Limited to 1 per 30 minutes."""
 
+    degraded_reasons: list[str] = []
+
     # 1. Rate limit
+    refresh_limit = _get_trends_refresh_limit()
     try:
         rate_count = await aincr_with_expire(f"rate_limit:trends_refresh:{account_id}", 1800)
     except Exception:
@@ -89,9 +125,10 @@ async def refresh_trends(
             account_id,
             exc_info=True,
         )
+        degraded_reasons.append("rate_limit_unavailable")
         rate_count = 1
 
-    if rate_count > 100:  # Temporarily increased to 100 for UI testing
+    if rate_count > refresh_limit:
         logger.warning(
             "[TrendRoutes] Rate limit exceeded for account=%s — returning 429",
             account_id,
@@ -111,6 +148,7 @@ async def refresh_trends(
             exc_info=True,
         )
         history_context = _fallback_history_context(account_id)
+        degraded_reasons.append("history_context_fallback")
 
     posts = history_context.historical_posts
 
@@ -148,6 +186,7 @@ async def refresh_trends(
             exc_info=True,
         )
         creator_intelligence = CreatorIntelligence()
+        degraded_reasons.append("creator_intelligence_fallback")
 
     # Run service
     service = CreatorTrendService()
@@ -207,6 +246,14 @@ async def refresh_trends(
             account_id,
             exc_info=True,
         )
+
+    if degraded_reasons:
+        payload = result.model_dump(mode="python")
+        payload["_meta"] = {
+            "degraded": True,
+            "degraded_reasons": degraded_reasons,
+        }
+        return payload
 
     return result
 

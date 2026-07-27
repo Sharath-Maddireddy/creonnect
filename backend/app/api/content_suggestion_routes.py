@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +50,7 @@ from backend.app.services.content_suggestion_jobs import (
     get_idea_generation_status,
 )
 from backend.app.utils.logger import logger
+from backend.app.utils.telemetry import emit_counter, emit_histogram, emit_event, timed
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["content-suggestions"])
 
@@ -65,6 +66,8 @@ async def start_idea_generation(
 ) -> GenerateIdeasResponse:
     """Start idea generation job."""
     logger.info("[ContentSuggestionRoutes] Starting idea generation for account=%s", account_id)
+    emit_event("trend_generate_clicked", account_id=account_id, properties={"count": request.count, "content_type": request.content_type})
+    emit_counter("trends_generation_started", account_id=account_id)
     job_id = await asyncio.to_thread(enqueue_idea_generation, account_id, request)
     return GenerateIdeasResponse(
         job_id=job_id,
@@ -83,6 +86,12 @@ async def get_generation_status(
     status = await asyncio.to_thread(get_idea_generation_status, job_id)
     if status.get("status") == "not_found":
         raise HTTPException(status_code=404, detail="Job not found")
+    if status.get("status") == "completed":
+        emit_event("trend_generate_succeeded", account_id=account_id, properties={"job_id": job_id, "idea_count": len(status.get("ideas", []))})
+        emit_counter("trends_generation_completed", account_id=account_id)
+    elif status.get("status") == "failed":
+        emit_event("trend_generate_failed", account_id=account_id, properties={"job_id": job_id, "error": status.get("error")})
+        emit_counter("trends_generation_failed", account_id=account_id)
     return status
 
 
@@ -381,7 +390,7 @@ async def update_idea_endpoint(
     return {"id": idea.id, "status": "updated"}
 
 
-@router.delete("/{account_id}/ideas/{idea_id}", status_code=204)
+@router.delete("/{account_id}/ideas/{idea_id}", status_code=204, response_class=Response, response_model=None)
 async def delete_idea_endpoint(
     account_id: str,
     idea_id: str,
@@ -397,6 +406,7 @@ async def delete_idea_endpoint(
 
     idea.status = "deleted"
     await db.commit()
+    return Response(status_code=204)
 
 
 # ── Collections ────────────────────────────────────────────────────────────────
@@ -483,7 +493,7 @@ async def add_idea_to_collection_endpoint(
     return {"status": "added"}
 
 
-@router.delete("/{account_id}/collections/{collection_id}/ideas/{idea_id}", status_code=204)
+@router.delete("/{account_id}/collections/{collection_id}/ideas/{idea_id}", status_code=204, response_class=Response, response_model=None)
 async def remove_idea_from_collection_endpoint(
     account_id: str,
     collection_id: str,
@@ -503,6 +513,7 @@ async def remove_idea_from_collection_endpoint(
 
     await db.delete(junction)
     await db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{account_id}/ideas/{idea_id}/collections")
@@ -532,6 +543,7 @@ async def schedule_idea_endpoint(
 ) -> dict[str, Any]:
     """Schedule idea to planner."""
     logger.info("[ContentSuggestionRoutes] Scheduling idea=%s for %s %s", request.idea_id, request.scheduled_date, request.scheduled_time)
+    emit_event("planner_schedule_clicked", account_id=account_id, properties={"idea_id": request.idea_id, "platform": request.platform, "scheduled_at": f"{request.scheduled_date}T{request.scheduled_time}"})
 
     from datetime import datetime
 
@@ -580,10 +592,11 @@ async def schedule_idea_endpoint(
         platform=request.platform,
         scheduled_at=scheduled_at,
         conflict_acknowledged=bool(conflicts) and request.conflict_resolution == "warn",
-    )
+        )
     db.add(item)
     await db.commit()
 
+    emit_event("planner_schedule_succeeded", account_id=account_id, properties={"idea_id": request.idea_id, "scheduled_at": item.scheduled_at.isoformat()})
     return {
         "status": "scheduled",
         "scheduled_item": {
@@ -595,7 +608,7 @@ async def schedule_idea_endpoint(
     }
 
 
-@router.delete("/{account_id}/planner/schedule/{item_id}", status_code=204)
+@router.delete("/{account_id}/planner/schedule/{item_id}", status_code=204, response_class=Response, response_model=None)
 async def unschedule_item_endpoint(
     account_id: str,
     item_id: str,
@@ -614,6 +627,7 @@ async def unschedule_item_endpoint(
 
     await db.delete(item)
     await db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{account_id}/planner")

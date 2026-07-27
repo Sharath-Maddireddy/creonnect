@@ -298,7 +298,12 @@ ideas
 """
 
     try:
-        llm = LLMClient(temperature=0.8, max_tokens=2000)
+        llm = LLMClient(
+            temperature=0.8,
+            max_tokens=2000,
+            timeout=300,      # reasoning models (gpt-5.6-terra) think before responding — can take 2-5 mins
+            max_retries=0,    # no silent retry — user can retry manually from UI
+        )
 
         # Run async LLM call in sync context
         loop = asyncio.new_event_loop()
@@ -665,8 +670,8 @@ def get_idea_generation_status(job_id: str) -> dict[str, Any]:
         }
 
         if job.status == "completed":
-            # Fetch generated ideas
-            stmt = select(Idea).where(Idea.generation_metadata["job_id"].astext == job_id)
+            # Fetch generated ideas (match by generation_job_id column, not JSON field)
+            stmt = select(Idea).where(Idea.generation_job_id == job_id)
             ideas = list(db.scalars(stmt).all())
             result["ideas"] = [
                 {

@@ -24,6 +24,7 @@ from backend.app.domain.trend_models import (
 )
 from backend.app.utils.logger import logger
 from backend.app.utils.number_utils import safe_float as _safe_float
+from backend.app.utils.telemetry import emit_counter
 
 
 def _clean_text(value: object, *, fallback: str = "") -> str:
@@ -515,6 +516,7 @@ async def generate_trend_recommendations(
 
     except Exception as e:
         logger.exception("generate_trend_recommendations failed: %s", e)
+        emit_counter("trends_fallback_used", tags={"reason": type(e).__name__})
         fallback_recs = _fallback_recommendations(creator_intelligence, trends)
         content_gaps = _detect_content_gaps(posts, trends) if posts else []
         daily_insights = _compute_daily_insights(posts, heatmap or [], trends) if posts else None

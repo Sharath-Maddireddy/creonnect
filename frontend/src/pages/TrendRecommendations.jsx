@@ -941,11 +941,18 @@ export default function TrendRecommendations() {
                         <button className="cs-topbar__refresh-icon" onClick={() => accountId && fetchExisting(accountId)} disabled={busy} title="Refresh">↻</button>
                     </div>
 
-                    {/* ── Error ── */}
+                                        {/* ── Error ── */}
                     {error && (
                         <div className="cs-error-bar">
                             <span>⚠️ {error}</span>
                             <button onClick={() => accountId && fetchExisting(accountId)}>Retry</button>
+                        </div>
+                    )}
+
+                    {/* ── Degraded mode indicator ── */}
+                    {data?._meta?.degraded && (
+                        <div className="cs-degraded-bar">
+                            <span>🔸 Limited data available. Some insights may be incomplete. ({data._meta.degraded_reasons?.join(', ') || 'unknown reason'})</span>
                         </div>
                     )}
 
