@@ -116,28 +116,29 @@ def compute_visual_quality_score(vision_payload: dict[str, Any] | None) -> Visua
     """Compute deterministic S1 visual quality from normalized vision payload."""
     signal = _first_signal(vision_payload)
     raw_visual_quality = signal.get("visual_quality_score")
-    if isinstance(raw_visual_quality, dict):
-        composition = _normalize_subscore(raw_visual_quality.get("composition"))
-        lighting = _normalize_subscore(raw_visual_quality.get("lighting"))
-        subject_clarity = _normalize_subscore(raw_visual_quality.get("subject_clarity"))
-        aesthetic_quality = _normalize_subscore(raw_visual_quality.get("aesthetic_quality"))
-        total = (composition * 0.30 + lighting * 0.20 + subject_clarity * 0.30 + aesthetic_quality * 0.20) * 5.0
-        total = _clamp(total, 0.0, 50.0)
-        return VisualQualityScore(
-            composition=composition,
-            lighting=lighting,
-            subject_clarity=subject_clarity,
-            aesthetic_quality=aesthetic_quality,
-            total=total,
-            notes=["S1 derived from vision visual_quality_score."],
-        )
     objects = _normalize_objects(signal)
     dominant_focus = _resolve_focus(signal)
     hook_strength_score = _normalize_hook_strength(signal.get("hook_strength_score"))
 
     notes: list[str] = []
 
-    composition = 3.5
+    if isinstance(raw_visual_quality, dict):
+        composition = _normalize_subscore(raw_visual_quality.get("composition"), default=3.5)
+        lighting = _normalize_subscore(raw_visual_quality.get("lighting"), default=6.0)
+        subject_clarity = _normalize_subscore(raw_visual_quality.get("subject_clarity"), default=4.0)
+        aesthetic_quality = _normalize_subscore(raw_visual_quality.get("aesthetic_quality"), default=hook_strength_score * 10.0)
+        notes.append("S1 derived from structured vision visual_quality_score and normalized through the shared scoring path.")
+    else:
+        composition = 3.5
+        lighting = _map_quality_signal_to_subscore(signal.get("lighting_quality"), baseline=6.0)
+        subject_clarity = _map_quality_signal_to_subscore(signal.get("subject_clarity"), baseline=4.0)
+        explicit_aesthetic = signal.get("aesthetic_quality")
+        aesthetic_quality = (
+            _map_quality_signal_to_subscore(explicit_aesthetic, baseline=hook_strength_score * 10.0)
+            if explicit_aesthetic is not None
+            else hook_strength_score * 10.0
+        )
+
     if dominant_focus is not None:
         composition += 4.0
         notes.append("Dominant focus detected, improving composition score.")
@@ -152,7 +153,6 @@ def compute_visual_quality_score(vision_payload: dict[str, Any] | None) -> Visua
         notes.append("Object clutter penalizes composition.")
     composition = _clamp(composition, 0.0, 10.0)
 
-    lighting = _map_quality_signal_to_subscore(signal.get("lighting_quality"), baseline=6.0)
     if hook_strength_score > 0.6:
         lighting += 2.0
         notes.append("Hook strength suggests stronger visual lighting impact.")
@@ -161,7 +161,6 @@ def compute_visual_quality_score(vision_payload: dict[str, Any] | None) -> Visua
         notes.append("Missing dominant focus lowers perceived lighting quality.")
     lighting = _clamp(lighting, 0.0, 10.0)
 
-    subject_clarity = _map_quality_signal_to_subscore(signal.get("subject_clarity"), baseline=4.0)
     if dominant_focus is not None:
         subject_clarity += 5.0
         notes.append("Clear dominant focus improves subject clarity.")
@@ -173,11 +172,6 @@ def compute_visual_quality_score(vision_payload: dict[str, Any] | None) -> Visua
         notes.append("High object count lowers clarity.")
     subject_clarity = _clamp(subject_clarity, 0.0, 10.0)
 
-    explicit_aesthetic = signal.get("aesthetic_quality")
-    if explicit_aesthetic is not None:
-        aesthetic_quality = _map_quality_signal_to_subscore(explicit_aesthetic, baseline=hook_strength_score * 10.0)
-    else:
-        aesthetic_quality = hook_strength_score * 10.0
     text_penalty = _text_overlay_penalty(signal.get("detected_text"))
     aesthetic_quality += text_penalty
     if text_penalty <= -3.0:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, TypedDict
 
 from backend.app.ai.schemas import CreatorPostAIInput
@@ -144,7 +145,8 @@ async def build_single_post_insights(
         ai_analysis = await analyze_single_post_ai(post_copy)
 
     if isinstance(post_copy.media_id, str) and post_copy.media_id.strip():
-        write_post_insights_snapshot(
+        await asyncio.to_thread(
+            write_post_insights_snapshot,
             post_copy.media_id,
             post=post_copy,
             ai_analysis=ai_analysis,

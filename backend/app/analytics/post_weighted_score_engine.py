@@ -95,11 +95,11 @@ def compute_weighted_post_score(
         used_weight_sum += weight
 
     if used_weight_sum == 0.0:
-        notes.append("Fallback applied: no available component scores for weighted computation.")
+        notes.append("No valid component scores were available for weighted computation; returning 0 instead of a neutral midpoint.")
         return WeightedPostScore(
             post_type=resolved_post_type,
-            normalized_score_0_50=25.0,
-            score=50.0,
+            normalized_score_0_50=0.0,
+            score=0.0,
             components=components,
             weights_used={},
             notes=notes,

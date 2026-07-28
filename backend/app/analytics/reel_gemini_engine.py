@@ -55,7 +55,7 @@ def _build_genai_adapter():
                         resolved.append(
                             genai_types.Part.from_uri(
                                 file_uri=item.uri,
-                                media_type=getattr(item, "mime_type", "video/mp4"),
+                                mime_type=getattr(item, "mime_type", "video/mp4"),
                             )
                         )
                     else:

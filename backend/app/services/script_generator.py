@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 from backend.app.ai.llm_client import LLMClient
@@ -38,7 +40,9 @@ async def generate_script(
         "You are a professional short-form video scriptwriter. "
         "Create scripts optimized for social media engagement. "
         "Use clear scene breakdowns with timing. "
-        "Return ONLY valid TOON format."
+        "Each scene description must be the exact spoken line or narration, written word-for-word, not a summary label. "
+        "Keep visual direction separate in visual_notes. "
+        "Return ONLY one valid JSON object and no markdown."
     )
 
     user_prompt = f"""Write a {script_type} script for: {title}
@@ -54,32 +58,47 @@ Structure:
 - cta: Call to action at the end
 - estimated_duration_sec: Actual estimated duration
 
-OUTPUT FORMAT (STRICT TOON):
-hook: Your opening line here
-scenes
-  -
-    scene_number: 1
-    time_range: 0-3s
-    description: What happens in this scene
-    visual_notes: Visual direction for filming
-  -
-    scene_number: 2
-    time_range: 3-8s
-    description: What happens in this scene
-    visual_notes: Visual direction
-cta: Your call to action
-estimated_duration_sec: 30
+Important quality rules:
+- description must be actual creator dialogue or voiceover, not labels like "Main content" or "Explain the trend"
+- visual_notes must only describe what the viewer sees on screen
+- make the full script sound natural, specific, and ready to record
+- do not repeat the same sentence in every scene
+- keep the language aligned to the requested tone
+
+Return JSON shape:
+{{
+  "hook": "Your opening line here",
+  "scenes": [
+    {{
+      "scene_number": 1,
+      "time_range": "0-3s",
+      "description": "Exact spoken line for this scene",
+      "visual_notes": "Visual direction for filming"
+    }}
+  ],
+  "cta": "Your call to action",
+  "estimated_duration_sec": 30
+}}
 """
 
     try:
         llm = LLMClient(temperature=0.7, max_tokens=1000)
-        raw = await llm.generate_async({"system": system_prompt, "user": user_prompt})
+        raw = await asyncio.to_thread(
+            llm.generate,
+            {"system": system_prompt, "user": user_prompt, "response_format": {"type": "json_object"}},
+        )
 
         if not raw or not raw.strip():
             raise ValueError("Empty LLM response")
 
         # Parse TOON response
-        parsed = _parse_toon_script(raw)
+        parsed = _parse_json_script(raw)
+
+        parsed_scenes = _ensure_scene_copy(
+            parsed.get("scenes", []),
+            title=title,
+            hook=parsed.get("hook", hook or ""),
+        )
 
         scenes = [
             Scene(
@@ -88,7 +107,7 @@ estimated_duration_sec: 30
                 description=s.get("description", ""),
                 visual_notes=s.get("visual_notes"),
             )
-            for i, s in enumerate(parsed.get("scenes", []))
+            for i, s in enumerate(parsed_scenes)
         ]
 
         return GenerateScriptResponse(
@@ -97,7 +116,12 @@ estimated_duration_sec: 30
             scenes=scenes,
             cta=parsed.get("cta", "Save this for later!"),
             estimated_duration_sec=parsed.get("estimated_duration_sec", duration_seconds),
-            full_script=_format_full_script(parsed),
+            full_script=_format_full_script(
+                {
+                    **parsed,
+                    "scenes": parsed_scenes,
+                }
+            ),
         )
 
     except Exception as e:
@@ -106,70 +130,126 @@ estimated_duration_sec: 30
         return _fallback_script(idea_id, title, hook, duration_seconds)
 
 
-def _parse_toon_script(raw: str) -> dict[str, Any]:
-    """Parse TOON format script response."""
-    result = {
-        "hook": "",
-        "scenes": [],
-        "cta": "",
-        "estimated_duration_sec": 30,
+def _strip_markdown_fences(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) > 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
+
+
+def _parse_json_script(raw: str) -> dict[str, Any]:
+    """Parse JSON script response."""
+    stripped = _strip_markdown_fences(raw)
+    if "{" in stripped and "}" in stripped:
+        stripped = stripped[stripped.find("{"):stripped.rfind("}") + 1]
+    payload = json.loads(stripped)
+    if not isinstance(payload, dict):
+        raise ValueError("Script response must be a JSON object")
+    payload.setdefault("hook", "")
+    payload.setdefault("scenes", [])
+    payload.setdefault("cta", "")
+    payload.setdefault("estimated_duration_sec", 30)
+    return payload
+
+
+def _ensure_scene_copy(
+    scenes: list[dict[str, Any]],
+    *,
+    title: str,
+    hook: str,
+) -> list[dict[str, Any]]:
+    """Replace placeholder scene labels with actual spoken copy when needed."""
+    repaired: list[dict[str, Any]] = []
+    normalized_title = title.strip()
+    base_hook = hook.strip() or f"Here is why {normalized_title.lower()} works."
+
+    fallback_lines = [
+        base_hook,
+        f"Here is what makes {normalized_title.lower()} stand out, and why people keep stopping to watch it.",
+        "Show one specific takeaway your audience can try today, so the idea feels practical instead of vague.",
+        "Wrap by telling viewers exactly what to save, copy, or comment if they want more ideas like this.",
+    ]
+
+    for index, scene in enumerate(scenes):
+        description = (scene.get("description") or "").strip()
+        generic = _is_generic_scene_label(description)
+        repaired_scene = dict(scene)
+        if generic:
+            fallback_idx = min(index, len(fallback_lines) - 1)
+            repaired_scene["description"] = fallback_lines[fallback_idx]
+        repaired.append(repaired_scene)
+
+    return repaired
+
+
+def _is_generic_scene_label(text: str) -> bool:
+    """Detect placeholder scene labels that are not real spoken copy."""
+    normalized = (text or "").strip().lower()
+    generic_labels = {
+        "",
+        "main content",
+        "details and tips",
+        "cta and wrap up",
+        "hook - grab attention",
+        "explain the trend",
+        "show the process",
+        "close with cta",
     }
-
-    lines = raw.strip().split("\n")
-    current_scene = None
-    scenes = []
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        if line.startswith("hook:"):
-            result["hook"] = line[5:].strip()
-        elif line.startswith("cta:"):
-            result["cta"] = line[4:].strip()
-        elif line.startswith("estimated_duration_sec:"):
-            try:
-                result["estimated_duration_sec"] = int(line.split(":")[1].strip())
-            except ValueError:
-                pass
-        elif line.startswith("-") and current_scene is None:
-            current_scene = {}
-        elif line.startswith("scene_number:") and current_scene is not None:
-            try:
-                current_scene["scene_number"] = int(line.split(":")[1].strip())
-            except ValueError:
-                pass
-        elif line.startswith("time_range:") and current_scene is not None:
-            current_scene["time_range"] = line.split(":", 1)[1].strip()
-        elif line.startswith("description:") and current_scene is not None:
-            current_scene["description"] = line.split(":", 1)[1].strip()
-        elif line.startswith("visual_notes:") and current_scene is not None:
-            current_scene["visual_notes"] = line.split(":", 1)[1].strip()
-        elif line.startswith("-") and current_scene is not None:
-            scenes.append(current_scene)
-            current_scene = {}
-
-    if current_scene:
-        scenes.append(current_scene)
-
-    result["scenes"] = scenes
-    return result
+    if normalized in generic_labels:
+        return True
+    short_prefixes = ("scene ", "step ", "point ")
+    if normalized.startswith(short_prefixes) and len(normalized.split()) <= 4:
+        return True
+    return False
 
 
 def _format_full_script(parsed: dict[str, Any]) -> str:
-    """Format parsed script into readable text."""
-    lines = [f"Hook: {parsed.get('hook', '')}", ""]
+    """Format parsed script into a user-facing recording script."""
+    hook = (parsed.get("hook") or "").strip()
+    cta = (parsed.get("cta") or "").strip()
+    lines = []
 
-    for scene in parsed.get("scenes", []):
-        lines.append(f"Scene {scene.get('scene_number', '?')} ({scene.get('time_range', '?')}):")
-        lines.append(f"  {scene.get('description', '')}")
-        if scene.get("visual_notes"):
-            lines.append(f"  Visual: {scene['visual_notes']}")
+    if hook:
+        lines.append(f"Hook: {hook}")
         lines.append("")
 
-    lines.append(f"CTA: {parsed.get('cta', '')}")
+    for scene in parsed.get("scenes", []):
+        spoken_line = _clean_spoken_line(scene.get("description", ""))
+        time_range = scene.get("time_range", "?")
+        lines.append(f"Scene {scene.get('scene_number', '?')} ({time_range})")
+        if spoken_line:
+            lines.append(spoken_line)
+        if scene.get("visual_notes"):
+            lines.append(f"Visual: {scene['visual_notes']}")
+        lines.append("")
+
+    if cta:
+        lines.append(f"CTA: {cta}")
     return "\n".join(lines)
+
+
+def _clean_spoken_line(text: str) -> str:
+    """Normalize a spoken line for the full-script block."""
+    line = (text or "").strip()
+    if not line:
+        return ""
+    replacements = {
+        "Hook - ": "",
+        "Hook: ": "",
+        "Main content: ": "",
+        "Main content - ": "",
+        "Details and tips: ": "",
+        "Details and tips - ": "",
+        "CTA and wrap up: ": "",
+        "CTA and wrap up - ": "",
+    }
+    for old, new in replacements.items():
+        if line.startswith(old):
+            line = f"{new}{line[len(old):]}".strip()
+    return line
 
 
 def _fallback_script(
@@ -179,16 +259,32 @@ def _fallback_script(
     duration_seconds: int,
 ) -> GenerateScriptResponse:
     """Return a fallback script when LLM fails."""
+    base_hook = (hook or f"Watch how I {title.lower()}").strip()
+    scene_2 = f"Here is exactly why {title.lower()} is getting so much attention right now."
+    scene_3 = "The trick is to show one clear takeaway, one proof point, and one thing your audience can copy today."
+    scene_4 = "If you want more ideas like this, save this and come back when you plan your next post."
+
     return GenerateScriptResponse(
         idea_id=idea_id,
-        hook=hook or f"Watch how I {title.lower()}",
+        hook=base_hook,
         scenes=[
-            Scene(scene_number=1, time_range="0-3s", description="Hook - grab attention", visual_notes="Close-up shot"),
-            Scene(scene_number=2, time_range="3-15s", description="Main content", visual_notes="Show the process"),
-            Scene(scene_number=3, time_range="15-25s", description="Details and tips", visual_notes="B-roll footage"),
-            Scene(scene_number=4, time_range="25-30s", description="CTA and wrap up", visual_notes="Direct to camera"),
+            Scene(scene_number=1, time_range="0-3s", description=base_hook, visual_notes="Open with a confident close-up and bold text on screen."),
+            Scene(scene_number=2, time_range="3-15s", description=scene_2, visual_notes="Cut to examples, screenshots, or a quick demo that proves the point."),
+            Scene(scene_number=3, time_range="15-25s", description=scene_3, visual_notes="Layer in B-roll, step-by-step visuals, or product details that support the message."),
+            Scene(scene_number=4, time_range="25-30s", description=scene_4, visual_notes="Return to direct-to-camera delivery for the closing call to action."),
         ],
         cta="Save this for later!",
         estimated_duration_sec=min(duration_seconds, 30),
-        full_script="Hook: Watch this!\n\nScene 1 (0-3s): Hook - grab attention\nScene 2 (3-15s): Main content\nScene 3 (15-25s): Details and tips\nScene 4 (25-30s): CTA and wrap up\n\nCTA: Save this for later!",
+        full_script=_format_full_script(
+            {
+                "hook": base_hook,
+                "scenes": [
+                    {"scene_number": 1, "time_range": "0-3s", "description": base_hook, "visual_notes": "Open with a confident close-up and bold text on screen."},
+                    {"scene_number": 2, "time_range": "3-15s", "description": scene_2, "visual_notes": "Cut to examples, screenshots, or a quick demo that proves the point."},
+                    {"scene_number": 3, "time_range": "15-25s", "description": scene_3, "visual_notes": "Layer in B-roll, step-by-step visuals, or product details that support the message."},
+                    {"scene_number": 4, "time_range": "25-30s", "description": scene_4, "visual_notes": "Return to direct-to-camera delivery for the closing call to action."},
+                ],
+                "cta": "Save this for later!",
+            }
+        ),
     )

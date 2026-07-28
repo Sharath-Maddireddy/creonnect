@@ -80,3 +80,4 @@ def persist_account_analysis_result(
             logger.info("[AccountAnalysisStore] Persisted job_id=%s status=%s", job_id, status)
     except (SQLAlchemyError, OSError, RuntimeError) as exc:
         logger.warning("[AccountAnalysisStore] Failed to persist result for job_id=%s: %s", job_id, exc)
+        raise

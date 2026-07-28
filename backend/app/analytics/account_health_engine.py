@@ -93,14 +93,25 @@ def _map_ratio_to_score(ratio: float) -> float:
     return 95.0
 
 
-def _map_absolute_er_to_score(engagement_rate: float) -> float:
-    if engagement_rate <= 0.01:
+def _map_absolute_er_to_score(engagement_rate: float, follower_count: int | None = None) -> float:
+    follower_count = max(0, int(follower_count or 0))
+    # Larger accounts usually operate on lower ER baselines than smaller creators.
+    if follower_count >= 1_000_000:
+        thresholds = (0.006, 0.015, 0.03, 0.06)
+    elif follower_count >= 100_000:
+        thresholds = (0.008, 0.02, 0.04, 0.08)
+    elif follower_count >= 10_000:
+        thresholds = (0.01, 0.025, 0.05, 0.09)
+    else:
+        thresholds = (0.012, 0.03, 0.06, 0.10)
+
+    if engagement_rate <= thresholds[0]:
         return 30.0
-    if engagement_rate <= 0.03:
+    if engagement_rate <= thresholds[1]:
         return 50.0
-    if engagement_rate <= 0.06:
+    if engagement_rate <= thresholds[2]:
         return 70.0
-    if engagement_rate <= 0.10:
+    if engagement_rate <= thresholds[3]:
         return 85.0
     return 95.0
 
@@ -183,6 +194,7 @@ def _build_content_quality(posts: list[SinglePostInsights]) -> tuple[float, list
 def _build_engagement_quality(
     posts: list[SinglePostInsights],
     account_avg_engagement_rate: float | None,
+    follower_count: int | None = None,
 ) -> tuple[float, list[str], bool, dict[str, float | None]]:
     notes: list[str] = []
     engagement_rates: list[float] = []
@@ -219,8 +231,8 @@ def _build_engagement_quality(
             f"(ratio={ratio_vs_account_avg:.2f})."
         )
     else:
-        score = _map_absolute_er_to_score(median_engagement_rate)
-        notes.append("Account average engagement rate unavailable; used absolute ER band mapping.")
+        score = _map_absolute_er_to_score(median_engagement_rate, follower_count=follower_count)
+        notes.append("Account average engagement rate unavailable; used follower-aware absolute ER band mapping.")
 
     median_save_rate = median(save_rates) if save_rates else None
     median_share_rate = median(share_rates) if share_rates else None
@@ -790,13 +802,12 @@ def _build_ai_summary(
         "EXCEPTIONAL": "Very High",
         "STRONG": "High",
         "AVERAGE": "Moderate",
-        "NEEDS_WORK": "Needs improvement",
+        "NEEDS_WORK": "High Growth Potential",
     }
     text_summary = (
-        f"This account shows a {ahs_band.lower().replace('_', ' ')} overall health band. "
+        f"This account is in the '{ahs_band.lower().replace('_', ' ')}' tier — a strong signal that there's significant upside. "
         f"Top content pillar is '{top_pillar}'. Best performing format is {top_content_type}. "
-        f"Key growth levers include increasing posting consistency, optimizing hashtag strategy, "
-        f"and improving engagement on underperforming content types."
+        f"Prioritise posting consistency, refine your hashtag mix, and double down on your top-performing content type to accelerate growth."
     )
     best_posting_time = _compute_best_posting_time(heatmap) if heatmap else None
     return AISummary(
@@ -829,6 +840,7 @@ def compute_account_health_score(
     engagement_score, engagement_notes, engagement_has_signal, engagement_metrics = _build_engagement_quality(
         recent_posts,
         account_avg_engagement_rate,
+        follower_count,
     )
     niche_score, niche_notes, niche_has_signal, niche_metrics = _build_niche_fit(
         recent_posts,

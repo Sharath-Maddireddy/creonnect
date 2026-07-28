@@ -11,7 +11,7 @@ from backend.app.analytics.global_trend_engine import fetch_global_trends
 from backend.app.analytics.trend_recommendation_engine import generate_trend_recommendations
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.domain.account_models import CreatorIntelligence, HeatmapData
-from backend.app.domain.trend_models import CreatorNiche, TrendAnalysisResult
+from backend.app.domain.trend_models import CreatorNiche, TrendAnalysisResult, WeeklyOpportunity
 from backend.app.utils.logger import logger
 from backend.app.utils.number_utils import safe_float as _safe_float
 
@@ -140,6 +140,13 @@ class CreatorTrendService:
                 daily_insights=daily_insights,
                 opportunity_bullets=opportunity_bullets,
             )
+            result.weekly_opportunity = build_weekly_opportunity(
+                niche=niche,
+                trends=trends,
+                recommendations=recs,
+                content_gaps=content_gaps,
+                opportunity_bullets=opportunity_bullets,
+            )
             logger.info("[CreatorTrendService] Completed trend analysis for account=%s", account_id)
             return result
 
@@ -149,3 +156,87 @@ class CreatorTrendService:
 
 
 __all__ = ["CreatorTrendService"]
+
+
+def build_weekly_opportunity(
+    niche: CreatorNiche | None,
+    trends: list,
+    recommendations: list,
+    content_gaps: list | None,
+    opportunity_bullets: list[str] | None,
+) -> WeeklyOpportunity:
+    """Build a truthful weekly opportunity summary from available trend-analysis data."""
+    trends = trends or []
+    recommendations = recommendations or []
+    content_gaps = content_gaps or []
+    opportunity_bullets = [str(item).strip() for item in (opportunity_bullets or []) if str(item).strip()]
+
+    recommendation_scores = [
+        float(getattr(rec, "opportunity_score", 0) or 0)
+        for rec in recommendations
+        if getattr(rec, "opportunity_score", None) is not None
+    ]
+    avg_recommendation_score = sum(recommendation_scores) / len(recommendation_scores) if recommendation_scores else 0.0
+    rising_count = sum(1 for trend in trends if getattr(trend, "momentum", None) == "rising")
+    peaking_count = sum(1 for trend in trends if getattr(trend, "momentum", None) == "peaking")
+    opportunity_gap_count = sum(1 for gap in content_gaps if getattr(gap, "severity", "") == "opportunity")
+    niche_confidence = float(getattr(niche, "confidence_score", 0) or 0)
+
+    score = (
+        avg_recommendation_score * 0.55
+        + min(15.0, rising_count * 4.0 + peaking_count * 5.0)
+        + niche_confidence * 20.0
+        + min(10.0, opportunity_gap_count * 3.0)
+    )
+    score = int(round(max(0.0, min(100.0, score))))
+
+    if score >= 85:
+        label = "Very High"
+    elif score >= 70:
+        label = "High"
+    elif score >= 50:
+        label = "Medium"
+    else:
+        label = "Low"
+
+    primary_niche = getattr(niche, "primary_category", None) or "your niche"
+    top_trend = getattr(trends[0], "topic_name", None) if trends else None
+    summary_reason = (
+        f"{primary_niche} is well aligned with this week's trend mix"
+        f"{f', especially {top_trend}' if top_trend else ''},"
+        " giving you strong chances to publish timely ideas with clear audience fit."
+    )
+
+    bullets = opportunity_bullets[:4]
+    if not bullets:
+        derived_bullets: list[str] = []
+        if rising_count:
+            derived_bullets.append(f"{rising_count} rising trend{'s' if rising_count != 1 else ''} are relevant to your audience.")
+        if recommendation_scores:
+            derived_bullets.append(f"Your current recommendation set averages {round(avg_recommendation_score)}/100 in opportunity score.")
+        if peaking_count:
+            derived_bullets.append(f"{peaking_count} peaking trend{'s' if peaking_count != 1 else ''} can help drive discovery quickly.")
+        if opportunity_gap_count:
+            derived_bullets.append(f"{opportunity_gap_count} content gap{'s' if opportunity_gap_count != 1 else ''} could turn into near-term wins.")
+        bullets = derived_bullets[:4]
+
+    return WeeklyOpportunity(
+        score=score,
+        label=label,
+        idea_count=len(recommendations),
+        summary_reason=summary_reason,
+        bullets=bullets,
+    )
+
+
+def attach_weekly_opportunity(result: TrendAnalysisResult) -> TrendAnalysisResult:
+    """Ensure a trend analysis result includes a weekly opportunity payload."""
+    if result.weekly_opportunity is None:
+        result.weekly_opportunity = build_weekly_opportunity(
+            niche=result.niche,
+            trends=result.global_trends,
+            recommendations=result.recommendations,
+            content_gaps=result.content_gaps,
+            opportunity_bullets=result.opportunity_bullets,
+        )
+    return result

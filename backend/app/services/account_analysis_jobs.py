@@ -63,6 +63,7 @@ from backend.app.services.account_analysis_results import (
 )
 from backend.app.services.account_analysis_service import analyze_account_health
 from backend.app.services.post_insights_service import build_single_post_insights
+from backend.app.services.post_snapshot_store import read_post_insights_snapshot
 from backend.app.utils.datetime_utils import parse_iso_datetime
 from backend.app.utils.logger import logger
 from backend.app.utils.number_utils import now_iso as _now_iso, safe_float as _safe_float
@@ -228,6 +229,12 @@ def _update_status(job_id: str, **updates: Any) -> dict[str, Any]:
         extra_status_fields=_ACCOUNT_EXTRA_STATUS_FIELDS,
         updates=updates,
     )
+
+
+def _write_status(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Backward-compatible direct status writer used by older tests/helpers."""
+    _store.write(job_id, payload)
+    return payload
 
 def initialize_job_status(job_id: str) -> dict[str, Any]:
     return _initialize_job_status_external(
@@ -994,6 +1001,28 @@ async def _run_single_post_pipeline_if_needed(
     async def _analyse_one(post: SinglePostInsights) -> tuple[SinglePostInsights, dict[str, Any], list[dict[str, Any]], bool]:
         try:
             async with semaphore:
+                media_id = post.media_id if isinstance(post.media_id, str) else ""
+                cached_snapshot = read_post_insights_snapshot(media_id) if media_id else None
+                if isinstance(cached_snapshot, dict):
+                    cached_post_raw = cached_snapshot.get("post")
+                    cached_ai_raw = cached_snapshot.get("ai_analysis")
+                    try:
+                        if isinstance(cached_post_raw, dict):
+                            cached_post = SinglePostInsights.model_validate(cached_post_raw)
+                            processed_post = _maybe_attach_inline_reel_analysis(cached_post)
+                            cached_ai = cached_ai_raw if isinstance(cached_ai_raw, dict) else None
+                            ai_warnings = _extract_ai_warnings(cached_ai)
+                            notes = _extract_ai_notes(cached_ai, vision_enabled=vision_enabled)
+                            fallback_used = notes.get("fallback_used") is True
+                            logger.info("[AccountAnalysisJob] Reused cached post snapshot media_id=%s", media_id)
+                            return processed_post, notes, ai_warnings, fallback_used
+                    except Exception as cache_exc:
+                        logger.warning(
+                            "[AccountAnalysisJob] Invalid cached snapshot ignored for media_id=%s: %s",
+                            media_id,
+                            cache_exc,
+                        )
+
                 historical = [candidate for candidate in posts if candidate.media_id != post.media_id]
                 pipeline_result = await build_single_post_insights(
                     target_post=post,

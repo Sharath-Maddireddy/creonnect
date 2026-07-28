@@ -636,8 +636,8 @@ class WeightedPostScore(BaseModel):
 
     post_type: str = Field(default="IMAGE")
     # User-facing aggregate is 0..100 while we keep normalized 0..50 for transparency.
-    score: float = Field(default=50.0, ge=0.0, le=100.0)
-    normalized_score_0_50: float = Field(default=25.0, ge=0.0, le=50.0)
+    score: float = Field(default=0.0, ge=0.0, le=100.0)
+    normalized_score_0_50: float = Field(default=0.0, ge=0.0, le=50.0)
     components: dict[str, float | None] = Field(default_factory=dict)
     weights_used: dict[str, float] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
@@ -646,22 +646,22 @@ class WeightedPostScore(BaseModel):
     @classmethod
     def _clamp_score(cls, value: float | int | str | None) -> float:
         if value is None:
-            return 50.0
+            return 0.0
         try:
             numeric = float(value)
         except (TypeError, ValueError):
-            return 50.0
+            return 0.0
         return round(max(0.0, min(100.0, numeric)), 2)
 
     @field_validator("normalized_score_0_50", mode="before")
     @classmethod
     def _clamp_normalized_score(cls, value: float | int | str | None) -> float:
         if value is None:
-            return 25.0
+            return 0.0
         try:
             numeric = float(value)
         except (TypeError, ValueError):
-            return 25.0
+            return 0.0
         return round(max(0.0, min(50.0, numeric)), 2)
 
     @field_validator("components", mode="before")

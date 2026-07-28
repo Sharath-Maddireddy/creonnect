@@ -6,6 +6,7 @@ Uses RQ for job queue management.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -255,7 +256,7 @@ def _generate_ideas_with_llm(db, job: IdeaGenerationJob) -> list[dict[str, Any]]
     system_prompt = (
         "You are a Creative Director for short-form social media content. "
         "Generate engaging, high-potential content ideas that align with the creator's niche and audience. "
-        "Return ONLY valid TOON format."
+        "Return ONLY one valid JSON object and no markdown."
     )
 
     user_prompt = f"""Generate {count} content ideas for {job.content_type or 'reel'} content.
@@ -275,26 +276,21 @@ For each idea, provide:
 - tags: 2-4 relevant tags as comma-separated values
 - trend_reference: Related trend if applicable, or empty
 
-OUTPUT FORMAT (STRICT TOON):
-ideas
-  -
-    title: Your idea title
-    hook: Your attention-grabbing hook
-    description: Brief description of the content
-    opportunity_score: 85
-    difficulty: easy
-    duration_seconds: 30
-    tags: Travel, Budget Travel, Vietnam
-    trend_reference: Budget Travel Trend
-  -
-    title: Second idea title
-    hook: Second hook
-    description: Second description
-    opportunity_score: 78
-    difficulty: medium
-    duration_seconds: 45
-    tags: Food, Recipes, Quick Meals
-    trend_reference:
+Return JSON shape:
+{{
+  "ideas": [
+    {{
+      "title": "Your idea title",
+      "hook": "Your attention-grabbing hook",
+      "description": "Brief description of the content",
+      "opportunity_score": 85,
+      "difficulty": "easy",
+      "duration_seconds": 30,
+      "tags": ["Travel", "Budget Travel", "Vietnam"],
+      "trend_reference": "Budget Travel Trend"
+    }}
+  ]
+}}
 """
 
     try:
@@ -305,16 +301,14 @@ ideas
             max_retries=0,    # no silent retry — user can retry manually from UI
         )
 
-        # Run async LLM call in sync context
-        loop = asyncio.new_event_loop()
-        raw = loop.run_until_complete(llm.generate_async({"system": system_prompt, "user": user_prompt}))
-        loop.close()
+        # Run sync LLM call (RQ workers are already synchronous)
+        raw = llm.generate({"system": system_prompt, "user": user_prompt, "response_format": {"type": "json_object"}})
 
         if not raw or not raw.strip():
             raise ValueError("Empty LLM response")
 
         # Parse TOON response
-        ideas = _parse_toon_ideas(raw)
+        ideas = _parse_json_ideas(raw)
 
         # Ensure we have the requested count (pad with fallbacks if needed)
         while len(ideas) < count:
@@ -350,51 +344,30 @@ ideas
         ]
 
 
-def _parse_toon_ideas(raw: str) -> list[dict[str, Any]]:
-    """Parse TOON format ideas response."""
-    ideas = []
-    current_idea = None
+def _strip_markdown_fences(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) > 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
 
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
 
-        if line.startswith("-") and current_idea is None:
-            current_idea = {}
-        elif line.startswith("title:") and current_idea is not None:
-            current_idea["title"] = line.split(":", 1)[1].strip()
-        elif line.startswith("hook:") and current_idea is not None:
-            current_idea["hook"] = line.split(":", 1)[1].strip()
-        elif line.startswith("description:") and current_idea is not None:
-            current_idea["description"] = line.split(":", 1)[1].strip()
-        elif line.startswith("opportunity_score:") and current_idea is not None:
-            try:
-                current_idea["opportunity_score"] = float(line.split(":")[1].strip())
-            except ValueError:
-                current_idea["opportunity_score"] = 75.0
-        elif line.startswith("difficulty:") and current_idea is not None:
-            diff = line.split(":", 1)[1].strip().lower()
-            current_idea["difficulty"] = diff if diff in ("easy", "medium", "hard") else "medium"
-        elif line.startswith("duration_seconds:") and current_idea is not None:
-            try:
-                current_idea["duration_seconds"] = int(line.split(":")[1].strip())
-            except ValueError:
-                current_idea["duration_seconds"] = 30
-        elif line.startswith("tags:") and current_idea is not None:
-            tags_str = line.split(":", 1)[1].strip()
-            current_idea["tags"] = [t.strip() for t in tags_str.split(",") if t.strip()]
-        elif line.startswith("trend_reference:") and current_idea is not None:
-            ref = line.split(":", 1)[1].strip()
-            current_idea["trend_reference"] = ref if ref else ""
-        elif line.startswith("-") and current_idea is not None:
-            ideas.append(current_idea)
-            current_idea = {}
+def _parse_json_object(raw: str) -> dict[str, Any]:
+    stripped = _strip_markdown_fences(raw)
+    if "{" in stripped and "}" in stripped:
+        stripped = stripped[stripped.find("{"):stripped.rfind("}") + 1]
+    payload = json.loads(stripped)
+    if not isinstance(payload, dict):
+        raise ValueError("LLM response must be a JSON object")
+    return payload
 
-    if current_idea:
-        ideas.append(current_idea)
 
-    return ideas
+def _parse_json_ideas(raw: str) -> list[dict[str, Any]]:
+    payload = _parse_json_object(raw)
+    ideas = payload.get("ideas")
+    return ideas if isinstance(ideas, list) else []
 
 
 # ── Improve/Variations/Regenerate Workers ──────────────────────────────────────
@@ -418,7 +391,7 @@ def run_idea_improve(account_id: str, idea_id: str, feedback: str, aspect: str) 
         system_prompt = (
             "You are a Creative Director for short-form social media content. "
             "Improve the given content idea based on the feedback provided. "
-            "Return ONLY valid TOON format."
+            "Return ONLY one valid JSON object and no markdown."
         )
 
         user_prompt = f"""Improve this content idea:
@@ -435,19 +408,15 @@ Provide the improved version with:
 - hook: Improved hook
 - description: Improved description
 
-OUTPUT FORMAT (STRICT TOON):
-title: Improved title here
-hook: Improved hook here
-description: Improved description here
+Return JSON shape:
+{"title":"Improved title here","hook":"Improved hook here","description":"Improved description here"}
 """
 
         try:
             llm = LLMClient(temperature=0.7, max_tokens=500)
-            loop = asyncio.new_event_loop()
-            raw = loop.run_until_complete(llm.generate_async({"system": system_prompt, "user": user_prompt}))
-            loop.close()
+            raw = llm.generate({"system": system_prompt, "user": user_prompt, "response_format": {"type": "json_object"}})
 
-            parsed = _parse_toon_improvement(raw)
+            parsed = _parse_json_improvement(raw)
 
             # Update the idea
             if parsed.get("title"):
@@ -466,18 +435,9 @@ description: Improved description here
             logger.exception("[ContentSuggestionJob] Improve failed for idea_id=%s: %s", idea_id, e)
 
 
-def _parse_toon_improvement(raw: str) -> dict[str, str]:
-    """Parse TOON format improvement response."""
-    result = {}
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if line.startswith("title:"):
-            result["title"] = line.split(":", 1)[1].strip()
-        elif line.startswith("hook:"):
-            result["hook"] = line.split(":", 1)[1].strip()
-        elif line.startswith("description:"):
-            result["description"] = line.split(":", 1)[1].strip()
-    return result
+def _parse_json_improvement(raw: str) -> dict[str, str]:
+    payload = _parse_json_object(raw)
+    return {k: str(v).strip() for k, v in payload.items() if k in {"title", "hook", "description"} and isinstance(v, str)}
 
 
 def run_idea_variations(account_id: str, idea_id: str, count: int) -> None:
@@ -498,7 +458,7 @@ def run_idea_variations(account_id: str, idea_id: str, count: int) -> None:
         system_prompt = (
             "You are a Creative Director for short-form social media content. "
             "Generate alternative variations of the given content idea. "
-            "Return ONLY valid TOON format."
+            "Return ONLY one valid JSON object and no markdown."
         )
 
         user_prompt = f"""Generate {count} variations of this content idea:
@@ -512,25 +472,15 @@ Create {count} different angles or approaches. For each variation:
 - hook: Alternative hook
 - description: Alternative description
 
-OUTPUT FORMAT (STRICT TOON):
-variations
-  -
-    title: Variation 1 title
-    hook: Variation 1 hook
-    description: Variation 1 description
-  -
-    title: Variation 2 title
-    hook: Variation 2 hook
-    description: Variation 2 description
+Return JSON shape:
+{"variations":[{"title":"Variation 1 title","hook":"Variation 1 hook","description":"Variation 1 description"}]}
 """
 
         try:
             llm = LLMClient(temperature=0.9, max_tokens=1500)
-            loop = asyncio.new_event_loop()
-            raw = loop.run_until_complete(llm.generate_async({"system": system_prompt, "user": user_prompt}))
-            loop.close()
+            raw = llm.generate({"system": system_prompt, "user": user_prompt, "response_format": {"type": "json_object"}})
 
-            variations = _parse_toon_variations(raw)
+            variations = _parse_json_variations(raw)
 
             # Store variations on the original idea
             existing_variations = idea.variations if isinstance(idea.variations, list) else []
@@ -550,32 +500,10 @@ variations
             logger.exception("[ContentSuggestionJob] Variations failed for idea_id=%s: %s", idea_id, e)
 
 
-def _parse_toon_variations(raw: str) -> list[dict[str, str]]:
-    """Parse TOON format variations response."""
-    variations = []
-    current = None
-
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-
-        if line.startswith("-") and current is None:
-            current = {}
-        elif line.startswith("title:") and current is not None:
-            current["title"] = line.split(":", 1)[1].strip()
-        elif line.startswith("hook:") and current is not None:
-            current["hook"] = line.split(":", 1)[1].strip()
-        elif line.startswith("description:") and current is not None:
-            current["description"] = line.split(":", 1)[1].strip()
-        elif line.startswith("-") and current is not None:
-            variations.append(current)
-            current = {}
-
-    if current:
-        variations.append(current)
-
-    return variations
+def _parse_json_variations(raw: str) -> list[dict[str, str]]:
+    payload = _parse_json_object(raw)
+    variations = payload.get("variations")
+    return variations if isinstance(variations, list) else []
 
 
 def run_idea_regenerate(account_id: str, idea_id: str) -> None:
@@ -596,7 +524,7 @@ def run_idea_regenerate(account_id: str, idea_id: str) -> None:
         system_prompt = (
             "You are a Creative Director for short-form social media content. "
             "Generate a completely new content idea inspired by the original concept. "
-            "Return ONLY valid TOON format."
+            "Return ONLY one valid JSON object and no markdown."
         )
 
         user_prompt = f"""Create a completely new content idea inspired by this one:
@@ -612,20 +540,15 @@ Generate a fresh, new idea with:
 - description: New content description
 - engagement_score: Predicted engagement (0-100)
 
-OUTPUT FORMAT (STRICT TOON):
-title: New idea title
-hook: New attention-grabbing hook
-description: New content description
-engagement_score: 82
+Return JSON shape:
+{"title":"New idea title","hook":"New attention-grabbing hook","description":"New content description","engagement_score":82}
 """
 
         try:
             llm = LLMClient(temperature=0.9, max_tokens=500)
-            loop = asyncio.new_event_loop()
-            raw = loop.run_until_complete(llm.generate_async({"system": system_prompt, "user": user_prompt}))
-            loop.close()
+            raw = llm.generate({"system": system_prompt, "user": user_prompt, "response_format": {"type": "json_object"}})
 
-            parsed = _parse_toon_improvement(raw)
+            parsed = _parse_json_improvement(raw)
 
             # Update the idea with completely new content
             if parsed.get("title"):

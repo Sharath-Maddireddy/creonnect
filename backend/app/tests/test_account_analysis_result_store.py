@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import fakeredis
+from conftest import make_fake_redis_client
 import pytest
 
 import backend.app.infra.redis_client as redis_client
@@ -46,7 +46,7 @@ def db_setup(tmp_path, monkeypatch):
 
 
 def test_run_account_analysis_job_persists_result_row(db_setup, monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     payload = {

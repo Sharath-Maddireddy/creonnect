@@ -57,14 +57,6 @@ _SIMPLIFIED_GEMINI_VISION_PROMPT = (
     "composition_feedback (string), aesthetic_fixes (array of strings), is_cringe (boolean), "
     "adult_content_detected (boolean). If unsure about a field, use null or an empty array."
 )
-_GEMINI_VISION_REPAIR_PROMPT = (
-    "Convert the following malformed model output into a single valid JSON object only. "
-    "Do not include markdown fences, commentary, or extra keys. "
-    "Use exactly these keys: visual_quality_score, hook_strength_score, primary_objects, detected_text, "
-    "lighting_feedback, composition_feedback, aesthetic_fixes, is_cringe, adult_content_detected. "
-    "If a value is missing or unclear, use null or an empty array.\n\nMalformed output:\n"
-)
-_OPENAI_VISION_REPAIR_PROMPT = _GEMINI_VISION_REPAIR_PROMPT
 
 
 def _parse_timeout(env_key: str, default: float) -> float:
@@ -498,21 +490,25 @@ def _strip_markdown_fences(text: str) -> str:
     return stripped
 
 
-def _parse_gemini_payload(raw_text: str) -> dict[str, Any]:
+def _parse_object_response(raw_text: str) -> dict[str, Any]:
     stripped_raw_text = _strip_markdown_fences(raw_text)
     if not stripped_raw_text:
-        raise ValueError("Gemini response was empty.")
-
+        raise ValueError("LLM response was empty.")
     try:
         if "{" in stripped_raw_text and "}" in stripped_raw_text:
             start = stripped_raw_text.find("{")
             end = stripped_raw_text.rfind("}") + 1
-            payload = json.loads(stripped_raw_text[start:end])
-        else:
-            payload = toon_loads(stripped_raw_text)
+            return json.loads(stripped_raw_text[start:end])
     except Exception:
-        payload = toon_loads(stripped_raw_text)
+        pass
+    payload = toon_loads(stripped_raw_text)
+    if not isinstance(payload, dict):
+        raise ValueError("LLM output must be an object.")
+    return payload
 
+
+def _parse_gemini_payload(raw_text: str) -> dict[str, Any]:
+    payload = _parse_object_response(raw_text)
     if not isinstance(payload, dict):
         raise ValueError("Gemini output must be an object.")
     return payload
@@ -631,10 +627,9 @@ def _build_vision_signal(payload: dict[str, Any], *, media_url: str) -> dict[str
     }
 
 
-async def _retry_parse_with_repair(
+async def _retry_parse_with_retry_only(
     *,
     generate_fn: Any,
-    repair_fn: Any,
     api_key: str,
     instruction: str,
     media_url: str,
@@ -648,15 +643,6 @@ async def _retry_parse_with_repair(
     except Exception as primary_exc:
         parse_errors.append(f"primary={primary_exc}")
 
-    if isinstance(raw_text, str) and raw_text.strip():
-        try:
-            repaired_text = await repair_fn(api_key=api_key, raw_text=raw_text)
-            signal = _build_vision_signal(_parse_gemini_payload(repaired_text), media_url=media_url)
-            logger.info("[Vision] Repaired malformed %s output for media_id=%s", provider_label, post_id)
-            return signal
-        except Exception as repair_exc:
-            parse_errors.append(f"repair={repair_exc}")
-
     retry_raw_text = await generate_fn(
         api_key=api_key,
         instruction=_SIMPLIFIED_GEMINI_VISION_PROMPT,
@@ -669,26 +655,13 @@ async def _retry_parse_with_repair(
     except Exception as retry_exc:
         parse_errors.append(f"simplified={retry_exc}")
 
-    if isinstance(retry_raw_text, str) and retry_raw_text.strip():
-        try:
-            repaired_retry = await repair_fn(api_key=api_key, raw_text=retry_raw_text)
-            signal = _build_vision_signal(_parse_gemini_payload(repaired_retry), media_url=media_url)
-            logger.info(
-                "[Vision] Simplified prompt + repair recovered %s output for media_id=%s",
-                provider_label,
-                post_id,
-            )
-            return signal
-        except Exception as repair_retry_exc:
-            parse_errors.append(f"simplified_repair={repair_retry_exc}")
-
     raise ValueError("; ".join(parse_errors) or f"{provider_label} output could not be parsed.")
 
 
 async def run_vision_analysis(
     post: SinglePostInsights,
 ) -> dict[str, Any]:
-    """Run Gemini Vision analysis for a post media URL with strict TOON parsing."""
+    """Run vision analysis for a post media URL with JSON-first parsing."""
     post_id = post.media_id if isinstance(post.media_id, str) else None
     media_type_upper = str(getattr(post, "media_type", "IMAGE") or "IMAGE").upper()
     _is_reel = media_type_upper == "REEL"
@@ -707,35 +680,29 @@ async def run_vision_analysis(
         f"{media_type_context} "
         "Your analysis must be specific, honest, and immediately actionable — "
         "as if you are giving feedback to a creator who wants to maximize reach and engagement.\n\n"
-        "Return plain TOON only.\n"
-        "Do not return JSON.\n"
-        "Do not use braces.\n"
-        "Do not wrap keys or values in quotes unless absolutely required for spaces.\n\n"
-        "Output schema (all keys required):\n"
-        "visual_quality_score <int> (0 to 10)\n"
-        "hook_strength_score <float> (0.0 to 1.0 — be conservative)\n"
-        "virality_potential <int> (0 to 10 — raw viral potential)\n"
-        "primary_objects\n"
-        "  - <str>\n"
-        "  - <str>\n"
-        "dominant_focus <str>\n"
-        "scene_type <str>\n"
-        "visual_style <str>\n"
-        "detected_text <str>\n"
-        "lighting_feedback <str>\n"
-        "composition_feedback <str>\n"
-        "aesthetic_fixes\n"
-        "  - <str>\n"
-        "  - <str>\n"
-        "  - <str>\n"
-        "cringe_score <int> (0 to 100)\n"
-        "cringe_signals\n"
-        "  - <str>\n"
-        "cringe_fixes\n"
-        "  - <str>\n"
-        "production_level <str> (low, medium, high)\n"
-        "is_cringe <bool>\n"
-        "adult_content_detected <bool>\n"
+        "Return ONLY one valid JSON object. Do not include markdown fences or commentary.\n\n"
+        "Required JSON keys:\n"
+        "{\n"
+        '  "visual_quality_score": {"composition": number, "lighting": number, "subject_clarity": number, "aesthetic_quality": number} | number,\n'
+        '  "hook_strength_score": number,\n'
+        '  "virality_potential": number,\n'
+        '  "primary_objects": string[],\n'
+        '  "dominant_focus": string | null,\n'
+        '  "scene_type": string | null,\n'
+        '  "visual_style": string | null,\n'
+        '  "scene_description": string | null,\n'
+        '  "detected_text": string | null,\n'
+        '  "lighting_feedback": string | null,\n'
+        '  "composition_feedback": string | null,\n'
+        '  "aesthetic_fixes": string[],\n'
+        '  "technical_flaws": string[],\n'
+        '  "cringe_score": number | null,\n'
+        '  "cringe_signals": string[],\n'
+        '  "cringe_fixes": string[],\n'
+        '  "production_level": "low" | "medium" | "high" | null,\n'
+        '  "is_cringe": boolean | null,\n'
+        '  "adult_content_detected": boolean | null\n'
+        "}\n"
     )
 
     media_url = post.media_url
@@ -757,9 +724,8 @@ async def run_vision_analysis(
     try:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("GEMINI_API_KEY missing")
-        signal = await _retry_parse_with_repair(
+        signal = await _retry_parse_with_retry_only(
             generate_fn=_generate_gemini_vision_json,
-            repair_fn=_repair_gemini_vision_json,
             api_key=api_key,
             instruction=instruction,
             media_url=media_url,
@@ -801,9 +767,8 @@ async def run_vision_analysis(
         mime_type = _infer_mime_type(media_url)
         if isinstance(openai_api_key, str) and openai_api_key.strip() and mime_type.startswith("image/"):
             try:
-                openai_signal = await _retry_parse_with_repair(
+                openai_signal = await _retry_parse_with_retry_only(
                     generate_fn=_generate_openai_vision_json,
-                    repair_fn=_repair_openai_vision_json,
                     api_key=openai_api_key.strip(),
                     instruction=instruction,
                     media_url=media_url,
@@ -862,7 +827,11 @@ class _OpenAIVisionAdapter:
         from backend.app.ai.llm_client import LLMClient
         self._client = LLMClient().client
     def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str) -> _VisionTextResponse:
-        response = self._client.chat.completions.create(model=model_name, messages=[{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image_url", "image_url": {"url": media_url}}]}])
+        response = self._client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image_url", "image_url": {"url": media_url}}]}],
+            response_format={"type": "json_object"},
+        )
         return _VisionTextResponse(text=(response.choices[0].message.content or "").strip())
 
 
@@ -905,14 +874,6 @@ async def _generate_openai_vision_json(*, api_key: str, instruction: str, media_
     return await asyncio.wait_for(asyncio.to_thread(_call_openai_vision_api, api_key=api_key, instruction=instruction, media_url=media_url), timeout=120.0)
 
 
-async def _repair_gemini_vision_json(*, api_key: str, raw_text: str) -> str:
-    return await asyncio.wait_for(asyncio.to_thread(_call_gemini_text_api, api_key=api_key, prompt=_GEMINI_VISION_REPAIR_PROMPT + raw_text.strip()), timeout=30.0)
-
-
-async def _repair_openai_vision_json(*, api_key: str, raw_text: str) -> str:
-    return await asyncio.wait_for(asyncio.to_thread(_call_openai_text_api, api_key=api_key, prompt=_OPENAI_VISION_REPAIR_PROMPT + raw_text.strip()), timeout=30.0)
-
-
 def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, Any]:
     """Build a richer prompt requesting structured TOON output with v3 analytics fields."""
     media_type = str(context.get("media_type") or "IMAGE").upper()
@@ -935,48 +896,11 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             f"{content_type_note} "
             "Your output must feel like premium, personalized coaching — specific, grounded in the data, "
             "and immediately actionable. Never use vague advice like 'improve content quality'. "
-            "Return ONLY valid TOON format (Token-Oriented Object Notation). "
-            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes. "
-            "Example:\n"
-            "summary Example summary.\n"
-            "drivers\n"
-            "  -\n"
-            "    id driver_1\n"
-            "    label Strong hook\n"
-            "    type POSITIVE\n"
-            "    explanation Uses core_metrics.reach\n"
-            "recommendations\n"
-            "  -\n"
-            "    id rec_1\n"
-            "    text Add a clear CTA in the first line of your caption\n"
-            "    impact_level HIGH\n"
-            "    category CAPTION\n"
-            "engagement_potential_score\n"
-            "  emotional_resonance 6\n"
-            "  shareability 5\n"
-            "  save_worthiness 4\n"
-            "  comment_potential 3\n"
-            "  novelty_or_value 5\n"
-            "  total 23\n"
-            "  notes\n"
-            "    - concise note\n"
-            "caption_improvement\n"
-            "  hook_rewrite A more compelling opening line for the caption\n"
-            "  cta_rewrite A specific, action-oriented call-to-action\n"
-            "posting_intelligence Best posting window for this niche based on the data provided\n"
-            "hashtag_quality_note One-sentence assessment of the hashtag strategy quality\n"
-            "hashtag_analysis\n"
-            "  quality_band Excellent\n"
-            "  issue None\n"
-            "  suggested_count 15\n"
-            "  strategy_tip Specific advice on hashtag mix\n"
-            "viral_opportunity This concept has viral potential. Amplify with a trending audio mechanic.\n"
-            "creator_next_step Immediate action to take to fix the weakest dimension.\n"
-            "Return ONLY valid TOON with keys: "
+            "Return ONLY one valid JSON object and no markdown. "
+            "Return exactly these keys: "
             "summary, drivers, recommendations, engagement_potential_score, "
             "caption_improvement, posting_intelligence, hashtag_quality_note, "
             "hashtag_analysis, viral_opportunity, creator_next_step. "
-            "Do not include markdown. "
             f"Summary: FIRST sentence must cite actual numbers.{er_note} "
             f"Name weakest dimension ({weakest}) and why it drags the score. "
             f"Mention strongest dimension ({strongest}). 3-5 sentences total. "
@@ -985,7 +909,7 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             "avoid generic phrases. "
             "caption_improvement: 1-sentence rewritten hook and 1-sentence improved CTA. "
             "posting_intelligence: 1-sentence comment on optimal timing. "
-            "hashtag_analysis: quality_band (Excellent|Good|Needs Work|Poor), suggested_count (int), strategy_tip (str). "
+            "hashtag_analysis: quality_band (Excellent|Good|Building Momentum|Poor), suggested_count (int), strategy_tip (str). "
             "viral_opportunity: 2 sentences on viral potential and amplification mechanics. "
             "creator_next_step: single sentence on highest-priority action based on "
             f"biggest gap ({weakest}). "
@@ -1000,26 +924,7 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             },
             ensure_ascii=True,
         ),
-    }
-
-
-def _build_repair_prompt(raw_output: str) -> dict[str, Any]:
-    return {
-        "system": (
-            "Repair the assistant output into valid TOON only. "
-            "Return ONLY TOON with these keys and no extra keys: "
-            "summary, drivers, recommendations, engagement_potential_score, "
-            "caption_improvement, posting_intelligence, hashtag_quality_note, "
-            "hashtag_analysis, viral_opportunity, creator_next_step. "
-            "Use 2-space indentation for nesting and '-' for list items. "
-            "Rules: driver.type in {POSITIVE,LIMITING}; recommendation.impact_level in {HIGH,MEDIUM,LOW}; "
-            "recommendation.category in {CAPTION,VISUAL,TIMING,HASHTAGS,ENGAGEMENT}; "
-            "all five engagement sub-scores numeric 0..10; total numeric 0..50; notes array of strings. "
-            "caption_improvement must have hook_rewrite and cta_rewrite string fields. "
-            "posting_intelligence must be a string. hashtag_quality_note must be a string. "
-            "If information is missing, fill safe defaults."
-        ),
-        "user": json.dumps({"raw_output": raw_output}, ensure_ascii=True),
+        "response_format": {"type": "json_object"},
     }
 
 
@@ -1039,13 +944,6 @@ async def _call_llm_async(prompt: dict[str, Any], llm_client: LLMClient | None) 
         return None
 
 
-async def _repair_llm_toon_output(raw_text: str | None, llm_client: LLMClient | None) -> str | None:
-    if not isinstance(raw_text, str) or not raw_text.strip():
-        return None
-    repair_prompt = _build_repair_prompt(raw_text)
-    return await _call_llm_async(repair_prompt, llm_client)
-
-
 async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | None = None) -> dict[str, Any] | None:
     """Run LLM-based S2 caption evaluation and return normalized payload."""
     if not isinstance(caption_text, str) or not caption_text.strip():
@@ -1054,10 +952,10 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
 
     prompt = {
         "system": (
-            "Return only valid TOON format (Token-Oriented Object Notation). "
-            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
+            "Return only one valid JSON object and no markdown."
         ),
         "user": S2_CAPTION_EVALUATION_PROMPT.replace("{caption_text}", format_user_text_block(caption_text)),
+        "response_format": {"type": "json_object"},
     }
     raw_text = await _call_llm_async(prompt, llm_client)
     if not isinstance(raw_text, str) or not raw_text.strip():
@@ -1065,16 +963,9 @@ async def run_caption_analysis_llm(caption_text: str, llm_client: LLMClient | No
         return None
 
     try:
-        payload = toon_loads(raw_text)
+        payload = _parse_object_response(raw_text)
     except Exception:
-        logger.debug("[AIAnalysis] Caption LLM parse failed; attempting repair")
-        repaired = await _repair_llm_toon_output(raw_text, llm_client)
-        if not isinstance(repaired, str):
-            return None
-        try:
-            payload = toon_loads(repaired)
-        except Exception:
-            return None
+        return None
 
     if not isinstance(payload, dict):
         return None
@@ -1135,10 +1026,10 @@ async def run_audience_relevance_llm(
     user_prompt = S4_AUDIENCE_RELEVANCE_PROMPT.replace("{creator_category}", format_user_text_block(creator_text)).replace("{post_category}", format_user_text_block(post_text))
     prompt = {
         "system": (
-            "Return only valid TOON format (Token-Oriented Object Notation). "
-            "Use 2-space indentation for nesting. Do not use braces, brackets, or quotes."
+            "Return only one valid JSON object and no markdown."
         ),
         "user": user_prompt,
+        "response_format": {"type": "json_object"},
     }
     raw_text = await _call_llm_async(prompt, llm_client)
     if not isinstance(raw_text, str) or not raw_text.strip():
@@ -1146,16 +1037,9 @@ async def run_audience_relevance_llm(
         return None
 
     try:
-        payload = toon_loads(raw_text)
+        payload = _parse_object_response(raw_text)
     except Exception:
-        logger.debug("[AIAnalysis] Audience LLM parse failed; attempting repair")
-        repaired = await _repair_llm_toon_output(raw_text, llm_client)
-        if not isinstance(repaired, str):
-            return None
-        try:
-            payload = toon_loads(repaired)
-        except Exception:
-            return None
+        return None
 
     if not isinstance(payload, dict):
         return None
@@ -1281,7 +1165,7 @@ def _parse_llm_response(
         return _empty
 
     try:
-        payload = toon_loads(raw_text)
+        payload = _parse_object_response(raw_text)
     except Exception:
         return _empty
 
@@ -1390,19 +1274,7 @@ async def _parse_llm_response_with_repair(
         if primary_payload is not None and _sanitize_engagement_potential_score(primary_payload) is not None:
             return summary, drivers, recommendations, primary_payload, caption_improvement, posting_intelligence, hashtag_quality_note, hashtag_analysis, viral_opportunity, creator_next_step
 
-    repaired_text = await _repair_llm_toon_output(raw_text, llm_client)
-    repaired = _parse_llm_response(repaired_text)
-    repaired_summary, repaired_drivers, repaired_recommendations, repaired_engagement, repaired_ci, repaired_pi, repaired_hq, repaired_ha, repaired_vo, repaired_cns = repaired
-    if repaired_summary is None:
-        return parsed
-
-    repaired_payload = sanitize_s5_payload(repaired_engagement)
-    if repaired_payload is None:
-        return parsed
-    if _sanitize_engagement_potential_score(repaired_payload) is None:
-        return parsed
-    return (repaired_summary, repaired_drivers, repaired_recommendations, repaired_payload,
-            repaired_ci, repaired_pi, repaired_hq, repaired_ha, repaired_vo, repaired_cns)
+    return parsed
 
 
 def sanitize_s5_payload(raw: Any) -> dict[str, Any] | None:

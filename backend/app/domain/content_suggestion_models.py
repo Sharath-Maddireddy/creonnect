@@ -189,6 +189,16 @@ class GenerateCaptionResponse(BaseModel):
     captions: list[GeneratedCaption]
 
 
+class PersistQuickIdeaRequest(BaseModel):
+    """Persist a quick trend recommendation as a full idea."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trend: dict[str, Any] = Field(default_factory=dict)
+    recommendation: dict[str, Any] = Field(default_factory=dict)
+    source: str = Field(default="quick_trend_card")
+
+
 # ── Idea Improvement ───────────────────────────────────────────────────────────
 
 

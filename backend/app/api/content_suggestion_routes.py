@@ -25,6 +25,7 @@ from backend.app.domain.content_suggestion_models import (
     PaginatedIdeasResponse,
     PaginationMeta,
     PlannerResponse,
+    PersistQuickIdeaRequest,
     DaySchedule,
     RegenerateRequest,
     RegenerateResponse,
@@ -197,6 +198,106 @@ async def list_ideas(
 
 
 # ── Script Generation ──────────────────────────────────────────────────────────
+
+
+@router.post("/{account_id}/trends/persist-idea")
+async def persist_quick_idea_endpoint(
+    account_id: str,
+    request: PersistQuickIdeaRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Persist a quick recommendation card as a database-backed idea."""
+    if not is_feature_enabled("TREND_RECOMMENDATIONS_V2"):
+        raise HTTPException(status_code=503, detail="Trend Recommendations V2 is not yet available. Check back soon.")
+
+    import uuid
+
+    trend = request.trend or {}
+    recommendation = request.recommendation or {}
+
+    title = (
+        recommendation.get("suggested_title")
+        or trend.get("topic_name")
+        or "Content Idea"
+    )
+    hook = recommendation.get("hook")
+    description = (
+        recommendation.get("expected_impact")
+        or recommendation.get("rationale")
+        or trend.get("description")
+        or "Generated from a quick trend recommendation."
+    )
+    rationale = recommendation.get("rationale") or trend.get("description")
+    content_style = recommendation.get("content_style") or trend.get("trend_type") or "reel"
+    trend_reference = recommendation.get("trend_reference") or trend.get("topic_name")
+    difficulty = recommendation.get("difficulty") or "Medium"
+    opportunity_score = recommendation.get("opportunity_score")
+    content_type = str(content_style).strip() or "reel"
+
+    normalized_type = content_type.lower()
+    if normalized_type in {"how-to", "educational", "story", "personal story", "pov/lifestyle", "brand friendly"}:
+        normalized_type = "reel"
+    elif normalized_type not in {"reel", "carousel", "photo"}:
+        normalized_type = "reel"
+
+    tags = [
+        value.strip()
+        for value in [
+            recommendation.get("content_style"),
+            trend.get("trend_type"),
+            trend.get("momentum"),
+            trend_reference,
+        ]
+        if isinstance(value, str) and value.strip()
+    ]
+
+    idea = Idea(
+        id=str(uuid.uuid4()),
+        account_id=account_id,
+        title=title,
+        description=description,
+        hook=hook,
+        content_type=normalized_type,
+        platform="instagram",
+        opportunity_score=opportunity_score,
+        expected_reach_min=recommendation.get("expected_reach_min"),
+        expected_reach_max=recommendation.get("expected_reach_max"),
+        expected_views_min=recommendation.get("expected_views_min"),
+        expected_views_max=recommendation.get("expected_views_max"),
+        expected_saves_min=recommendation.get("expected_saves_min"),
+        expected_saves_max=recommendation.get("expected_saves_max"),
+        expected_shares_min=recommendation.get("expected_shares_min"),
+        expected_shares_max=recommendation.get("expected_shares_max"),
+        difficulty=difficulty,
+        duration_seconds=recommendation.get("duration_seconds") or 45,
+        best_time_to_post=recommendation.get("best_time"),
+        trend_reference=trend_reference,
+        tags=tags,
+        generation_metadata={
+            "source": request.source,
+            "content_style": recommendation.get("content_style"),
+            "rationale": rationale,
+            "trend_snapshot": trend,
+            "recommendation_snapshot": recommendation,
+        },
+        status="draft",
+    )
+
+    db.add(idea)
+    await db.commit()
+
+    return {
+        "id": idea.id,
+        "title": idea.title,
+        "hook": idea.hook,
+        "description": idea.description,
+        "content_type": idea.content_type,
+        "opportunity_score": idea.opportunity_score,
+        "difficulty": idea.difficulty,
+        "trend_reference": idea.trend_reference,
+        "rationale": rationale,
+        "status": idea.status,
+    }
 
 
 @router.post("/{account_id}/trends/generate-script", response_model=GenerateScriptResponse)
@@ -649,17 +750,31 @@ async def get_idea_reasoning(
     score = idea.opportunity_score or idea.engagement_score or 75.0
     
     # Compute factor breakdown (deterministic fallback, can be swapped for LLM-based reasoning later)
+    factors = [
+        {"key": "niche_relevance", "value": min(100, max(0, round(score * 0.85))), "tooltip": "How well this topic aligns with your content niche"},
+        {"key": "competitive_score", "value": min(100, max(0, round(score * 0.72))), "tooltip": "Lower is better — less competition for this topic"},
+        {"key": "audience_match", "value": min(100, max(0, round(score * 0.90))), "tooltip": "How well this trend matches your audience interests"},
+        {"key": "post_performance", "value": min(100, max(0, round(score * 0.68))), "tooltip": "Your past performance on similar content"},
+        {"key": "best_timing", "value": min(100, max(0, round(score * 0.76))), "tooltip": "How optimal the posting time is for this content type"},
+    ]
+    strongest_factor = max(factors, key=lambda item: item["value"])["key"] if factors else None
+    weakest_factor = min(factors, key=lambda item: item["value"])["key"] if factors else None
+    ai_confidence_pct = min(97, max(55, round(58 + score * 0.38)))
+    percentile_rank = max(1, min(99, round(100 - score)))
+    summary_explanation = (
+        f"This idea scores {round(score)}/100 because it has strong {strongest_factor.replace('_', ' ') if strongest_factor else 'overall fit'}"
+        f" with comparatively weaker {weakest_factor.replace('_', ' ') if weakest_factor else 'supporting factors'}."
+    )
+
     return {
         "idea_id": idea.id,
         "opportunity_score": score,
-        "factors": [
-            {"key": "niche_relevance", "value": min(100, max(0, round(score * 0.85))), "tooltip": "How well this topic aligns with your content niche"},
-            {"key": "competitive_score", "value": min(100, max(0, round(score * 0.72))), "tooltip": "Lower is better — less competition for this topic"},
-            {"key": "audience_match", "value": min(100, max(0, round(score * 0.90))), "tooltip": "How well this trend matches your audience interests"},
-            {"key": "post_performance", "value": min(100, max(0, round(score * 0.68))), "tooltip": "Your past performance on similar content"},
-            {"key": "best_timing", "value": min(100, max(0, round(score * 0.76))), "tooltip": "How optimal the posting time is for this content type"},
-        ],
-        "ai_confidence_pct": 89.0,
+        "factors": factors,
+        "ai_confidence_pct": ai_confidence_pct,
+        "percentile_rank": percentile_rank,
+        "strongest_factor": strongest_factor,
+        "weakest_factor": weakest_factor,
+        "summary_explanation": summary_explanation,
     }
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 from backend.app.ai.llm_client import LLMClient
@@ -71,7 +73,7 @@ async def _generate_for_platform(
     system_prompt = (
         f"You are an expert social media copywriter specializing in {platform} content. "
         "Create engaging captions that drive interaction. "
-        "Return ONLY valid TOON format."
+        "Return ONLY one valid JSON object and no markdown."
     )
 
     context = f"Title: {title}"
@@ -93,25 +95,25 @@ Create an engaging caption with:
 - hashtags: List of relevant hashtags (without #)
 - tips_applied: List of writing tips used
 
-OUTPUT FORMAT (STRICT TOON):
-caption_text: Your caption here
-hashtags
-  - hashtag1
-  - hashtag2
-  - hashtag3
-tips_applied
-  - Open with a strong hook
-  - Add question to increase engagement
+Return JSON shape:
+{{
+  "caption_text": "Your caption here",
+  "hashtags": ["hashtag1", "hashtag2", "hashtag3"],
+  "tips_applied": ["Open with a strong hook", "Add question to increase engagement"]
+}}
 """
 
     try:
         llm = LLMClient(temperature=0.7, max_tokens=800)
-        raw = await llm.generate_async({"system": system_prompt, "user": user_prompt})
+        raw = await asyncio.to_thread(
+            llm.generate,
+            {"system": system_prompt, "user": user_prompt, "response_format": {"type": "json_object"}},
+        )
 
         if not raw or not raw.strip():
             raise ValueError("Empty LLM response")
 
-        parsed = _parse_toon_caption(raw)
+        parsed = _parse_json_caption(raw)
 
         caption_text = parsed.get("caption_text", "")
         hashtags = parsed.get("hashtags", [])[:max_hashtags]
@@ -136,45 +138,28 @@ tips_applied
         return _fallback_caption(idea_id, title, platform, include_hashtags, max_hashtags)
 
 
-def _parse_toon_caption(raw: str) -> dict[str, Any]:
-    """Parse TOON format caption response."""
-    result = {
-        "caption_text": "",
-        "hashtags": [],
-        "tips_applied": [],
-    }
+def _strip_markdown_fences(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) > 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
 
-    lines = raw.strip().split("\n")
-    current_section = None
-    hashtags = []
-    tips = []
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        if line.startswith("caption_text:"):
-            result["caption_text"] = line.split(":", 1)[1].strip()
-            current_section = None
-        elif line.startswith("hashtags"):
-            current_section = "hashtags"
-        elif line.startswith("tips_applied"):
-            current_section = "tips"
-        elif line.startswith("-") and current_section == "hashtags":
-            hashtags.append(line[1:].strip())
-        elif line.startswith("-") and current_section == "tips":
-            tips.append(line[1:].strip())
-        elif current_section is None and not line.startswith(("caption_text:", "hashtags", "tips_applied")):
-            # Continuation of caption text
-            if result["caption_text"]:
-                result["caption_text"] += " " + line
-            else:
-                result["caption_text"] = line
-
-    result["hashtags"] = hashtags
-    result["tips_applied"] = tips
-    return result
+def _parse_json_caption(raw: str) -> dict[str, Any]:
+    """Parse JSON caption response."""
+    stripped = _strip_markdown_fences(raw)
+    if "{" in stripped and "}" in stripped:
+        stripped = stripped[stripped.find("{"):stripped.rfind("}") + 1]
+    payload = json.loads(stripped)
+    if not isinstance(payload, dict):
+        raise ValueError("Caption response must be a JSON object")
+    payload.setdefault("caption_text", "")
+    payload.setdefault("hashtags", [])
+    payload.setdefault("tips_applied", [])
+    return payload
 
 
 def _fallback_caption(

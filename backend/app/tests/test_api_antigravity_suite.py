@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
-import fakeredis
+from conftest import make_fake_redis_client
 import pytest
 from fastapi.testclient import TestClient
 
@@ -37,6 +37,8 @@ EXPECTED_POST_ANALYSIS_TOP_LEVEL_KEYS = {
     "vision",
     "scores",
     "ai",
+    "cringe",
+    "score_analysis",
     "warnings",
     "quality",
 }
@@ -50,6 +52,7 @@ EXPECTED_SCORE_KEYS = {
     "P",
     "predicted_engagement_rate",
     "predicted_engagement_rate_notes",
+    "predicted_er_confidence",
 }
 
 
@@ -214,10 +217,29 @@ def test_post_analysis_schema_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     assert payload["status"] == "succeeded"
     assert set(payload["post"].keys()) == {"post_id", "post_type", "media_url", "caption_text"}
     assert set(payload["vision"].keys()) == {"provider", "status", "signals"}
-    assert set(payload["ai"].keys()) == {"summary", "drivers", "recommendations", "vision_status", "fallback_used"}
+    assert set(payload["ai"].keys()) == {
+        "summary",
+        "drivers",
+        "recommendations",
+        "vision_status",
+        "fallback_used",
+        "caption_improvement",
+        "posting_intelligence",
+        "hashtag_quality_note",
+    }
     assert isinstance(payload.get("scores"), dict)
     assert set(payload["scores"].keys()) == EXPECTED_SCORE_KEYS
     assert isinstance(payload["scores"]["predicted_engagement_rate_notes"], list)
+    assert set(payload["cringe"].keys()) == {
+        "cringe_score",
+        "cringe_label",
+        "is_cringe",
+        "cringe_signals",
+        "cringe_fixes",
+        "production_level",
+        "adult_content_detected",
+        "vision_status",
+    }
 
 
 def test_post_analysis_determinism_same_input(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -235,7 +257,7 @@ def test_post_analysis_determinism_same_input(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_account_enqueue_dedupe_storm(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
@@ -252,7 +274,7 @@ def test_account_enqueue_dedupe_storm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
@@ -278,7 +300,7 @@ def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_poll_missing_job_returns_404_or_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     client = TestClient(app)
@@ -289,7 +311,7 @@ def test_poll_missing_job_returns_404_or_clean_error(monkeypatch: pytest.MonkeyP
 
 
 def test_posts_summary_payload_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _ImmediateQueue())
 
@@ -391,7 +413,7 @@ def test_post_analysis_cost_throttle_anti_spam(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_account_analysis_quality_flags_correctness(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _ImmediateQueue())
     
@@ -415,7 +437,7 @@ def test_account_analysis_quality_flags_correctness(monkeypatch: pytest.MonkeyPa
 
 
 def test_account_analysis_scoring_constraints_impossible_states(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _ImmediateQueue())
     

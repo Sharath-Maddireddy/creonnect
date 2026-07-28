@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-import fakeredis
+from conftest import make_fake_redis_client
 import pytest
 from fastapi.testclient import TestClient
 
@@ -19,7 +19,17 @@ import backend.app.services.post_insights_service as post_insights_service
 from backend.main import app
 
 
-EXPECTED_POST_TOP_LEVEL_KEYS = {"status", "post", "scores", "vision", "ai", "warnings", "quality"}
+EXPECTED_POST_TOP_LEVEL_KEYS = {
+    "status",
+    "post",
+    "scores",
+    "vision",
+    "ai",
+    "cringe",
+    "score_analysis",
+    "warnings",
+    "quality",
+}
 EXPECTED_POST_SCORE_KEYS = {
     "S1",
     "S2",
@@ -30,6 +40,7 @@ EXPECTED_POST_SCORE_KEYS = {
     "P",
     "predicted_engagement_rate",
     "predicted_engagement_rate_notes",
+    "predicted_er_confidence",
 }
 
 
@@ -237,7 +248,7 @@ def test_post_media_url_failure_no_500(
 
 
 def test_account_dedupe_storm(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
@@ -253,7 +264,7 @@ def test_account_dedupe_storm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
@@ -273,7 +284,7 @@ def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_poll_unknown_job_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     client = TestClient(app)
@@ -283,7 +294,7 @@ def test_poll_unknown_job_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_posts_summary_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     client = TestClient(app)
@@ -325,7 +336,7 @@ def test_posts_summary_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_quality_flags_correctness(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _ImmediateQueue())
 

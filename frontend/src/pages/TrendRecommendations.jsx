@@ -16,6 +16,15 @@ import IdeaDetailDrawer from '../components/IdeaDetailDrawer'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
+function isPersistedIdeaId(value) {
+    if (typeof value !== 'string') return false
+    const trimmed = value.trim()
+    if (!trimmed) return false
+    if (trimmed.startsWith('trend-')) return false
+    if (trimmed.startsWith('quick-')) return false
+    return true
+}
+
 function buildScript(trend, rec) {
     const title = rec?.suggested_title || trend?.topic_name || 'Trend idea'
     const why = rec?.rationale || trend?.description || 'This idea fits your current trend opportunity.'
@@ -29,11 +38,66 @@ function buildScript(trend, rec) {
     ].join('\n')
 }
 
+function buildScriptPreview(trend, rec) {
+    const title = rec?.suggested_title || trend?.topic_name || 'Trend idea'
+    const hook = rec?.hook || title
+    const why = rec?.rationale || trend?.description || 'This idea fits your current trend opportunity.'
+    return {
+        idea_id: null,
+        hook,
+        scenes: [
+            {
+                scene_number: 1,
+                time_range: '0-5s',
+                description: `Open with a direct hook around "${hook}".`,
+                visual_notes: 'Lead with text-on-screen and a fast first beat.',
+            },
+            {
+                scene_number: 2,
+                time_range: '5-20s',
+                description: `Introduce the trend angle: ${trend?.topic_name || 'the selected trend'}. Share the specific tension, mistake, or opportunity your audience should notice.`,
+                visual_notes: 'Use a quick example, screenshot, or demo moment.',
+            },
+            {
+                scene_number: 3,
+                time_range: '20-40s',
+                description: `Add your proof, example, or personal take and tie it back to "${title}".`,
+                visual_notes: 'Show results, a mini case study, or a step-by-step cut.',
+            },
+        ],
+        cta: 'Ask viewers to save this idea and comment with their version.',
+        estimated_duration_sec: rec?.duration_seconds || 40,
+        full_script: buildScript(trend, rec),
+        preview_only: true,
+        preview_note: `Quick draft from the recommendation card. Generate New Ideas to save this as a full database idea for deeper AI actions.`,
+    }
+}
+
 function buildCaption(trend, rec) {
     const title = rec?.suggested_title || trend?.topic_name || 'New content idea'
     const impact = rec?.expected_impact || 'Designed to improve discovery and engagement.'
     const tag = trend?.trend_type ? `#${trend.trend_type}` : '#contentideas'
     return `${title}\n\n${impact}\n\nTry this format this week and track saves, shares, and comments.\n\n${tag} #creatoreconomy #trendstrategy`
+}
+
+function buildCaptionPreview(trend, rec) {
+    const captionText = buildCaption(trend, rec)
+    const hashtags = captionText
+        .split(/\s+/)
+        .filter(token => token.startsWith('#'))
+        .map(token => token.replace(/[^\w#]/g, ''))
+        .filter(Boolean)
+
+    return [{
+        platform: 'instagram',
+        caption_text: captionText,
+        hashtags,
+        character_count: captionText.length,
+        hashtag_count: hashtags.length,
+        tips_applied: ['Matched to the selected trend card', 'Includes a clear CTA', 'Keeps discovery-focused hashtags'],
+        preview_only: true,
+        preview_note: 'Quick caption draft from the recommendation card.',
+    }]
 }
 
 function buildAssistantReply(prompt, data) {
@@ -56,6 +120,60 @@ function buildAssistantReply(prompt, data) {
     }
     const topRec = recs[0]?.suggested_title || firstTrend
     return `For ${niche}, start with "${topRec}". Keep the post specific, show one clear example, and use the CTA from the recommendation card.`
+}
+
+function matchesFilter(card, activeFilter) {
+    if (activeFilter === 'All') return true
+
+    const trend = card?.trend || {}
+    const rec = card?.rec || {}
+    const filter = activeFilter.toLowerCase()
+    const momentum = String(trend.momentum || '').toLowerCase()
+    const trendType = String(trend.trend_type || '').toLowerCase()
+    const contentStyle = String(rec.content_style || '').toLowerCase()
+    const difficulty = String(rec.difficulty || '').toLowerCase()
+    const contentText = [
+        trend.topic_name,
+        trend.description,
+        rec.suggested_title,
+        rec.rationale,
+        rec.expected_impact,
+        rec.hook,
+        rec.trend_reference,
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+
+    const hasAny = (terms) => terms.some(term => contentText.includes(term))
+
+    switch (filter) {
+        case 'trending':
+            return momentum === 'rising' || momentum === 'peaking'
+        case 'reels':
+            return trendType === 'format' || hasAny(['reel', 'video', 'short-form'])
+        case 'carousel':
+            return hasAny(['carousel', 'slide', 'slides', 'swipe'])
+        case 'photo':
+            return hasAny(['photo', 'static post', 'single image', 'lookbook'])
+        case 'educational':
+            return contentStyle.includes('educational') || contentStyle.includes('how-to') || hasAny(['tips', 'explained', 'how to', 'guide', 'breakdown'])
+        case 'personal story':
+            return contentStyle.includes('story') || contentStyle.includes('pov') || contentStyle.includes('lifestyle') || hasAny(['i ', 'my ', 'me ', 'journey', 'story', 'experience'])
+        case 'brand friendly':
+            return hasAny(['brand', 'product', 'review', 'comparison', 'storefront', 'shop', 'shopping', 'affiliate', 'sponsor', 'saves', 'clicks'])
+        case 'beginner':
+            return difficulty === 'easy'
+        case 'advanced':
+            return difficulty === 'hard'
+        default:
+            return (
+                filter === momentum ||
+                filter === trendType ||
+                contentStyle.includes(filter) ||
+                difficulty === filter
+            )
+    }
 }
 
 // ─── Data Maps ────────────────────────────────────────────────────────────────
@@ -176,16 +294,10 @@ function Sidebar({ account }) {
 }
 
 // ─── Opportunity Banner ───────────────────────────────────────────────────────
-function OpportunityBanner({ niche, opportunityBullets, onRefresh, busy, hasAccount }) {
-    const score = niche ? Math.round((niche.confidence_score || 0.7) * 100) : 0
-    // Use real opportunity_bullets from backend, fallback to niche-based insights
-    const insights = (opportunityBullets && opportunityBullets.length > 0)
-        ? opportunityBullets.slice(0, 4)
-        : niche ? [
-            `Primary niche: ${niche.primary_category}`,
-            ...(niche.sub_niches || []).slice(0, 3).map(s => `${s} content is trending in your space`),
-            'Live trends matched to your strengths',
-        ] : []
+function OpportunityBanner({ niche, weeklyOpportunity, onRefresh, busy, hasAccount }) {
+    const score = typeof weeklyOpportunity?.score === 'number' ? weeklyOpportunity.score : null
+    const label = weeklyOpportunity?.label || null
+    const insights = Array.isArray(weeklyOpportunity?.bullets) ? weeklyOpportunity.bullets.slice(0, 4) : []
 
     return (
         <div className="cs-banner">
@@ -198,26 +310,31 @@ function OpportunityBanner({ niche, opportunityBullets, onRefresh, busy, hasAcco
                     <span className="cs-banner__badge">Beta</span>
                 </div>
                 <p className="cs-banner__sub">
-                    {niche
-                        ? `Based on your last 30 posts, we've identified ${Math.max(3, (niche.sub_niches?.length || 0) + 3)} high-opportunity content ideas for this week.`
+                    {weeklyOpportunity
+                        ? `We've identified ${weeklyOpportunity.idea_count} high-opportunity content idea${weeklyOpportunity.idea_count === 1 ? '' : 's'} for this week.`
+                        : niche
+                        ? 'Your weekly opportunity summary is being prepared from your latest trend analysis.'
                         : 'Enter your account ID above to generate personalised trend recommendations powered by live AI analysis.'}
                 </p>
-                <div className="cs-banner__bullets">
-                    {insights.map((ins, i) => (
-                        <div key={i} className={`cs-banner__bullet cs-banner__bullet--${i === 0 ? 'green' : i === 1 ? 'blue' : 'yellow'}`}>
-                            <span className="cs-banner__bullet-dot" />
-                            {ins}
-                        </div>
-                    ))}
-                </div>
+                {weeklyOpportunity?.summary_reason && (
+                    <p className="cs-banner__sub">{weeklyOpportunity.summary_reason}</p>
+                )}
+                {insights.length > 0 && (
+                    <div className="cs-banner__bullets">
+                        {insights.map((ins, i) => (
+                            <div key={i} className={`cs-banner__bullet cs-banner__bullet--${i === 0 ? 'green' : i === 1 ? 'blue' : 'yellow'}`}>
+                                <span className="cs-banner__bullet-dot" />
+                                {ins}
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
             <div className="cs-banner__right">
-                {niche ? (
+                {weeklyOpportunity && score !== null ? (
                     <>
                         <ScoreGauge score={score} label="Opportunity Score" />
-                        <p className="cs-banner__score-label">
-                            {score >= 80 ? 'Very High' : score >= 60 ? 'High' : 'Moderate'}
-                        </p>
+                        <p className="cs-banner__score-label">{label}</p>
                                                 <button className="cs-generate-btn" onClick={onRefresh} disabled={busy || !hasAccount} title={!hasAccount ? 'Load an account first' : 'Generate weekly plan'}>
                             {busy ? 'Analysing…' : 'Generate Weekly Plan →'}
                         </button>
@@ -250,7 +367,7 @@ function FilterTabs({ active, onChange }) {
 }
 
 // ─── Trend + Rec combined card ─────────────────────────────────────────────────
-function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate, onMoreOptions, onCardClick }) {
+function SuggestionCard({ trend, rec, index, onSaveIdea, onGenerate, onMoreOptions, onCardClick }) {
     const m = MOMENTUM[trend?.momentum] || MOMENTUM.rising
     const t = TREND_TYPE[trend?.trend_type] || TREND_TYPE.topic
     // Use real opportunity_score from backend, fallback to momentum-based
@@ -339,13 +456,13 @@ function SuggestionCard({ trend, rec, index, saved, onToggleSave, onGenerate, on
 
                         {/* Actions col */}
             <div className="cs-card__actions">
-                <button className="cs-action-btn cs-action-btn--primary" onClick={() => onGenerate('script', trend, rec)} title="Generate New Ideas first to unlock full script generation">Generate Script</button>
-                <button className="cs-action-btn cs-action-btn--ghost" onClick={() => onGenerate('caption', trend, rec)} title="Generate New Ideas first to unlock full caption generation">Generate Caption</button>
+                <button className="cs-action-btn cs-action-btn--primary" onClick={() => onGenerate('script', trend, rec)} title="Generate a full script for this idea">Generate Script</button>
+                <button className="cs-action-btn cs-action-btn--ghost" onClick={() => onGenerate('caption', trend, rec)} title="Generate a caption for this idea">Generate Caption</button>
                 <button
-                    className={`cs-action-btn cs-action-btn--save${saved ? ' cs-action-btn--saved' : ''}`}
-                    onClick={() => onToggleSave(trend, rec)}
+                    className="cs-action-btn cs-action-btn--save"
+                    onClick={() => onSaveIdea(trend, rec)}
                 >
-                    {saved ? 'Saved' : 'Save Idea'}
+                    Save Idea
                 </button>
                 <button
                     className="cs-action-btn cs-action-btn--ghost"
@@ -576,11 +693,11 @@ export default function TrendRecommendations() {
     const [activeFilter, setActiveFilter] = useState('All')
     const [sortMode,     setSortMode]     = useState('Opportunity')
     const [visibleCount, setVisibleCount] = useState(5)
-    const [savedIdeas,   setSavedIdeas]   = useState(() => {
+    const [quickIdeaMap, setQuickIdeaMap] = useState(() => {
         try {
-            return JSON.parse(localStorage.getItem('trend_saved_ideas') || '[]')
+            return JSON.parse(localStorage.getItem('trend_quick_idea_map') || '{}')
         } catch (_) {
-            return []
+            return {}
         }
     })
     const [generated, setGenerated] = useState(null)
@@ -712,11 +829,33 @@ export default function TrendRecommendations() {
 
     function handleSearch(e) {
         e.preventDefault()
-        const id = accountInput.trim()
-        if (!id) return
-        setAccountId(id)
-        // Always try GET first; it auto-falls-through to refresh if no DB result
-        fetchExisting(id)
+        const rawInput = accountInput.trim()
+        if (!rawInput) return
+
+        ;(async () => {
+            try {
+                const res = await fetch(`/api/v1/accounts/resolve?query=${encodeURIComponent(rawInput)}`, {
+                    credentials: 'include',
+                })
+                const resolved = res.ok ? await res.json() : null
+                const canonicalId = resolved?.resolved && resolved?.account_id
+                    ? resolved.account_id
+                    : rawInput.replace(/^@+/, '')
+
+                setAccountId(canonicalId)
+                fetchExisting(canonicalId)
+
+                if (resolved && !resolved.resolved) {
+                    setError(`We couldn't fully resolve "${rawInput}", so we tried it directly.`)
+                } else {
+                    setError(null)
+                }
+            } catch (_) {
+                const fallback = rawInput.replace(/^@+/, '')
+                setAccountId(fallback)
+                fetchExisting(fallback)
+            }
+        })()
     }
 
     const busy = loading || polling
@@ -726,22 +865,7 @@ export default function TrendRecommendations() {
         const trends = data?.global_trends || []
         const recs   = data?.recommendations || []
         const cards  = trends.map((t, i) => ({ trend: t, rec: recs[i] || null }))
-        const filtered = activeFilter === 'All' ? cards : cards.filter(c => {
-            const m = c.trend?.momentum || ''
-            const typ = c.trend?.trend_type || ''
-            const style = (c.rec?.content_style || '').toLowerCase()
-            const diff = (c.rec?.difficulty || '').toLowerCase()
-            const filterLower = activeFilter.toLowerCase()
-            return (
-                filterLower === m ||
-                filterLower === typ ||
-                style.includes(filterLower) ||
-                diff === filterLower ||
-                (filterLower === 'trending' && m === 'rising') ||
-                (filterLower === 'reels' && typ === 'format') ||
-                (filterLower === 'photo' && typ === 'topic')
-            )
-        })
+        const filtered = cards.filter(c => matchesFilter(c, activeFilter))
         return [...filtered].sort((left, right) => {
             if (sortMode === 'Momentum') {
                 const order = { peaking: 3, rising: 2, falling: 1 }
@@ -763,32 +887,104 @@ export default function TrendRecommendations() {
 
     const niche  = data?.niche
     const trends = data?.global_trends || []
+    const weeklyOpportunity = data?.weekly_opportunity || null
 
     function ideaKey(trend, rec) {
         return `${trend?.topic_name || 'trend'}::${rec?.suggested_title || ''}`
     }
 
-    function toggleSave(trend, rec) {
-        const key = ideaKey(trend, rec)
-        setSavedIdeas(prev => {
-            const exists = prev.some(item => item.key === key)
-            const next = exists
-                ? prev.filter(item => item.key !== key)
-                : [...prev, { key, trend, rec, saved_at: new Date().toISOString() }]
-            localStorage.setItem('trend_saved_ideas', JSON.stringify(next))
+    function rememberQuickIdea(key, idea) {
+        setQuickIdeaMap(prev => {
+            const next = {
+                ...prev,
+                [key]: {
+                    ideaId: idea.id,
+                    title: idea.title,
+                    hook: idea.hook || null,
+                    persistedAt: new Date().toISOString(),
+                },
+            }
+            localStorage.setItem('trend_quick_idea_map', JSON.stringify(next))
             return next
         })
     }
 
-        function handleGenerate(kind, trend, rec) {
-        const title = rec?.suggested_title || trend?.topic_name || 'Content Idea'
-        const hook = rec?.hook || null
-        // Note: trend-based ideas use temporary IDs — backend may return 404 for non-UUID idea IDs.
-        // Click "Generate New Ideas" first to create DB-persisted ideas that support full script/caption generation.
-        if (kind === 'script') {
-            setShowScriptGen({ ideaId: `trend-${Date.now()}`, title, hook })
-        } else if (kind === 'caption') {
-            setShowCaptionGen({ ideaId: `trend-${Date.now()}`, title })
+    async function ensureIdeaForRecommendation(trend, rec) {
+        const key = ideaKey(trend, rec)
+        const existing = quickIdeaMap[key]
+        if (isPersistedIdeaId(existing?.ideaId)) {
+            return {
+                id: existing.ideaId,
+                title: existing.title || rec?.suggested_title || trend?.topic_name || 'Content Idea',
+                hook: existing.hook || rec?.hook || null,
+            }
+        }
+
+        if (existing?.ideaId && !isPersistedIdeaId(existing.ideaId)) {
+            setQuickIdeaMap(prev => {
+                const next = { ...prev }
+                delete next[key]
+                localStorage.setItem('trend_quick_idea_map', JSON.stringify(next))
+                return next
+            })
+        }
+
+        const res = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/persist-idea`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                trend,
+                recommendation: rec,
+                source: 'quick_trend_card',
+            }),
+        })
+        const payload = await res.json().catch(() => ({}))
+        if (!res.ok) {
+            throw new Error(payload.detail || `Could not prepare this idea (${res.status})`)
+        }
+
+        rememberQuickIdea(key, payload)
+        return payload
+    }
+
+    async function handleSaveIdea(trend, rec) {
+        if (!accountId) {
+            setError('Load an account first before saving ideas.')
+            return
+        }
+
+        try {
+            const idea = await ensureIdeaForRecommendation(trend, rec)
+            setShowSaveModal(idea.id)
+        } catch (e) {
+            setError(e.message)
+        }
+    }
+
+    async function handleGenerate(kind, trend, rec) {
+        if (!accountId) {
+            setError('Load an account first before generating scripts or captions.')
+            return
+        }
+
+        try {
+            const idea = await ensureIdeaForRecommendation(trend, rec)
+            if (kind === 'script') {
+                setShowScriptGen({
+                    ideaId: idea.id,
+                    title: idea.title,
+                    hook: idea.hook || rec?.hook || null,
+                })
+            } else if (kind === 'caption') {
+                setShowCaptionGen({
+                    ideaId: idea.id,
+                    title: idea.title,
+                    hook: idea.hook || rec?.hook || null,
+                })
+            }
+        } catch (e) {
+            setError(e.message)
         }
     }
 
@@ -930,15 +1126,15 @@ export default function TrendRecommendations() {
                             <span className="cs-topbar__search-icon">🔍</span>
                             <input
                                 className="cs-topbar__search-input"
-                                placeholder="Search creator account ID…"
+                                placeholder="Search by creator username, @handle, or account ID…"
                                 value={accountInput}
                                 onChange={e => setAccountInput(e.target.value)}
                                 disabled={busy}
                             />
                             <kbd className="cs-topbar__kbd">⌘ K</kbd>
                         </form>
-                                                <button className="cs-generate-btn" onClick={() => accountId && setShowGenerateModal(true)} disabled={busy || !accountId} title={!accountId ? 'Load an account first' : 'Generate new content ideas'}>
-                            ✨ {busy ? 'Analysing…' : 'Generate New Ideas'}
+                        <button className="cs-generate-btn" onClick={() => accountId && setShowGenerateModal(true)} disabled={busy || !accountId} title={!accountId ? 'Load an account first' : 'Create full database-backed content ideas'}>
+                            ✨ {busy ? 'Analysing…' : 'Generate Full Ideas'}
                         </button>
                         <button className="cs-topbar__refresh-icon" onClick={() => accountId && fetchExisting(accountId)} disabled={busy} title="Refresh">↻</button>
                     </div>
@@ -967,7 +1163,7 @@ export default function TrendRecommendations() {
                     )}
 
                     {/* ── Opportunity Banner ── */}
-                    <OpportunityBanner niche={niche} opportunityBullets={data?.opportunity_bullets} onRefresh={() => accountId && setShowGenerateModal(true)} busy={busy} hasAccount={!!accountId} />
+                    <OpportunityBanner niche={niche} weeklyOpportunity={weeklyOpportunity} onRefresh={() => accountId && setShowGenerateModal(true)} busy={busy} hasAccount={!!accountId} />
 
                     {/* ── Filter Tabs + Sort ── */}
                     <div className="cs-filters-row">
@@ -988,9 +1184,12 @@ export default function TrendRecommendations() {
                     {/* ── Feed header ── */}
                     {data && (
                         <div className="cs-feed-header">
-                            <h2 className="cs-feed-header__title">AI Suggestions <span className="cs-feed-header__info">ℹ</span></h2>
+                            <h2 className="cs-feed-header__title">Quick Trend Angles <span className="cs-feed-header__info">ℹ</span></h2>
                             <p className="cs-feed-header__sub">
-                                Personalised ideas with high potential based on your niche &amp; live trends.
+                                These are fast recommendation cards generated from your niche and live trends. Use them to explore strong directions, then open script, caption, save, or schedule from the same card.
+                            </p>
+                            <p className="cs-feed-header__note">
+                                The first time you use an action on a quick card, we automatically turn it into a full working idea in the background so the complete workflow can continue normally.
                             </p>
                         </div>
                     )}
@@ -1006,12 +1205,15 @@ export default function TrendRecommendations() {
                             trend={c.trend}
                             rec={c.rec}
                             index={i}
-                            saved={savedIdeas.some(item => item.key === ideaKey(c.trend, c.rec))}
-                            onToggleSave={toggleSave}
+                            onSaveIdea={handleSaveIdea}
                             onGenerate={handleGenerate}
-                            onMoreOptions={(trend, rec) => {
-                                const title = rec?.suggested_title || trend?.topic_name || 'Content Idea'
-                                setShowMoreOptions({ ideaId: `trend-${Date.now()}`, title })
+                            onMoreOptions={async (trend, rec) => {
+                                try {
+                                    const idea = await ensureIdeaForRecommendation(trend, rec)
+                                    setShowMoreOptions({ ideaId: idea.id, title: idea.title })
+                                } catch (e) {
+                                    setError(e.message)
+                                }
                             }}
                             onCardClick={() => setShowIdeaDetail({ ...c.rec, ...c.trend, id: `trend-${i}` })}
                         />
@@ -1021,9 +1223,9 @@ export default function TrendRecommendations() {
                     {generatedIdeas.length > 0 && (
                         <>
                             <div className="cs-feed-header">
-                                <h2 className="cs-feed-header__title">✨ Newly Generated Ideas <span className="cs-feed-header__info">ℹ</span></h2>
+                                <h2 className="cs-feed-header__title">✨ Full Generated Ideas <span className="cs-feed-header__info">ℹ</span></h2>
                                 <p className="cs-feed-header__sub">
-                                    AI has generated {generatedIdeas.length} new idea{generatedIdeas.length > 1 ? 's' : ''} for you. Each idea can be saved, scheduled, or expanded.
+                                    AI has generated {generatedIdeas.length} full idea{generatedIdeas.length > 1 ? 's' : ''} for you. These are database-backed working ideas built for the complete workflow.
                                 </p>
                             </div>
                             {generatedIdeas.map((idea, i) => (
@@ -1044,8 +1246,17 @@ export default function TrendRecommendations() {
                                             {idea.content_type && <span className="cs-tag cs-tag--format">{idea.content_type}</span>}
                                             {idea.hook && <span className="cs-tag cs-tag--neutral">{idea.hook.slice(0, 60)}{idea.hook.length > 60 ? '…' : ''}</span>}
                                         </div>
+                                        {idea.description && (
+                                            <div className="cs-card__explain">
+                                                <span className="cs-card__explain-label">Idea</span>
+                                                <p className="cs-card__desc">{idea.description.slice(0, 180)}{idea.description.length > 180 ? '…' : ''}</p>
+                                            </div>
+                                        )}
                                         {idea.rationale && (
-                                            <p className="cs-card__desc">{idea.rationale.slice(0, 120)}{idea.rationale.length > 120 ? '…' : ''}</p>
+                                            <div className="cs-card__explain">
+                                                <span className="cs-card__explain-label">Why this idea</span>
+                                                <p className="cs-card__desc">{idea.rationale.slice(0, 180)}{idea.rationale.length > 180 ? '…' : ''}</p>
+                                            </div>
                                         )}
                                     </div>
                                     <div className="cs-card__stats">
@@ -1205,6 +1416,8 @@ export default function TrendRecommendations() {
                     ideaId={showScriptGen.ideaId}
                     ideaTitle={showScriptGen.title}
                     hook={showScriptGen.hook}
+                    previewOnly={showScriptGen.previewOnly}
+                    previewScript={showScriptGen.previewScript}
                     accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
                     onClose={() => setShowScriptGen(null)}
                     onCopy={() => console.log('Script copied')}
@@ -1216,6 +1429,9 @@ export default function TrendRecommendations() {
                 <CaptionGenerator
                     ideaId={showCaptionGen.ideaId}
                     ideaTitle={showCaptionGen.title}
+                    hook={showCaptionGen.hook}
+                    previewOnly={showCaptionGen.previewOnly}
+                    previewCaptions={showCaptionGen.previewCaptions}
                     accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
                     onClose={() => setShowCaptionGen(null)}
                     onCopy={() => console.log('Caption copied')}

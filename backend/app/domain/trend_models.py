@@ -272,6 +272,49 @@ class DailyInsights(BaseModel):
     )
 
 
+class WeeklyOpportunity(BaseModel):
+    """Weekly opportunity summary for the creator."""
+
+    score: int = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="Weekly opportunity score from 0-100.",
+    )
+
+    label: str = Field(
+        ...,
+        description="Human-readable weekly opportunity label such as Low, Medium, High, or Very High.",
+    )
+
+    idea_count: int = Field(
+        ...,
+        ge=0,
+        description="Number of high-opportunity ideas available this week.",
+    )
+
+    summary_reason: str = Field(
+        ...,
+        description="Short explanation for why this week is a good content opportunity.",
+    )
+
+    bullets: list[str] = Field(
+        default_factory=list,
+        description="Weekly opportunity bullets for the banner.",
+    )
+
+
+class ResolvedAccount(BaseModel):
+    """Canonical account resolution payload for search."""
+
+    query: str = Field(..., description="Original user search query.")
+    resolved: bool = Field(..., description="Whether the query matched a known account.")
+    account_id: str | None = Field(default=None, description="Canonical account identifier.")
+    username: str | None = Field(default=None, description="Resolved username if available.")
+    display_name: str | None = Field(default=None, description="Display name if available.")
+    reason: str | None = Field(default=None, description="Resolution failure reason when not resolved.")
+
+
 class TrendAnalysisResult(BaseModel):
     """Aggregated result of running trend analysis for a specific creator.
 
@@ -333,6 +376,11 @@ class TrendAnalysisResult(BaseModel):
         ),
     )
 
+    weekly_opportunity: Optional["WeeklyOpportunity"] = Field(
+        None,
+        description="Backend-computed weekly opportunity summary for the banner.",
+    )
+
 
 __all__ = [
     "CreatorNiche",
@@ -340,5 +388,7 @@ __all__ = [
     "TrendRecommendation",
     "ContentGap",
     "DailyInsights",
+    "WeeklyOpportunity",
+    "ResolvedAccount",
     "TrendAnalysisResult",
 ]

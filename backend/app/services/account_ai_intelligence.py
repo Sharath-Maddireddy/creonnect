@@ -7,7 +7,6 @@ from collections import Counter
 import json
 import os
 
-from backend.app.ai import toon
 from backend.app.ai.llm_client import LLMClient
 from backend.app.domain.account_models import BrandFitSignals, CreatorIntelligence
 from backend.app.domain.post_models import SinglePostInsights
@@ -16,33 +15,29 @@ from backend.app.utils.logger import logger
 _DEFAULT_CREATOR_TUNING_MODEL = LLMClient.DEFAULT_MODEL
 _CREATOR_INTELLIGENCE_SYSTEM_PROMPT = """
 You are a senior creator-strategy analyst producing labeled training data for a fine-tuned creator intelligence model.
-Return ONLY valid TOON (Token-Oriented Object Notation).
+Return ONLY one valid JSON object.
 
-Formatting rules:
-- Use plain keys and values only. Do not use JSON, braces, brackets, or quotes.
-- Use 2-space indentation for nested fields.
-- For list items, put "-" on its own line item line.
-- Omit fields only when truly unknown, but prefer best-effort inference from the creator data.
+Rules:
+- Do not include markdown fences or commentary.
 - Keep every value concise, specific, and evidence-based from the supplied posts.
+- Omit fields only when truly unknown, but prefer best-effort inference from the creator data.
+- sponsorship_potential must be one of: HIGH, MEDIUM, LOW.
 
-Schema mapped exactly to CreatorIntelligence:
-creator_persona value_or_null
-content_style_summary value_or_null
-audience_hypothesis value_or_null
-creator_strengths
-  - value
-improvement_areas
-  - value
-sponsorship_potential HIGH|MEDIUM|LOW
-notable_formats
-  - value
-top_performing_themes
-  - value
-brand_fit
-  fit_categories
-    - value
-  red_flags
-    - value
+Required JSON shape:
+{
+  "creator_persona": string|null,
+  "content_style_summary": string|null,
+  "audience_hypothesis": string|null,
+  "creator_strengths": string[],
+  "improvement_areas": string[],
+  "sponsorship_potential": "HIGH"|"MEDIUM"|"LOW"|null,
+  "notable_formats": string[],
+  "top_performing_themes": string[],
+  "brand_fit": {
+    "fit_categories": string[],
+    "red_flags": string[]
+  }
+}
 
 Field guidance:
 - creator_persona: one-sentence summary of who this creator is and what niche they occupy.
@@ -56,6 +51,30 @@ Field guidance:
 - brand_fit.fit_categories: categories of sponsors that fit naturally.
 - brand_fit.red_flags: brand-safety or partnership concerns only when supported by the data.
 """.strip()
+
+
+def _strip_markdown_fences(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) > 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
+
+
+def _parse_json_object_response(raw_text: str) -> dict[str, object]:
+    stripped = _strip_markdown_fences(raw_text)
+    if not stripped:
+        raise ValueError("LLM returned empty creator intelligence response.")
+    if "{" in stripped and "}" in stripped:
+        start = stripped.find("{")
+        end = stripped.rfind("}") + 1
+        stripped = stripped[start:end]
+    payload = json.loads(stripped)
+    if not isinstance(payload, dict):
+        raise ValueError("Creator intelligence response was not a JSON object.")
+    return payload
 
 
 def _clean_text(value: object, *, limit: int = 160) -> str | None:
@@ -298,12 +317,13 @@ async def generate_creator_intelligence(
                 ),
                 ensure_ascii=False,
             ),
+            "response_format": {"type": "json_object"},
         }
         llm = LLMClient(model_name=_resolve_creator_intelligence_model_name(), temperature=0.2, max_tokens=700)
         raw_response = await asyncio.to_thread(llm.generate, prompt)
         if not isinstance(raw_response, str) or not raw_response.strip():
             raise ValueError("LLM returned empty creator intelligence response.")
-        parsed = toon.loads(raw_response)
+        parsed = _parse_json_object_response(raw_response)
         if not isinstance(parsed, dict) or not parsed.get("creator_persona"):
             raise ValueError("LLM creator intelligence response missing creator_persona.")
 

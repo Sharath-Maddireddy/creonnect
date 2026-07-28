@@ -7,17 +7,18 @@ import os
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.domain.account_models import CreatorIntelligence
-from backend.app.domain.trend_models import TrendAnalysisResult
+from backend.app.domain.trend_models import ResolvedAccount, TrendAnalysisResult
 from backend.app.infra.database import get_db
-from backend.app.infra.models import CreatorTrendResult
+from backend.app.infra.models import AccountAnalysisResult, CreatorDiscoveryMeta, CreatorTrendResult
 from backend.app.infra.redis_client import aincr_with_expire
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
-from backend.app.services.creator_trend_service import CreatorTrendService
+from backend.app.services.creator_trend_service import CreatorTrendService, attach_weekly_opportunity
 from backend.app.services.draft_history_service import DraftHistoryContext, load_draft_history_context
 from backend.app.services.trend_cache import TrendAnalysisCache
 from backend.app.services.trend_queue_helper import get_trend_analysis_job_status
@@ -64,6 +65,67 @@ def _fallback_history_context(account_id: str) -> DraftHistoryContext:
     )
 
 
+@router.get("/resolve", response_model=ResolvedAccount)
+async def resolve_account_query(
+    query: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+) -> ResolvedAccount:
+    """Resolve a user-entered account search query to a canonical account record."""
+    raw_query = (query or "").strip()
+    normalized_query = raw_query.lstrip("@").strip()
+    lowered_query = normalized_query.lower()
+
+    if not normalized_query:
+        return ResolvedAccount(query=raw_query, resolved=False, reason="empty_query")
+
+    creator_stmt = (
+        select(CreatorDiscoveryMeta)
+        .where(
+            or_(
+                CreatorDiscoveryMeta.account_id == normalized_query,
+                func.lower(func.coalesce(CreatorDiscoveryMeta.username, "")) == lowered_query,
+            )
+        )
+        .limit(1)
+    )
+    creator_match = (await db.execute(creator_stmt)).scalar_one_or_none()
+    if creator_match is not None:
+        return ResolvedAccount(
+            query=raw_query,
+            resolved=True,
+            account_id=creator_match.account_id,
+            username=creator_match.username or normalized_query,
+            display_name=creator_match.username or creator_match.account_id,
+        )
+
+    analysis_stmt = (
+        select(AccountAnalysisResult)
+        .where(
+            or_(
+                AccountAnalysisResult.account_id == normalized_query,
+                func.lower(func.coalesce(AccountAnalysisResult.username, "")) == lowered_query,
+            )
+        )
+        .order_by(AccountAnalysisResult.updated_at.desc())
+        .limit(1)
+    )
+    analysis_match = (await db.execute(analysis_stmt)).scalar_one_or_none()
+    if analysis_match is not None:
+        return ResolvedAccount(
+            query=raw_query,
+            resolved=True,
+            account_id=analysis_match.account_id,
+            username=analysis_match.username or normalized_query,
+            display_name=analysis_match.username or analysis_match.account_id,
+        )
+
+    return ResolvedAccount(
+        query=raw_query,
+        resolved=False,
+        reason="not_found",
+    )
+
+
 @router.get("/{account_id}/trends", response_model=TrendAnalysisResult | dict)
 async def get_trends(
     account_id: str,
@@ -96,7 +158,7 @@ async def _get_trends_inner(account_id: str, db: AsyncSession) -> TrendAnalysisR
                 "daily_insights": row.daily_insights_json if isinstance(row.daily_insights_json, dict) else None,
                 "opportunity_bullets": row.opportunity_bullets_json or [],
             }
-            return TrendAnalysisResult.model_validate(payload)
+            return attach_weekly_opportunity(TrendAnalysisResult.model_validate(payload))
         except Exception:
             logger.exception("[TrendRoutes] Failed to deserialize stored trend result for account=%s", account_id)
             raise HTTPException(status_code=500, detail="Failed to parse stored trend result")
@@ -157,7 +219,7 @@ async def refresh_trends(
         cached_result = await TrendAnalysisCache.aget(account_id, posts)
         if cached_result:
             logger.info("[TrendRoutes] Returned cached result for account=%s", account_id)
-            return cached_result
+            return attach_weekly_opportunity(cached_result)
     except Exception as exc:
         logger.warning("[TrendRoutes] Cache check failed: %s", exc)
         # Continue without cache
@@ -199,6 +261,7 @@ async def refresh_trends(
             creator_intelligence=creator_intelligence,
             recommendation_count=int(count) if isinstance(count, (int, float, str)) else 5,
         )
+        result = attach_weekly_opportunity(result)
     except Exception:
         logger.exception("[TrendRoutes] Trend service failed for account=%s", account_id)
         raise HTTPException(status_code=500, detail="Failed to compute trends")
