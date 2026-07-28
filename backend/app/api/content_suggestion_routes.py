@@ -19,6 +19,7 @@ from backend.app.domain.content_suggestion_models import (
     GenerateIdeasResponse,
     GenerateScriptRequest,
     GenerateScriptResponse,
+    IdeaReasoningResponse,
     ImproveIdeaRequest,
     ImproveIdeaResponse,
     ImproveScriptBlockRequest,
@@ -58,6 +59,136 @@ from backend.app.utils.env import is_feature_enabled
 from backend.app.utils.telemetry import emit_counter, emit_histogram, emit_event, timed
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["content-suggestions"])
+
+
+def _clamp_int(value: float | int | None, default: int) -> int:
+    if not isinstance(value, (int, float)):
+        return default
+    return max(0, min(100, int(round(value))))
+
+
+def _build_reasoning_factors(idea: Idea) -> list[dict[str, Any]]:
+    metadata = idea.generation_metadata or {}
+    trend_snapshot = metadata.get("trend_snapshot") if isinstance(metadata.get("trend_snapshot"), dict) else {}
+    recommendation_snapshot = metadata.get("recommendation_snapshot") if isinstance(metadata.get("recommendation_snapshot"), dict) else {}
+    base_score = float(idea.opportunity_score or idea.engagement_score or 75.0)
+
+    trend_type = str(trend_snapshot.get("trend_type") or "").strip().lower()
+    momentum = str(trend_snapshot.get("momentum") or "").strip().lower()
+    difficulty = str(idea.difficulty or recommendation_snapshot.get("difficulty") or "").strip().lower()
+    content_style = str(metadata.get("content_style") or recommendation_snapshot.get("content_style") or "").strip().lower()
+    content_type = str(idea.content_type or "").strip().lower()
+
+    audience_match_raw = trend_snapshot.get("audience_match_pct")
+    if isinstance(audience_match_raw, (int, float)):
+        audience_match = _clamp_int(audience_match_raw, 72)
+    elif isinstance(recommendation_snapshot.get("opportunity_score"), (int, float)):
+        audience_match = _clamp_int(float(recommendation_snapshot["opportunity_score"]) * 0.92, 72)
+    else:
+        audience_match = _clamp_int(base_score * 0.88, 72)
+
+    momentum_value = {
+        "rising": 88,
+        "peaking": 80,
+        "falling": 52,
+    }.get(momentum, _clamp_int(base_score * 0.8, 66))
+
+    timing_value = 86 if isinstance(idea.best_time_to_post, str) and idea.best_time_to_post.strip() else 58
+
+    difficulty_value = {
+        "easy": 84,
+        "medium": 69,
+        "hard": 54,
+    }.get(difficulty, 66)
+
+    content_type_value = {
+        "reel": 84,
+        "carousel": 76,
+        "photo": 67,
+    }.get(content_type, 72)
+    if content_style in {"educational", "how-to", "storytelling", "pov/lifestyle", "brand friendly"}:
+        content_type_value = min(100, content_type_value + 6)
+    if trend_type == "format":
+        content_type_value = min(100, content_type_value + 4)
+
+    performance_source = idea.engagement_score if isinstance(idea.engagement_score, (int, float)) else base_score * 0.93
+    post_performance = _clamp_int(performance_source, 70)
+
+    niche_reference_score = recommendation_snapshot.get("opportunity_score")
+    if isinstance(niche_reference_score, (int, float)):
+        niche_relevance = _clamp_int(float(niche_reference_score), 74)
+    else:
+        niche_relevance = _clamp_int(base_score * 0.9, 74)
+
+    return [
+        {
+            "key": "niche_relevance",
+            "value": niche_relevance,
+            "tooltip": "How strongly this idea aligns with the creator's niche and recommendation fit.",
+        },
+        {
+            "key": "audience_match",
+            "value": audience_match,
+            "tooltip": "How well the underlying trend appears to match this creator's audience interests.",
+        },
+        {
+            "key": "momentum_score",
+            "value": momentum_value,
+            "tooltip": "How strong the attached trend momentum is right now.",
+        },
+        {
+            "key": "content_type_match",
+            "value": content_type_value,
+            "tooltip": "How appropriate the selected content format and style are for this opportunity.",
+        },
+        {
+            "key": "best_timing",
+            "value": timing_value,
+            "tooltip": "Whether the backend has a concrete best posting time for this idea.",
+        },
+        {
+            "key": "post_performance",
+            "value": post_performance,
+            "tooltip": "How much prior or predicted performance evidence supports this idea.",
+        },
+        {
+            "key": "competitive_score",
+            "value": difficulty_value,
+            "tooltip": "A practical execution/competition proxy based on the idea's difficulty.",
+        },
+    ]
+
+
+async def _compute_idea_percentile_rank(account_id: str, db: AsyncSession, score: float) -> int | None:
+    result = await db.execute(
+        select(Idea.opportunity_score)
+        .where(Idea.account_id == account_id, Idea.opportunity_score.is_not(None))
+    )
+    raw_scores = [float(value) for value in result.scalars().all() if isinstance(value, (int, float))]
+    if not raw_scores:
+        return None
+    less_or_equal = sum(1 for value in raw_scores if value <= score)
+    percentile = round((less_or_equal / len(raw_scores)) * 100)
+    return max(1, min(100, percentile))
+
+
+def _compute_reasoning_confidence(idea: Idea, factors: list[dict[str, Any]]) -> int:
+    metadata = idea.generation_metadata or {}
+    evidence_points = 0
+    if isinstance(idea.best_time_to_post, str) and idea.best_time_to_post.strip():
+        evidence_points += 1
+    if isinstance(idea.engagement_score, (int, float)):
+        evidence_points += 1
+    if isinstance(idea.trend_reference, str) and idea.trend_reference.strip():
+        evidence_points += 1
+    if isinstance(metadata.get("rationale"), str) and metadata.get("rationale", "").strip():
+        evidence_points += 1
+    if isinstance(metadata.get("trend_snapshot"), dict) and metadata["trend_snapshot"].get("momentum"):
+        evidence_points += 1
+    if isinstance(metadata.get("recommendation_snapshot"), dict) and metadata["recommendation_snapshot"].get("opportunity_score") is not None:
+        evidence_points += 1
+    factor_strength = round(sum(item["value"] for item in factors) / max(len(factors), 1))
+    return max(45, min(95, 42 + evidence_points * 7 + round((factor_strength - 50) * 0.15)))
 
 
 # ── Idea Generation ────────────────────────────────────────────────────────────
@@ -312,7 +443,9 @@ async def generate_script_endpoint(
     logger.info("[ContentSuggestionRoutes] Generating script for idea=%s", request.idea_id)
 
     # Fetch the idea to get title and hook
-    idea_result = await db.execute(select(Idea).where(Idea.id == request.idea_id))
+    idea_result = await db.execute(
+        select(Idea).where(Idea.id == request.idea_id, Idea.account_id == account_id)
+    )
     idea = idea_result.scalar_one_or_none()
     if not idea:
         raise HTTPException(status_code=404, detail="Idea not found")
@@ -354,7 +487,9 @@ async def generate_caption_endpoint(
     logger.info("[ContentSuggestionRoutes] Generating caption for idea=%s", request.idea_id)
 
     # Fetch the idea to get title, hook, and script context
-    idea_result = await db.execute(select(Idea).where(Idea.id == request.idea_id))
+    idea_result = await db.execute(
+        select(Idea).where(Idea.id == request.idea_id, Idea.account_id == account_id)
+    )
     idea = idea_result.scalar_one_or_none()
     if not idea:
         raise HTTPException(status_code=404, detail="Idea not found")
@@ -733,12 +868,12 @@ async def get_idea_detail(
     }
 
 
-@router.get("/{account_id}/ideas/{idea_id}/reasoning")
+@router.get("/{account_id}/ideas/{idea_id}/reasoning", response_model=IdeaReasoningResponse)
 async def get_idea_reasoning(
     account_id: str,
     idea_id: str,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> IdeaReasoningResponse:
     """Get factor breakdown for an idea's opportunity score (Screen 10)."""
     result = await db.execute(
         select(Idea).where(Idea.id == idea_id, Idea.account_id == account_id)
@@ -747,35 +882,34 @@ async def get_idea_reasoning(
     if not idea:
         raise HTTPException(status_code=404, detail="Idea not found")
 
-    score = idea.opportunity_score or idea.engagement_score or 75.0
-    
-    # Compute factor breakdown (deterministic fallback, can be swapped for LLM-based reasoning later)
-    factors = [
-        {"key": "niche_relevance", "value": min(100, max(0, round(score * 0.85))), "tooltip": "How well this topic aligns with your content niche"},
-        {"key": "competitive_score", "value": min(100, max(0, round(score * 0.72))), "tooltip": "Lower is better — less competition for this topic"},
-        {"key": "audience_match", "value": min(100, max(0, round(score * 0.90))), "tooltip": "How well this trend matches your audience interests"},
-        {"key": "post_performance", "value": min(100, max(0, round(score * 0.68))), "tooltip": "Your past performance on similar content"},
-        {"key": "best_timing", "value": min(100, max(0, round(score * 0.76))), "tooltip": "How optimal the posting time is for this content type"},
-    ]
+    score = float(idea.opportunity_score or idea.engagement_score or 75.0)
+    factors = _build_reasoning_factors(idea)
     strongest_factor = max(factors, key=lambda item: item["value"])["key"] if factors else None
     weakest_factor = min(factors, key=lambda item: item["value"])["key"] if factors else None
-    ai_confidence_pct = min(97, max(55, round(58 + score * 0.38)))
-    percentile_rank = max(1, min(99, round(100 - score)))
+    ai_confidence_pct = _compute_reasoning_confidence(idea, factors)
+    percentile_rank = await _compute_idea_percentile_rank(account_id, db, score)
+    strongest_phrase = strongest_factor.replace("_", " ") if strongest_factor else "overall fit"
+    weakest_phrase = weakest_factor.replace("_", " ") if weakest_factor else "supporting factors"
+    timing_phrase = (
+        f" A concrete best posting time is available ({idea.best_time_to_post})."
+        if isinstance(idea.best_time_to_post, str) and idea.best_time_to_post.strip()
+        else " No creator-specific best posting time is stored yet, so timing confidence is lower."
+    )
     summary_explanation = (
-        f"This idea scores {round(score)}/100 because it has strong {strongest_factor.replace('_', ' ') if strongest_factor else 'overall fit'}"
-        f" with comparatively weaker {weakest_factor.replace('_', ' ') if weakest_factor else 'supporting factors'}."
+        f"This idea scores {round(score)}/100 because its strongest signal is {strongest_phrase}, "
+        f"while {weakest_phrase} is the main limiter right now.{timing_phrase}"
     )
 
-    return {
-        "idea_id": idea.id,
-        "opportunity_score": score,
-        "factors": factors,
-        "ai_confidence_pct": ai_confidence_pct,
-        "percentile_rank": percentile_rank,
-        "strongest_factor": strongest_factor,
-        "weakest_factor": weakest_factor,
-        "summary_explanation": summary_explanation,
-    }
+    return IdeaReasoningResponse(
+        idea_id=idea.id,
+        opportunity_score=max(0.0, min(100.0, score)),
+        factors=factors,
+        ai_confidence_pct=ai_confidence_pct,
+        percentile_rank=percentile_rank,
+        strongest_factor=strongest_factor,
+        weakest_factor=weakest_factor,
+        summary_explanation=summary_explanation,
+    )
 
 
 @router.patch("/{account_id}/ideas/{idea_id}")

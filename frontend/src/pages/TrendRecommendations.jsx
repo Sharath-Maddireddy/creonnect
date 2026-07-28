@@ -9,6 +9,8 @@ import CalendarView from '../components/CalendarView'
 import SaveIdeaModal from '../components/SaveIdeaModal'
 import MoreOptionsMenu from '../components/MoreOptionsMenu'
 import IdeaDetailDrawer from '../components/IdeaDetailDrawer'
+import AllTrendingTopics from '../components/AllTrendingTopics'
+import AllTrendingAudio from '../components/AllTrendingAudio'
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 // All calls go through Vite proxy (/api → http://localhost:8000)
@@ -69,7 +71,7 @@ function buildScriptPreview(trend, rec) {
         estimated_duration_sec: rec?.duration_seconds || 40,
         full_script: buildScript(trend, rec),
         preview_only: true,
-        preview_note: `Quick draft from the recommendation card. Generate New Ideas to save this as a full database idea for deeper AI actions.`,
+        preview_note: `Quick draft from the recommendation card. Generate Full Ideas or save this idea first to unlock deeper AI actions.`,
     }
 }
 
@@ -128,51 +130,32 @@ function matchesFilter(card, activeFilter) {
     const trend = card?.trend || {}
     const rec = card?.rec || {}
     const filter = activeFilter.toLowerCase()
-    const momentum = String(trend.momentum || '').toLowerCase()
-    const trendType = String(trend.trend_type || '').toLowerCase()
-    const contentStyle = String(rec.content_style || '').toLowerCase()
-    const difficulty = String(rec.difficulty || '').toLowerCase()
-    const contentText = [
-        trend.topic_name,
-        trend.description,
-        rec.suggested_title,
-        rec.rationale,
-        rec.expected_impact,
-        rec.hook,
-        rec.trend_reference,
-    ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-
-    const hasAny = (terms) => terms.some(term => contentText.includes(term))
+    const formatFamily = String(rec.format_family || '').toLowerCase()
+    const angleType = String(rec.angle_type || '').toLowerCase()
+    const creatorLevel = String(rec.creator_level || '').toLowerCase()
+    const isTrending = rec.is_trending === true
 
     switch (filter) {
         case 'trending':
-            return momentum === 'rising' || momentum === 'peaking'
+            return isTrending
         case 'reels':
-            return trendType === 'format' || hasAny(['reel', 'video', 'short-form'])
+            return formatFamily === 'reel'
         case 'carousel':
-            return hasAny(['carousel', 'slide', 'slides', 'swipe'])
+            return formatFamily === 'carousel'
         case 'photo':
-            return hasAny(['photo', 'static post', 'single image', 'lookbook'])
+            return formatFamily === 'photo'
         case 'educational':
-            return contentStyle.includes('educational') || contentStyle.includes('how-to') || hasAny(['tips', 'explained', 'how to', 'guide', 'breakdown'])
+            return angleType === 'educational'
         case 'personal story':
-            return contentStyle.includes('story') || contentStyle.includes('pov') || contentStyle.includes('lifestyle') || hasAny(['i ', 'my ', 'me ', 'journey', 'story', 'experience'])
+            return angleType === 'personal_story'
         case 'brand friendly':
-            return hasAny(['brand', 'product', 'review', 'comparison', 'storefront', 'shop', 'shopping', 'affiliate', 'sponsor', 'saves', 'clicks'])
+            return angleType === 'brand_friendly'
         case 'beginner':
-            return difficulty === 'easy'
+            return creatorLevel === 'beginner'
         case 'advanced':
-            return difficulty === 'hard'
+            return creatorLevel === 'advanced'
         default:
-            return (
-                filter === momentum ||
-                filter === trendType ||
-                contentStyle.includes(filter) ||
-                difficulty === filter
-            )
+            return false
     }
 }
 
@@ -307,14 +290,13 @@ function OpportunityBanner({ niche, weeklyOpportunity, onRefresh, busy, hasAccou
             <div className="cs-banner__body">
                 <div className="cs-banner__title-row">
                     <h2 className="cs-banner__title">AI Weekly Opportunity</h2>
-                    <span className="cs-banner__badge">Beta</span>
                 </div>
                 <p className="cs-banner__sub">
                     {weeklyOpportunity
                         ? `We've identified ${weeklyOpportunity.idea_count} high-opportunity content idea${weeklyOpportunity.idea_count === 1 ? '' : 's'} for this week.`
                         : niche
                         ? 'Your weekly opportunity summary is being prepared from your latest trend analysis.'
-                        : 'Enter your account ID above to generate personalised trend recommendations powered by live AI analysis.'}
+                        : 'Search by creator username, @handle, or account ID to generate personalised trend recommendations powered by live AI analysis.'}
                 </p>
                 {weeklyOpportunity?.summary_reason && (
                     <p className="cs-banner__sub">{weeklyOpportunity.summary_reason}</p>
@@ -335,8 +317,8 @@ function OpportunityBanner({ niche, weeklyOpportunity, onRefresh, busy, hasAccou
                     <>
                         <ScoreGauge score={score} label="Opportunity Score" />
                         <p className="cs-banner__score-label">{label}</p>
-                                                <button className="cs-generate-btn" onClick={onRefresh} disabled={busy || !hasAccount} title={!hasAccount ? 'Load an account first' : 'Generate weekly plan'}>
-                            {busy ? 'Analysing…' : 'Generate Weekly Plan →'}
+                        <button className="cs-generate-btn" onClick={onRefresh} disabled={busy || !hasAccount} title={!hasAccount ? 'Load an account first' : 'Generate full ideas from this weekly opportunity'}>
+                            {busy ? 'Analyzing…' : 'Generate Full Ideas'}
                         </button>
                     </>
                 ) : (
@@ -370,50 +352,51 @@ function FilterTabs({ active, onChange }) {
 function SuggestionCard({ trend, rec, index, onSaveIdea, onGenerate, onMoreOptions, onCardClick }) {
     const m = MOMENTUM[trend?.momentum] || MOMENTUM.rising
     const t = TREND_TYPE[trend?.trend_type] || TREND_TYPE.topic
-    // Use real opportunity_score from backend, fallback to momentum-based
-    const scoreVal = rec?.opportunity_score ?? (trend?.momentum === 'peaking' ? 92 : trend?.momentum === 'rising' ? 78 : 55)
+    const scoreVal = typeof rec?.opportunity_score === 'number' ? Math.round(rec.opportunity_score) : null
     const difficultyMap = { Easy: { label: 'Easy', cls: 'easy' }, Medium: { label: 'Medium', cls: 'medium' }, Hard: { label: 'Hard', cls: 'hard' } }
     const diff = difficultyMap[rec?.difficulty] || null
     const contentStyle = rec?.content_style || t.label
     return (
         <div className="cs-card" onClick={onCardClick} style={onCardClick ? { cursor: 'pointer' } : undefined}>
-            {/* Left thumbnail */}
-            <div className="cs-card__thumb">
-                <div className={`cs-card__thumb-inner cs-card__thumb-inner--${t.cls}`}>
-                    <span className="cs-card__thumb-icon">{t.icon}</span>
+            <div className="cs-card__primary">
+                {/* Left thumbnail */}
+                <div className="cs-card__thumb">
+                    <div className={`cs-card__thumb-inner cs-card__thumb-inner--${t.cls}`}>
+                        <span className="cs-card__thumb-icon">{t.icon}</span>
+                    </div>
                 </div>
-            </div>
 
-            {/* Main body */}
-            <div className="cs-card__body">
-                <div className="cs-card__top">
-                    <span className={`cs-pot-badge cs-pot-badge--${m.cls}`}>
-                        {m.emoji} {m.label} Potential
-                    </span>
-                </div>
-                <h3 className="cs-card__title">
-                    {rec?.suggested_title || trend?.topic_name}
-                </h3>
-                <div className="cs-card__tags">
-                    <span className={`cs-tag cs-tag--${t.cls}`}>{t.icon} {contentStyle}</span>
-                    {(trend?.topic_name) && <span className="cs-tag cs-tag--neutral">{trend.topic_name}</span>}
-                    {rec?.trend_reference && rec.trend_reference !== trend?.topic_name && (
-                        <span className="cs-tag cs-tag--neutral">{rec.trend_reference}</span>
+                {/* Main body */}
+                <div className="cs-card__body">
+                    <div className="cs-card__top">
+                        <span className={`cs-pot-badge cs-pot-badge--${m.cls}`}>
+                            {m.emoji} {m.label} Potential
+                        </span>
+                    </div>
+                    <h3 className="cs-card__title">
+                        {rec?.suggested_title || trend?.topic_name}
+                    </h3>
+                    <div className="cs-card__tags">
+                        <span className={`cs-tag cs-tag--${t.cls}`}>{t.icon} {contentStyle}</span>
+                        {(trend?.topic_name) && <span className="cs-tag cs-tag--neutral">{trend.topic_name}</span>}
+                        {rec?.trend_reference && rec.trend_reference !== trend?.topic_name && (
+                            <span className="cs-tag cs-tag--neutral">{rec.trend_reference}</span>
+                        )}
+                    </div>
+                    {rec?.hook && (
+                        <p className="cs-card__hook">
+                            <strong>Hook:</strong> "{rec.hook}"
+                        </p>
+                    )}
+                    {rec?.rationale && !rec?.hook && (
+                        <p className="cs-card__hook">
+                            <strong>Why:</strong> {rec.rationale.slice(0, 120)}{rec.rationale.length > 120 ? '…' : ''}
+                        </p>
+                    )}
+                    {trend?.description && (
+                        <p className="cs-card__desc">{trend.description.slice(0, 100)}{trend.description.length > 100 ? '…' : ''}</p>
                     )}
                 </div>
-                {rec?.hook && (
-                    <p className="cs-card__hook">
-                        <strong>Hook:</strong> "{rec.hook}"
-                    </p>
-                )}
-                {rec?.rationale && !rec?.hook && (
-                    <p className="cs-card__hook">
-                        <strong>Why:</strong> {rec.rationale.slice(0, 120)}{rec.rationale.length > 120 ? '…' : ''}
-                    </p>
-                )}
-                {trend?.description && (
-                    <p className="cs-card__desc">{trend.description.slice(0, 100)}{trend.description.length > 100 ? '…' : ''}</p>
-                )}
             </div>
 
             {/* Stats col */}
@@ -426,15 +409,21 @@ function SuggestionCard({ trend, rec, index, onSaveIdea, onGenerate, onMoreOptio
                 )}
                 <div className="cs-stat">
                     <span className="cs-stat__label">Opportunity Score</span>
-                    <div className="cs-stat__score-row">
-                        <span className="cs-stat__score">{Math.round(scoreVal)} / 100</span>
-                    </div>
-                    <div className="cs-stat__bar-bg">
-                        <div className="cs-stat__bar-fill" style={{ width: `${scoreVal}%` }} />
-                    </div>
-                    <span className={`cs-stat__band cs-stat__band--${m.cls}`}>
-                        {m.emoji} {scoreVal >= 85 ? 'Very High' : scoreVal >= 70 ? 'High' : 'Moderate'}
-                    </span>
+                    {scoreVal != null ? (
+                        <>
+                            <div className="cs-stat__score-row">
+                                <span className="cs-stat__score">{scoreVal} / 100</span>
+                            </div>
+                            <div className="cs-stat__bar-bg">
+                                <div className="cs-stat__bar-fill" style={{ width: `${scoreVal}%` }} />
+                            </div>
+                            <span className={`cs-stat__band cs-stat__band--${m.cls}`}>
+                                {m.emoji} {scoreVal >= 85 ? 'Very High' : scoreVal >= 70 ? 'High' : 'Moderate'}
+                            </span>
+                        </>
+                    ) : (
+                        <span className="cs-stat__val">Available after full analysis</span>
+                    )}
                 </div>
                 {rec?.best_time && (
                     <div className="cs-stat">
@@ -477,14 +466,7 @@ function SuggestionCard({ trend, rec, index, onSaveIdea, onGenerate, onMoreOptio
 }
 
 // ─── Right Panel ──────────────────────────────────────────────────────────────
-function RightPanel({ niche, trends, data, onShowAllTrends, onShowContentGaps, assistantPrompt, setAssistantPrompt, assistantReply, onAskAI }) {
-    // Use real audience_match_pct from backend, fallback to positional scoring
-    const trendingTopics = trends?.slice(0, 3).map((t, i) => ({
-        name: t.topic_name,
-        match: t.audience_match_pct ?? (98 - i * 8),
-        momentum: t.momentum,
-    })) || []
-
+function RightPanel({ niche, trends, data, trendingTopics, trendingAudio, onShowAllTrends, onShowAllAudio, onShowContentGaps, assistantPrompt, setAssistantPrompt, assistantReply, onAskAI }) {
     const dailyInsights = data?.daily_insights
     const contentGaps = data?.content_gaps || []
 
@@ -591,6 +573,29 @@ function RightPanel({ niche, trends, data, onShowAllTrends, onShowContentGaps, a
                 </div>
             )}
 
+            {/* Trending Audio */ }
+            {trendingAudio.length > 0 && (
+                <div className="cs-right-card">
+                    <div className="cs-right-card__header">
+                        <span className="cs-right-card__title">Trending Audio</span>
+                        <button className="cs-right-card__link" onClick={onShowAllAudio}>View All</button>
+                    </div>
+                    <div className="cs-gaps">
+                        {trendingAudio.slice(0, 3).map((audio, i) => (
+                            <div key={audio.id || `${audio.audio_name}-${i}`} className="cs-gap">
+                                <span className="cs-gap__icon cs-gap__icon--opportunity">♪</span>
+                                <div>
+                                    <div style={{ fontWeight: 600 }}>{audio.audio_name}</div>
+                                    <div className="cs-trending-item__match">
+                                        {audio.audience_match_pct}% match · {audio.momentum}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* Trending Topics */}
             {trendingTopics.length > 0 && (
                 <div className="cs-right-card">
@@ -600,15 +605,15 @@ function RightPanel({ niche, trends, data, onShowAllTrends, onShowContentGaps, a
                     </div>
                     <div className="cs-trending-list">
                         {trendingTopics.map((t, i) => (
-                            <div key={t.name} className="cs-trending-item">
+                            <div key={t.id || t.topic_name || i} className="cs-trending-item">
                                 <div className="cs-trending-item__thumb" style={{
                                     background: ['linear-gradient(135deg,#3b82f6,#8b5cf6)', 'linear-gradient(135deg,#10b981,#3b82f6)', 'linear-gradient(135deg,#f59e0b,#ef4444)'][i]
                                 }}>
                                     {['🌊', '💎', '✈️'][i] || '🔥'}
                                 </div>
                                 <div className="cs-trending-item__body">
-                                    <span className="cs-trending-item__name">{t.name}</span>
-                                    <span className="cs-trending-item__match">{Math.round(t.match)}% Audience Match</span>
+                                    <span className="cs-trending-item__name">{t.topic_name}</span>
+                                    <span className="cs-trending-item__match">{Math.round(t.audience_match_pct)}% Audience Match</span>
                                 </div>
                                 <div className="cs-trending-item__spark">
                                     <svg viewBox="0 0 40 20" className="cs-sparkline">
@@ -648,15 +653,15 @@ function RightPanel({ niche, trends, data, onShowAllTrends, onShowContentGaps, a
 
             {/* Ask AI */}
             <div className="cs-right-card cs-ask-ai">
-                <div className="cs-ask-ai__header">
-                    <span className="cs-right-card__title">Ask AI Assistant</span>
-                    <span className="cs-banner__badge">Beta</span>
+            <div className="cs-ask-ai__header">
+                    <span className="cs-right-card__title">Prompt Assistant</span>
+                    <span className="cs-banner__badge">Preview</span>
                 </div>
-                <p className="cs-ask-ai__sub">Need custom ideas? Describe what you want to post about.</p>
+                <p className="cs-ask-ai__sub">Use quick prompts to explore hooks, formats, and content angles.</p>
                 <div className="cs-ask-ai__input-wrap">
                     <input
                         className="cs-ask-ai__input"
-                        placeholder="e.g. Give me 10 viral trend ideas…"
+                        placeholder="e.g. Give me educational reel ideas for this creator"
                         value={assistantPrompt}
                         onChange={e => setAssistantPrompt(e.target.value)}
                         onKeyDown={e => {
@@ -665,7 +670,7 @@ function RightPanel({ niche, trends, data, onShowAllTrends, onShowContentGaps, a
                             }
                         }}
                     />
-                    <button className="cs-ask-ai__send" onClick={() => onAskAI(assistantPrompt)}>➤</button>
+                    <button className="cs-ask-ai__send" onClick={() => onAskAI(assistantPrompt)}>Send</button>
                 </div>
                 <div className="cs-ask-ai__chips">
                     {['Give me viral hooks', 'Ideas without showing face', 'Educational carousel ideas'].map(c => (
@@ -709,6 +714,11 @@ export default function TrendRecommendations() {
     const [showGenerateModal, setShowGenerateModal] = useState(false)
     const [generationJob, setGenerationJob] = useState(null)
     const [generatedIdeas, setGeneratedIdeas] = useState([])
+    const [trendTopics, setTrendTopics] = useState([])
+    const [trendAudio, setTrendAudio] = useState([])
+    const [showAllTopics, setShowAllTopics] = useState(false)
+    const [showAllAudio, setShowAllAudio] = useState(false)
+    const [seedTopic, setSeedTopic] = useState('')
     const [showScriptGen, setShowScriptGen] = useState(null) // { ideaId, title, hook }
     const [showCaptionGen, setShowCaptionGen] = useState(null) // { ideaId, title }
     const [showScheduler, setShowScheduler] = useState(null) // { ideaId, title }
@@ -791,6 +801,39 @@ export default function TrendRecommendations() {
             setLoading(false)
         }
     }, [triggerRefresh]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => {
+        if (!accountId || !data) {
+            setTrendTopics([])
+            setTrendAudio([])
+            return
+        }
+
+        let cancelled = false
+        ;(async () => {
+            try {
+                const [topicsRes, audioRes] = await Promise.all([
+                    fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/topics`, { credentials: 'include' }),
+                    fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/audio`, { credentials: 'include' }),
+                ])
+
+                const topicsJson = topicsRes.ok ? await topicsRes.json() : { topics: [] }
+                const audioJson = audioRes.ok ? await audioRes.json() : { audio_tracks: [] }
+
+                if (!cancelled) {
+                    setTrendTopics(Array.isArray(topicsJson?.topics) ? topicsJson.topics.slice(0, 3) : [])
+                    setTrendAudio(Array.isArray(audioJson?.audio_tracks) ? audioJson.audio_tracks.slice(0, 3) : [])
+                }
+            } catch (_) {
+                if (!cancelled) {
+                    setTrendTopics([])
+                    setTrendAudio([])
+                }
+            }
+        })()
+
+        return () => { cancelled = true }
+    }, [accountId, data])
 
         // ── Poll background job until finished ───────────────────────────────────
     useEffect(() => {
@@ -909,24 +952,46 @@ export default function TrendRecommendations() {
         })
     }
 
+    function forgetQuickIdea(key) {
+        setQuickIdeaMap(prev => {
+            if (!prev[key]) return prev
+            const next = { ...prev }
+            delete next[key]
+            localStorage.setItem('trend_quick_idea_map', JSON.stringify(next))
+            return next
+        })
+    }
+
+    async function checkIdeaExists(ideaId) {
+        if (!accountId || !isPersistedIdeaId(ideaId)) return false
+        try {
+            const res = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/ideas/${encodeURIComponent(ideaId)}`, {
+                method: 'GET',
+                credentials: 'include',
+            })
+            return res.ok
+        } catch {
+            return false
+        }
+    }
+
     async function ensureIdeaForRecommendation(trend, rec) {
         const key = ideaKey(trend, rec)
         const existing = quickIdeaMap[key]
         if (isPersistedIdeaId(existing?.ideaId)) {
-            return {
-                id: existing.ideaId,
-                title: existing.title || rec?.suggested_title || trend?.topic_name || 'Content Idea',
-                hook: existing.hook || rec?.hook || null,
+            const stillExists = await checkIdeaExists(existing.ideaId)
+            if (stillExists) {
+                return {
+                    id: existing.ideaId,
+                    title: existing.title || rec?.suggested_title || trend?.topic_name || 'Content Idea',
+                    hook: existing.hook || rec?.hook || null,
+                }
             }
+            forgetQuickIdea(key)
         }
 
         if (existing?.ideaId && !isPersistedIdeaId(existing.ideaId)) {
-            setQuickIdeaMap(prev => {
-                const next = { ...prev }
-                delete next[key]
-                localStorage.setItem('trend_quick_idea_map', JSON.stringify(next))
-                return next
-            })
+            forgetQuickIdea(key)
         }
 
         const res = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/persist-idea`, {
@@ -1021,6 +1086,7 @@ export default function TrendRecommendations() {
     function handleGenerationComplete(ideas) {
         setGenerationJob(null)
         setGeneratedIdeas(ideas)
+        setSeedTopic('')
         // Refresh the data
         if (accountId) fetchExisting(accountId)
     }
@@ -1028,6 +1094,20 @@ export default function TrendRecommendations() {
     function handleGenerationError(error) {
         setGenerationJob(null)
         setError(error)
+    }
+
+    function handleUseTopic(topic) {
+        const topicName = topic?.topic_name || topic?.name || ''
+        setSeedTopic(topicName)
+        setShowAllTopics(false)
+        setShowGenerateModal(true)
+    }
+
+    function handleUseAudio(audio) {
+        const audioName = audio?.audio_name || ''
+        setSeedTopic(audioName)
+        setShowAllAudio(false)
+        setShowGenerateModal(true)
     }
 
     function handleOpenScript(ideaId, title, hook) {
@@ -1116,33 +1196,48 @@ export default function TrendRecommendations() {
                 <Sidebar account={accountId || null} />
 
                 <div className="cs-main">
-                    {/* ── Top bar ── */}
-                    <div className="cs-topbar">
-                        <div className="cs-topbar__left">
-                            <h1 className="cs-topbar__title">Content Suggestions <span>✨</span></h1>
-                            <p className="cs-topbar__sub">AI powered trend recommendations personalised for your audience</p>
-                        </div>
-                        <form className="cs-topbar__search" onSubmit={handleSearch}>
-                            <span className="cs-topbar__search-icon">🔍</span>
-                            <input
-                                className="cs-topbar__search-input"
-                                placeholder="Search by creator username, @handle, or account ID…"
-                                value={accountInput}
-                                onChange={e => setAccountInput(e.target.value)}
-                                disabled={busy}
-                            />
-                            <kbd className="cs-topbar__kbd">⌘ K</kbd>
-                        </form>
-                        <button className="cs-generate-btn" onClick={() => accountId && setShowGenerateModal(true)} disabled={busy || !accountId} title={!accountId ? 'Load an account first' : 'Create full database-backed content ideas'}>
-                            ✨ {busy ? 'Analysing…' : 'Generate Full Ideas'}
-                        </button>
-                        <button className="cs-topbar__refresh-icon" onClick={() => accountId && fetchExisting(accountId)} disabled={busy} title="Refresh">↻</button>
-                    </div>
+                    {showAllTopics ? (
+                        <AllTrendingTopics
+                            accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
+                            onClose={() => setShowAllTopics(false)}
+                            onUseTopic={handleUseTopic}
+                        />
+                    ) : showAllAudio ? (
+                        <AllTrendingAudio
+                            accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
+                            onClose={() => setShowAllAudio(false)}
+                            onUseAudio={handleUseAudio}
+                        />
+                    ) : (
+                        <>
+                            <div>
+                            {/* ── Top bar ── */}
+                            <div className="cs-topbar">
+                                <div className="cs-topbar__left">
+                                    <h1 className="cs-topbar__title">Content Suggestions</h1>
+                                    <p className="cs-topbar__sub">AI-powered trend recommendations tailored to your audience</p>
+                                </div>
+                                <form className="cs-topbar__search" onSubmit={handleSearch}>
+                                    <span className="cs-topbar__search-icon">🔍</span>
+                                    <input
+                                        className="cs-topbar__search-input"
+                                        placeholder="Search by creator username, @handle, or account ID…"
+                                        value={accountInput}
+                                        onChange={e => setAccountInput(e.target.value)}
+                                        disabled={busy}
+                                    />
+                                    <kbd className="cs-topbar__kbd">⌘ K</kbd>
+                                </form>
+                                <button className="cs-generate-btn" onClick={() => accountId && setShowGenerateModal(true)} disabled={busy || !accountId} title={!accountId ? 'Load an account first' : 'Create full database-backed content ideas'}>
+                                    {busy ? 'Analyzing…' : 'Generate Full Ideas'}
+                                </button>
+                                <button className="cs-topbar__refresh-icon" onClick={() => accountId && fetchExisting(accountId)} disabled={busy} title="Refresh">↻</button>
+                            </div>
 
                                         {/* ── Error ── */}
                     {error && (
                         <div className="cs-error-bar">
-                            <span>⚠️ {error}</span>
+                            <span>{error}</span>
                             <button onClick={() => accountId && fetchExisting(accountId)}>Retry</button>
                         </div>
                     )}
@@ -1150,7 +1245,7 @@ export default function TrendRecommendations() {
                     {/* ── Degraded mode indicator ── */}
                     {data?._meta?.degraded && (
                         <div className="cs-degraded-bar">
-                            <span>🔸 Limited data available. Some insights may be incomplete. ({data._meta.degraded_reasons?.join(', ') || 'unknown reason'})</span>
+                            <span>Limited data available. Some insights may be incomplete. ({data._meta.degraded_reasons?.join(', ') || 'unknown reason'})</span>
                         </div>
                     )}
 
@@ -1158,7 +1253,7 @@ export default function TrendRecommendations() {
                     {busy && (
                         <div className="cs-loading-bar">
                             <div className="cs-loading-bar__fill" />
-                            <span>{queued ? 'Analysis queued — polling for results…' : 'Running AI pipeline…'}</span>
+                            <span>{queued ? 'Analysis queued. Waiting for results…' : 'Running analysis…'}</span>
                         </div>
                     )}
 
@@ -1183,13 +1278,13 @@ export default function TrendRecommendations() {
 
                     {/* ── Feed header ── */}
                     {data && (
-                        <div className="cs-feed-header">
-                            <h2 className="cs-feed-header__title">Quick Trend Angles <span className="cs-feed-header__info">ℹ</span></h2>
-                            <p className="cs-feed-header__sub">
-                                These are fast recommendation cards generated from your niche and live trends. Use them to explore strong directions, then open script, caption, save, or schedule from the same card.
-                            </p>
+                            <div className="cs-feed-header">
+                                <h2 className="cs-feed-header__title">Recommended Content Angles <span className="cs-feed-header__info">ℹ</span></h2>
+                                <p className="cs-feed-header__sub">
+                                    These recommendation cards combine live trend signals with creator fit so you can move quickly from discovery to execution.
+                                </p>
                             <p className="cs-feed-header__note">
-                                The first time you use an action on a quick card, we automatically turn it into a full working idea in the background so the complete workflow can continue normally.
+                                If you open a downstream action from one of these cards, the system saves it as a full working idea automatically so the rest of the workflow can continue without interruption.
                             </p>
                         </div>
                     )}
@@ -1223,41 +1318,43 @@ export default function TrendRecommendations() {
                     {generatedIdeas.length > 0 && (
                         <>
                             <div className="cs-feed-header">
-                                <h2 className="cs-feed-header__title">✨ Full Generated Ideas <span className="cs-feed-header__info">ℹ</span></h2>
+                                <h2 className="cs-feed-header__title">Generated Ideas <span className="cs-feed-header__info">ℹ</span></h2>
                                 <p className="cs-feed-header__sub">
-                                    AI has generated {generatedIdeas.length} full idea{generatedIdeas.length > 1 ? 's' : ''} for you. These are database-backed working ideas built for the complete workflow.
+                                    {generatedIdeas.length} full idea{generatedIdeas.length > 1 ? 's' : ''} generated for the complete content workflow.
                                 </p>
                             </div>
                             {generatedIdeas.map((idea, i) => (
                                 <div key={idea.id || i} className="cs-card cs-card--generated">
-                                    <div className="cs-card__thumb">
-                                        <div className="cs-card__thumb-inner cs-card__thumb-inner--topic">
-                                            <span className="cs-card__thumb-icon">✨</span>
-                                        </div>
-                                    </div>
-                                    <div className="cs-card__body">
-                                        <div className="cs-card__top">
-                                            <span className={`cs-pot-badge cs-pot-badge--rising`}>
-                                                🆕 New Idea
-                                            </span>
-                                        </div>
-                                        <h3 className="cs-card__title">{idea.suggested_title || idea.title || `Idea ${i + 1}`}</h3>
-                                        <div className="cs-card__tags">
-                                            {idea.content_type && <span className="cs-tag cs-tag--format">{idea.content_type}</span>}
-                                            {idea.hook && <span className="cs-tag cs-tag--neutral">{idea.hook.slice(0, 60)}{idea.hook.length > 60 ? '…' : ''}</span>}
-                                        </div>
-                                        {idea.description && (
-                                            <div className="cs-card__explain">
-                                                <span className="cs-card__explain-label">Idea</span>
-                                                <p className="cs-card__desc">{idea.description.slice(0, 180)}{idea.description.length > 180 ? '…' : ''}</p>
+                                    <div className="cs-card__primary">
+                                        <div className="cs-card__thumb">
+                                            <div className="cs-card__thumb-inner cs-card__thumb-inner--topic">
+                                                <span className="cs-card__thumb-icon">AI</span>
                                             </div>
-                                        )}
-                                        {idea.rationale && (
-                                            <div className="cs-card__explain">
-                                                <span className="cs-card__explain-label">Why this idea</span>
-                                                <p className="cs-card__desc">{idea.rationale.slice(0, 180)}{idea.rationale.length > 180 ? '…' : ''}</p>
+                                        </div>
+                                        <div className="cs-card__body">
+                                            <div className="cs-card__top">
+                                                <span className={`cs-pot-badge cs-pot-badge--rising`}>
+                                                    Generated
+                                                </span>
                                             </div>
-                                        )}
+                                            <h3 className="cs-card__title">{idea.suggested_title || idea.title || `Idea ${i + 1}`}</h3>
+                                            <div className="cs-card__tags">
+                                                {idea.content_type && <span className="cs-tag cs-tag--format">{idea.content_type}</span>}
+                                                {idea.hook && <span className="cs-tag cs-tag--neutral">{idea.hook.slice(0, 60)}{idea.hook.length > 60 ? '…' : ''}</span>}
+                                            </div>
+                                            {idea.description && (
+                                                <div className="cs-card__explain">
+                                                    <span className="cs-card__explain-label">Idea</span>
+                                                    <p className="cs-card__desc">{idea.description.slice(0, 180)}{idea.description.length > 180 ? '…' : ''}</p>
+                                                </div>
+                                            )}
+                                            {idea.rationale && (
+                                                <div className="cs-card__explain">
+                                                    <span className="cs-card__explain-label">Why this idea</span>
+                                                    <p className="cs-card__desc">{idea.rationale.slice(0, 180)}{idea.rationale.length > 180 ? '…' : ''}</p>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="cs-card__stats">
                                         {idea.opportunity_score != null && (
@@ -1291,10 +1388,10 @@ export default function TrendRecommendations() {
                     {!data && !busy && !error && (
                         <div className="cs-empty">
                             <div className="cs-empty__icon">📈</div>
-                            <h2>Discover your content opportunities</h2>
-                            <p>Enter a creator account ID in the search bar above to generate AI-powered trend recommendations based on live global trends.</p>
+                            <h2>Find content opportunities</h2>
+                            <p>Search by creator username, @handle, or account ID to generate AI-powered trend recommendations based on live global trends.</p>
                             <button className="cs-generate-btn" onClick={() => document.querySelector('.cs-topbar__search-input')?.focus()}>
-                                Get Started →
+                                Start Search
                             </button>
                         </div>
                     )}
@@ -1310,7 +1407,7 @@ export default function TrendRecommendations() {
                                 }
                             }}
                         >
-                            ↻ {visibleCount < allCards.length ? 'Load More Trends' : 'Refresh Trends'}
+                            {visibleCount < allCards.length ? 'Load More Recommendations' : 'Refresh Recommendations'}
                         </button>
                     )}
 
@@ -1333,22 +1430,29 @@ export default function TrendRecommendations() {
                             )}
                         </div>
                     )}
-                </div>
+                            </div>
 
-                <RightPanel
-                    niche={niche}
-                    trends={trends}
-                    data={data}
-                    onShowAllTrends={() => {
-                        setActiveFilter('All')
-                        setVisibleCount(99)
-                    }}
-                    onShowContentGaps={() => setShowContentGaps(true)}
-                    assistantPrompt={assistantPrompt}
-                    setAssistantPrompt={setAssistantPrompt}
-                    assistantReply={assistantReply}
-                    onAskAI={handleAskAI}
-                />
+                            <RightPanel
+                                niche={niche}
+                                trends={trends}
+                                data={data}
+                                trendingTopics={trendTopics}
+                                trendingAudio={trendAudio}
+                                onShowAllTrends={() => {
+                                    setShowAllTopics(true)
+                                }}
+                                onShowAllAudio={() => {
+                                    setShowAllAudio(true)
+                                }}
+                                onShowContentGaps={() => setShowContentGaps(true)}
+                                assistantPrompt={assistantPrompt}
+                                setAssistantPrompt={setAssistantPrompt}
+                                assistantReply={assistantReply}
+                                onAskAI={handleAskAI}
+                            />
+                        </>
+                    )}
+                </div>
             </div>
 
             {/* ── Modals (outside grid so they don't consume grid columns) ── */}
@@ -1397,6 +1501,7 @@ export default function TrendRecommendations() {
                 <GenerateIdeasModal
                     onClose={() => setShowGenerateModal(false)}
                     onGenerate={handleGenerateIdeas}
+                    initialTopic={seedTopic}
                 />
             )}
 
