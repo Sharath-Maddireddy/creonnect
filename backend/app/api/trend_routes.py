@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.domain.account_models import CreatorIntelligence
-from backend.app.domain.trend_models import ResolvedAccount, TrendAnalysisResult
+from backend.app.domain.trend_models import (
+    ResolvedAccount,
+    TrendAnalysisResult,
+    TrendingAudioDetail,
+    TrendingTopicDetail,
+)
 from backend.app.infra.database import get_db
 from backend.app.infra.models import AccountAnalysisResult, CreatorDiscoveryMeta, CreatorTrendResult
 from backend.app.infra.redis_client import aincr_with_expire
@@ -62,6 +67,176 @@ def _fallback_history_context(account_id: str) -> DraftHistoryContext:
             "username": account_id,
             "bio": f"Creator account {account_id}",
         },
+    )
+
+
+def _normalize_trend_result(payload: TrendAnalysisResult | dict[str, Any]) -> TrendAnalysisResult:
+    if isinstance(payload, TrendAnalysisResult):
+        return payload
+    if isinstance(payload, dict):
+        cleaned = {key: value for key, value in payload.items() if key != "_meta"}
+        return TrendAnalysisResult.model_validate(cleaned)
+    raise HTTPException(status_code=500, detail="Unexpected trend payload")
+
+
+def _score_from_momentum(momentum: str) -> int:
+    return {"rising": 148, "peaking": 121, "falling": 42}.get(str(momentum or "").lower(), 64)
+
+
+def _competition_from_match_and_momentum(match_pct: int, momentum: str) -> str:
+    momentum_value = str(momentum or "").lower()
+    if momentum_value == "peaking" or match_pct >= 90:
+        return "High"
+    if momentum_value == "rising" or match_pct >= 75:
+        return "Medium"
+    return "Low"
+
+
+def _build_topic_details(result: TrendAnalysisResult) -> list[TrendingTopicDetail]:
+    topic_rows: list[TrendingTopicDetail] = []
+    niche_name = result.niche.primary_category if result.niche else "your niche"
+    recommendation_map = {
+        str(rec.trend_reference or "").strip().lower(): rec
+        for rec in result.recommendations
+        if str(rec.trend_reference or "").strip()
+    }
+    fallback_recommendation = result.recommendations[0] if result.recommendations else None
+
+    for index, trend in enumerate(result.global_trends, start=1):
+        if trend.trend_type == "audio":
+            continue
+        recommendation = recommendation_map.get(trend.topic_name.strip().lower()) or fallback_recommendation
+        match_pct = int(round(
+            trend.audience_match_pct
+            if isinstance(trend.audience_match_pct, (int, float))
+            else min(95, max(58, round((recommendation.opportunity_score if recommendation and recommendation.opportunity_score is not None else 72))))
+        ))
+        growth_pct = _score_from_momentum(trend.momentum)
+        if trend.trend_type == "format":
+            growth_pct += 12
+        elif trend.trend_type == "hashtag":
+            growth_pct -= 8
+        why_it_fits = (
+            recommendation.rationale
+            if recommendation and recommendation.rationale
+            else f"This trend aligns with {niche_name} content patterns and current audience interest."
+        )
+        topic_rows.append(
+            TrendingTopicDetail(
+                id=f"topic_{index}",
+                topic_name=trend.topic_name,
+                trend_type=trend.trend_type,
+                momentum=trend.momentum,
+                audience_match_pct=max(0, min(100, match_pct)),
+                growth_pct=max(0, growth_pct),
+                competition_level=_competition_from_match_and_momentum(match_pct, trend.momentum),
+                description=trend.description,
+                why_it_fits=why_it_fits,
+                example_reference=trend.example_reference,
+            )
+        )
+    return topic_rows
+
+
+def _build_audio_details(result: TrendAnalysisResult) -> list[TrendingAudioDetail]:
+    audio_rows: list[TrendingAudioDetail] = []
+    audio_trends = [trend for trend in result.global_trends if trend.trend_type == "audio"]
+    recommendations = result.recommendations or []
+
+    for index, trend in enumerate(audio_trends, start=1):
+        recommendation = next(
+            (
+                rec for rec in recommendations
+                if str(rec.trend_reference or "").strip().lower() == trend.topic_name.strip().lower()
+            ),
+            recommendations[0] if recommendations else None,
+        )
+        match_pct = int(round(
+            trend.audience_match_pct
+            if isinstance(trend.audience_match_pct, (int, float))
+            else min(92, max(52, round((recommendation.opportunity_score if recommendation and recommendation.opportunity_score is not None else 68))))
+        ))
+        fit_reason = (
+            recommendation.rationale
+            if recommendation and recommendation.rationale
+            else "This audio trend matches the creator's content style and current discovery opportunities."
+        )
+        suggested_angle = (
+            recommendation.suggested_title
+            if recommendation and recommendation.suggested_title
+            else f"Use {trend.topic_name} in a quick reel with a strong first-three-second hook."
+        )
+        audio_rows.append(
+            TrendingAudioDetail(
+                id=f"audio_{index}",
+                audio_name=trend.topic_name,
+                momentum=trend.momentum,
+                growth_pct=max(0, _score_from_momentum(trend.momentum) + 9),
+                audience_match_pct=max(0, min(100, match_pct)),
+                fit_reason=fit_reason,
+                suggested_angle=suggested_angle,
+                example_reference=trend.example_reference,
+            )
+        )
+    return audio_rows
+
+
+def _normalize_query_value(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _normalize_int_query_value(value: Any, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    normalized = default
+    if isinstance(value, bool):
+        normalized = int(value)
+    elif isinstance(value, int):
+        normalized = value
+    elif isinstance(value, float):
+        normalized = int(value)
+    elif isinstance(value, str):
+        try:
+            normalized = int(value.strip())
+        except ValueError:
+            normalized = default
+
+    if minimum is not None:
+        normalized = max(minimum, normalized)
+    if maximum is not None:
+        normalized = min(maximum, normalized)
+    return normalized
+
+
+def _sort_items(
+    items: list[TrendingTopicDetail] | list[TrendingAudioDetail],
+    *,
+    sort_by: str,
+    sort_dir: str,
+    field_map: dict[str, str],
+) -> list:
+    sort_by_value = sort_by if isinstance(sort_by, str) else "default"
+    sort_dir_value = sort_dir if isinstance(sort_dir, str) else "desc"
+    target_attr = field_map.get(sort_by_value, field_map.get("default", "growth_pct"))
+    reverse = sort_dir_value.lower() != "asc"
+    if target_attr == "competition_level":
+        competition_order = {"low": 1, "medium": 2, "high": 3}
+        return sorted(
+            items,
+            key=lambda item: competition_order.get(str(getattr(item, target_attr, "")).lower(), 0),
+            reverse=reverse,
+        )
+    if target_attr in {"topic_name", "audio_name"}:
+        return sorted(
+            items,
+            key=lambda item: str(getattr(item, target_attr, "")).lower(),
+            reverse=reverse,
+        )
+    return sorted(
+        items,
+        key=lambda item: getattr(item, target_attr, 0) if getattr(item, target_attr, None) is not None else 0,
+        reverse=reverse,
     )
 
 
@@ -135,6 +310,113 @@ async def get_trends(
     with timed("trends_endpoint_latency_seconds", account_id=account_id, operation="get"):
         result = await _get_trends_inner(account_id, db)
     return result
+
+
+@router.get("/{account_id}/trends/topics")
+async def get_trend_topics(
+    account_id: str,
+    search: str | None = Query(default=None),
+    trend_type: str | None = Query(default=None),
+    momentum: str | None = Query(default=None),
+    competition_level: str | None = Query(default=None),
+    sort_by: str = Query(default="growth"),
+    sort_dir: str = Query(default="desc"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return detailed trending-topic rows derived from the creator trend result."""
+    result = _normalize_trend_result(await _get_trends_inner(account_id, db))
+    topics = _build_topic_details(result)
+    search_value = _normalize_query_value(search)
+    trend_type_value = _normalize_query_value(trend_type)
+    momentum_value = _normalize_query_value(momentum)
+    competition_value = _normalize_query_value(competition_level)
+
+    if search_value:
+        topics = [
+            topic for topic in topics
+            if search_value in topic.topic_name.lower()
+            or search_value in topic.description.lower()
+            or search_value in topic.why_it_fits.lower()
+            or (topic.example_reference and search_value in topic.example_reference.lower())
+        ]
+    if trend_type_value:
+        topics = [topic for topic in topics if topic.trend_type.lower() == trend_type_value]
+    if momentum_value:
+        topics = [topic for topic in topics if topic.momentum.lower() == momentum_value]
+    if competition_value:
+        topics = [topic for topic in topics if topic.competition_level.lower() == competition_value]
+
+    topics = _sort_items(
+        topics,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        field_map={
+            "name": "topic_name",
+            "growth": "growth_pct",
+            "audience_match": "audience_match_pct",
+            "competition": "competition_level",
+            "default": "growth_pct",
+        },
+    )
+    limit_value = _normalize_int_query_value(limit, 50, minimum=1, maximum=200)
+    offset_value = _normalize_int_query_value(offset, 0, minimum=0)
+    total = len(topics)
+    topics = topics[offset_value: offset_value + limit_value]
+    return {
+        "topics": [topic.model_dump(mode="python") for topic in topics],
+        "total": total,
+    }
+
+
+@router.get("/{account_id}/trends/audio")
+async def get_trend_audio(
+    account_id: str,
+    search: str | None = Query(default=None),
+    momentum: str | None = Query(default=None),
+    sort_by: str = Query(default="growth"),
+    sort_dir: str = Query(default="desc"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return detailed trending-audio rows derived from the creator trend result."""
+    result = _normalize_trend_result(await _get_trends_inner(account_id, db))
+    audio_tracks = _build_audio_details(result)
+    search_value = _normalize_query_value(search)
+    momentum_value = _normalize_query_value(momentum)
+
+    if search_value:
+        audio_tracks = [
+            track for track in audio_tracks
+            if search_value in track.audio_name.lower()
+            or search_value in track.fit_reason.lower()
+            or search_value in track.suggested_angle.lower()
+            or (track.example_reference and search_value in track.example_reference.lower())
+        ]
+    if momentum_value:
+        audio_tracks = [track for track in audio_tracks if track.momentum.lower() == momentum_value]
+
+    audio_tracks = _sort_items(
+        audio_tracks,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        field_map={
+            "name": "audio_name",
+            "growth": "growth_pct",
+            "audience_match": "audience_match_pct",
+            "default": "growth_pct",
+        },
+    )
+    limit_value = _normalize_int_query_value(limit, 50, minimum=1, maximum=200)
+    offset_value = _normalize_int_query_value(offset, 0, minimum=0)
+    total = len(audio_tracks)
+    audio_tracks = audio_tracks[offset_value: offset_value + limit_value]
+    return {
+        "audio_tracks": [track.model_dump(mode="python") for track in audio_tracks],
+        "count": total,
+    }
 
 
 async def _get_trends_inner(account_id: str, db: AsyncSession) -> TrendAnalysisResult | dict:

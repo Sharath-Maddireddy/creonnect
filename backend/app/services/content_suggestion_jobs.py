@@ -37,6 +37,48 @@ def _generate_id() -> str:
     return str(uuid.uuid4())
 
 
+def _create_action_job(account_id: str, job_id: str, action: str) -> None:
+    """Persist non-generation actions so their queue state can be polled."""
+    session_factory = get_sync_sessionmaker()
+    with session_factory() as db:
+        db.add(IdeaGenerationJob(
+            id=job_id,
+            account_id=account_id,
+            status="queued",
+            current_step=0,
+            total_steps=1,
+            step_label="Queued",
+            percent_complete=0.0,
+            topic=action,
+        ))
+        db.commit()
+
+
+def _set_action_job_state(
+    db: Any,
+    job_id: str,
+    status: str,
+    *,
+    error: str | None = None,
+) -> None:
+    job = db.get(IdeaGenerationJob, job_id)
+    if not job:
+        return
+    job.status = status
+    job.step_label = {
+        "processing": "Working",
+        "completed": "Complete",
+        "failed": "Failed",
+    }.get(status, status.title())
+    if status == "processing":
+        job.started_at = datetime.utcnow()
+    if status in {"completed", "failed"}:
+        job.current_step = 1
+        job.percent_complete = 1.0
+        job.completed_at = datetime.utcnow()
+    job.error_message = error
+
+
 # ── Enqueue Functions ──────────────────────────────────────────────────────────
 
 
@@ -88,6 +130,7 @@ def enqueue_idea_generation(account_id: str, request: GenerateIdeasRequest) -> s
 def enqueue_idea_improve(account_id: str, idea_id: str, request: ImproveIdeaRequest) -> str:
     """Enqueue idea improvement job."""
     job_id = _generate_id()
+    _create_action_job(account_id, job_id, "improve")
 
     try:
         from backend.app.infra.rq_queue import get_queue
@@ -99,13 +142,14 @@ def enqueue_idea_improve(account_id: str, idea_id: str, request: ImproveIdeaRequ
             idea_id,
             request.feedback,
             request.aspect,
+            job_id,
             job_timeout=120,
             result_ttl=86400,
         )
         logger.info("[ContentSuggestionJob] Enqueued improve job_id=%s idea_id=%s", job_id, idea_id)
     except Exception as e:
         logger.warning("[ContentSuggestionJob] RQ enqueue failed for improve: %s", e)
-        run_idea_improve(account_id, idea_id, request.feedback, request.aspect)
+        run_idea_improve(account_id, idea_id, request.feedback, request.aspect, job_id)
 
     return job_id
 
@@ -113,6 +157,7 @@ def enqueue_idea_improve(account_id: str, idea_id: str, request: ImproveIdeaRequ
 def enqueue_idea_variations(account_id: str, idea_id: str, request: VariationsRequest) -> str:
     """Enqueue variations generation job."""
     job_id = _generate_id()
+    _create_action_job(account_id, job_id, "variations")
 
     try:
         from backend.app.infra.rq_queue import get_queue
@@ -123,13 +168,14 @@ def enqueue_idea_variations(account_id: str, idea_id: str, request: VariationsRe
             account_id,
             idea_id,
             request.count,
+            job_id,
             job_timeout=120,
             result_ttl=86400,
         )
         logger.info("[ContentSuggestionJob] Enqueued variations job_id=%s idea_id=%s", job_id, idea_id)
     except Exception as e:
         logger.warning("[ContentSuggestionJob] RQ enqueue failed for variations: %s", e)
-        run_idea_variations(account_id, idea_id, request.count)
+        run_idea_variations(account_id, idea_id, request.count, job_id)
 
     return job_id
 
@@ -137,6 +183,7 @@ def enqueue_idea_variations(account_id: str, idea_id: str, request: VariationsRe
 def enqueue_idea_regenerate(account_id: str, idea_id: str) -> str:
     """Enqueue idea regeneration job."""
     job_id = _generate_id()
+    _create_action_job(account_id, job_id, "regenerate")
 
     try:
         from backend.app.infra.rq_queue import get_queue
@@ -146,13 +193,14 @@ def enqueue_idea_regenerate(account_id: str, idea_id: str) -> str:
             "backend.app.services.content_suggestion_jobs.run_idea_regenerate",
             account_id,
             idea_id,
+            job_id,
             job_timeout=120,
             result_ttl=86400,
         )
         logger.info("[ContentSuggestionJob] Enqueued regenerate job_id=%s idea_id=%s", job_id, idea_id)
     except Exception as e:
         logger.warning("[ContentSuggestionJob] RQ enqueue failed for regenerate: %s", e)
-        run_idea_regenerate(account_id, idea_id)
+        run_idea_regenerate(account_id, idea_id, job_id)
 
     return job_id
 
@@ -373,7 +421,7 @@ def _parse_json_ideas(raw: str) -> list[dict[str, Any]]:
 # ── Improve/Variations/Regenerate Workers ──────────────────────────────────────
 
 
-def run_idea_improve(account_id: str, idea_id: str, feedback: str, aspect: str) -> None:
+def run_idea_improve(account_id: str, idea_id: str, feedback: str, aspect: str, job_id: str) -> None:
     """Worker function to improve an idea based on feedback."""
     import asyncio
 
@@ -383,9 +431,13 @@ def run_idea_improve(account_id: str, idea_id: str, feedback: str, aspect: str) 
 
     session_factory = get_sync_sessionmaker()
     with session_factory() as db:
+        _set_action_job_state(db, job_id, "processing")
+        db.commit()
         idea = db.get(Idea, idea_id)
         if not idea:
             logger.error("[ContentSuggestionJob] Idea not found: %s", idea_id)
+            _set_action_job_state(db, job_id, "failed", error="Idea not found")
+            db.commit()
             return
 
         system_prompt = (
@@ -427,12 +479,15 @@ Return JSON shape:
                 idea.description = parsed["description"]
 
             idea.updated_at = datetime.utcnow()
+            _set_action_job_state(db, job_id, "completed")
             db.commit()
 
             logger.info("[ContentSuggestionJob] Improved idea_id=%s", idea_id)
 
         except Exception as e:
             logger.exception("[ContentSuggestionJob] Improve failed for idea_id=%s: %s", idea_id, e)
+            _set_action_job_state(db, job_id, "failed", error=str(e))
+            db.commit()
 
 
 def _parse_json_improvement(raw: str) -> dict[str, str]:
@@ -440,7 +495,7 @@ def _parse_json_improvement(raw: str) -> dict[str, str]:
     return {k: str(v).strip() for k, v in payload.items() if k in {"title", "hook", "description"} and isinstance(v, str)}
 
 
-def run_idea_variations(account_id: str, idea_id: str, count: int) -> None:
+def run_idea_variations(account_id: str, idea_id: str, count: int, job_id: str) -> None:
     """Worker function to generate variations of an idea."""
     import asyncio
 
@@ -450,9 +505,13 @@ def run_idea_variations(account_id: str, idea_id: str, count: int) -> None:
 
     session_factory = get_sync_sessionmaker()
     with session_factory() as db:
+        _set_action_job_state(db, job_id, "processing")
+        db.commit()
         idea = db.get(Idea, idea_id)
         if not idea:
             logger.error("[ContentSuggestionJob] Idea not found: %s", idea_id)
+            _set_action_job_state(db, job_id, "failed", error="Idea not found")
+            db.commit()
             return
 
         system_prompt = (
@@ -492,12 +551,15 @@ Return JSON shape:
                 })
             idea.variations = existing_variations
             idea.updated_at = datetime.utcnow()
+            _set_action_job_state(db, job_id, "completed")
             db.commit()
 
             logger.info("[ContentSuggestionJob] Generated %d variations for idea_id=%s", len(variations), idea_id)
 
         except Exception as e:
             logger.exception("[ContentSuggestionJob] Variations failed for idea_id=%s: %s", idea_id, e)
+            _set_action_job_state(db, job_id, "failed", error=str(e))
+            db.commit()
 
 
 def _parse_json_variations(raw: str) -> list[dict[str, str]]:
@@ -506,7 +568,7 @@ def _parse_json_variations(raw: str) -> list[dict[str, str]]:
     return variations if isinstance(variations, list) else []
 
 
-def run_idea_regenerate(account_id: str, idea_id: str) -> None:
+def run_idea_regenerate(account_id: str, idea_id: str, job_id: str) -> None:
     """Worker function to regenerate an idea from scratch."""
     import asyncio
 
@@ -516,9 +578,13 @@ def run_idea_regenerate(account_id: str, idea_id: str) -> None:
 
     session_factory = get_sync_sessionmaker()
     with session_factory() as db:
+        _set_action_job_state(db, job_id, "processing")
+        db.commit()
         idea = db.get(Idea, idea_id)
         if not idea:
             logger.error("[ContentSuggestionJob] Idea not found: %s", idea_id)
+            _set_action_job_state(db, job_id, "failed", error="Idea not found")
+            db.commit()
             return
 
         system_prompt = (
@@ -564,12 +630,15 @@ Return JSON shape:
                 "original_title": idea.title,
             }
             idea.updated_at = datetime.utcnow()
+            _set_action_job_state(db, job_id, "completed")
             db.commit()
 
             logger.info("[ContentSuggestionJob] Regenerated idea_id=%s", idea_id)
 
         except Exception as e:
             logger.exception("[ContentSuggestionJob] Regenerate failed for idea_id=%s: %s", idea_id, e)
+            _set_action_job_state(db, job_id, "failed", error=str(e))
+            db.commit()
 
 
 # ── Status Polling ─────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 const OPTIMIZATION_GOALS = [
     { id: 'maximum_reach', label: 'Maximum Reach' },
@@ -33,13 +33,17 @@ const TONES = [
     { id: 'educational', label: 'Educational' },
 ]
 
-export default function GenerateIdeasModal({ onClose, onGenerate }) {
+export default function GenerateIdeasModal({ onClose, onGenerate, initialTopic = '' }) {
     const [goals, setGoals] = useState(['maximum_reach'])
     const [contentType, setContentType] = useState('reel')
-    const [topic, setTopic] = useState('')
+    const [topic, setTopic] = useState(initialTopic || '')
     const [audience, setAudience] = useState('everyone')
     const [tones, setTones] = useState(['professional'])
     const [count, setCount] = useState(5)
+
+    useEffect(() => {
+        setTopic(initialTopic || '')
+    }, [initialTopic])
 
     const toggleGoal = (id) => {
         setGoals(prev => prev.includes(id) ? prev.filter(g => g !== id) : [...prev, id])

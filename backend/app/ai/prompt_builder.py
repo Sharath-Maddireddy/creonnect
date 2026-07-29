@@ -41,7 +41,7 @@ def build_creator_explanation_prompt(context: Dict) -> Dict:
         else "N/A"
     )
 
-        user_message = f"""
+    user_message = f"""
 Creator Summary:
 - Username: {format_user_text_block(creator.get('username', ''))}
 - Platform: {format_user_text_block(creator.get('platform', ''))}

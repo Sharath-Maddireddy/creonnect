@@ -12,18 +12,23 @@ const TIPS = [
     'Keep it concise and scannable',
 ]
 
-export default function CaptionGenerator({ ideaId, ideaTitle, hook, accountUrl, onClose, onCopy }) {
+export default function CaptionGenerator({ ideaId, ideaTitle, hook, previewOnly = false, previewCaptions = null, accountUrl, onClose, onCopy }) {
     const [platform, setPlatform] = useState('instagram')
     const [tone, setTone] = useState('friendly')
     const [language, setLanguage] = useState('en')
     const [includeHashtags, setIncludeHashtags] = useState(true)
     const [maxHashtags, setMaxHashtags] = useState(10)
-    const [captions, setCaptions] = useState(null)
-    const [activeCaption, setActiveCaption] = useState(null)
+    const [captions, setCaptions] = useState(previewOnly ? previewCaptions : null)
+    const [activeCaption, setActiveCaption] = useState(previewOnly ? previewCaptions?.[0] || null : null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
 
     const handleGenerate = async () => {
+        if (previewOnly) {
+            setCaptions(previewCaptions)
+            setActiveCaption(previewCaptions?.[0] || null)
+            return
+        }
         setLoading(true)
         setError(null)
         try {
@@ -49,7 +54,7 @@ export default function CaptionGenerator({ ideaId, ideaTitle, hook, accountUrl, 
                 const err = await res.json().catch(() => ({ detail: 'Generation failed' }))
                 const errMsg = err.detail || `Failed to generate caption (status ${res.status})`
                 if (res.status === 404) {
-                    setError('Idea not found in database. Use "Generate New Ideas" first to create a persisted idea, then generate a caption from it.')
+                    setError('Idea not found in the database yet. Save it or generate full ideas first, then generate a caption from it.')
                 } else {
                     setError(errMsg)
                 }
@@ -81,6 +86,10 @@ export default function CaptionGenerator({ ideaId, ideaTitle, hook, accountUrl, 
                 <div className="cs-modal__body">
                     {error && (
                         <div className="cs-error">{error}</div>
+                    )}
+
+                    {previewOnly && activeCaption?.preview_note && (
+                        <div className="cs-info-banner">{activeCaption.preview_note}</div>
                     )}
 
                     {!captions ? (
@@ -185,9 +194,11 @@ export default function CaptionGenerator({ ideaId, ideaTitle, hook, accountUrl, 
                             )}
 
                             <div className="cs-form-row">
-                                <button className="cs-btn cs-btn--secondary" onClick={() => { setCaptions(null); setActiveCaption(null) }}>
-                                    Regenerate
-                                </button>
+                                {!previewOnly && (
+                                    <button className="cs-btn cs-btn--secondary" onClick={() => { setCaptions(null); setActiveCaption(null) }}>
+                                        Regenerate
+                                    </button>
+                                )}
                                 <button className="cs-btn cs-btn--primary" onClick={handleCopy}>
                                     Copy Caption
                                 </button>

@@ -34,6 +34,114 @@ def _clean_text(value: object, *, fallback: str = "") -> str:
     return text or fallback
 
 
+def _tokenize_text(value: object) -> set[str]:
+    text = _clean_text(value).lower()
+    if not text:
+        return set()
+    return {
+        token
+        for token in (
+            "".join(ch for ch in raw if ch.isalnum())
+            for raw in text.replace("/", " ").replace("-", " ").split()
+        )
+        if len(token) >= 3
+    }
+
+
+def _classify_format_family(
+    trend: GlobalTrend | None,
+    rec: TrendRecommendation | None,
+) -> str:
+    content_text = " ".join(
+        part
+        for part in [
+            getattr(trend, "topic_name", None),
+            getattr(trend, "description", None),
+            getattr(rec, "suggested_title", None),
+            getattr(rec, "rationale", None),
+            getattr(rec, "hook", None),
+            getattr(rec, "content_style", None),
+        ]
+        if isinstance(part, str) and part.strip()
+    ).lower()
+
+    if any(term in content_text for term in ("carousel", "slide", "slides", "swipe")):
+        return "carousel"
+    if any(term in content_text for term in ("photo", "static post", "single image", "lookbook", "image post")):
+        return "photo"
+    if trend and trend.trend_type in {"format", "audio"}:
+        return "reel"
+    if any(term in content_text for term in ("reel", "video", "short-form", "grwm", "day in the life", "pov")):
+        return "reel"
+    return "reel"
+
+
+def _classify_angle_type(
+    trend: GlobalTrend | None,
+    rec: TrendRecommendation | None,
+) -> str:
+    content_text = " ".join(
+        part
+        for part in [
+            getattr(trend, "topic_name", None),
+            getattr(trend, "description", None),
+            getattr(rec, "suggested_title", None),
+            getattr(rec, "rationale", None),
+            getattr(rec, "expected_impact", None),
+            getattr(rec, "hook", None),
+            getattr(rec, "content_style", None),
+        ]
+        if isinstance(part, str) and part.strip()
+    ).lower()
+    content_style = _clean_text(getattr(rec, "content_style", None)).lower()
+
+    if (
+        "educational" in content_style
+        or "how-to" in content_style
+        or any(term in content_text for term in ("tips", "explained", "how to", "guide", "breakdown", "tutorial"))
+    ):
+        return "educational"
+    if (
+        "story" in content_style
+        or "pov" in content_style
+        or "lifestyle" in content_style
+        or any(term in content_text for term in ("journey", "story", "experience", "day in the life", "grwm"))
+    ):
+        return "personal_story"
+    if any(
+        term in content_text
+        for term in ("brand", "product", "review", "comparison", "storefront", "shop", "shopping", "affiliate", "sponsor", "ugc")
+    ):
+        return "brand_friendly"
+    return "general"
+
+
+def _classify_creator_level(
+    difficulty: str | None,
+    trend: GlobalTrend | None,
+    rec: TrendRecommendation | None,
+) -> str:
+    difficulty_value = _clean_text(difficulty).lower()
+    content_text = " ".join(
+        part
+        for part in [
+            getattr(trend, "description", None),
+            getattr(rec, "suggested_title", None),
+            getattr(rec, "rationale", None),
+            getattr(rec, "expected_impact", None),
+        ]
+        if isinstance(part, str) and part.strip()
+    ).lower()
+
+    if difficulty_value == "easy":
+        return "beginner"
+    if difficulty_value == "hard":
+        return "advanced"
+    if any(term in content_text for term in ("deep dive", "research", "analysis", "framework", "breakdown", "multi-step")):
+        return "advanced"
+    return "intermediate"
+
+
 # ── Opportunity scoring helpers ────────────────────────────────────────────────
 
 _MOMENTUM_SCORES: dict[str, float] = {
@@ -86,6 +194,13 @@ def _compute_opportunity_score(
     trend_name = (trend.topic_name or "").lower()
     trend_desc = (trend.description or "").lower()
     combined_text = f"{trend_name} {trend_desc}"
+    creator_tokens = set()
+    creator_tokens |= _tokenize_text(creator_intelligence.content_style_summary)
+    for strength in creator_intelligence.creator_strengths or []:
+        creator_tokens |= _tokenize_text(strength)
+    for theme in creator_intelligence.top_performing_themes or []:
+        creator_tokens |= _tokenize_text(theme)
+    trend_tokens = _tokenize_text(combined_text)
 
     for category, keywords in _NICHE_CATEGORY_KEYWORDS.items():
         category_lower = category.lower()
@@ -98,6 +213,16 @@ def _compute_opportunity_score(
             else:
                 niche_score = 12.0
             break
+    else:
+        overlap_count = len((creator_tokens & trend_tokens) - {"with", "from", "your", "this"})
+        if overlap_count >= 4:
+            niche_score = 28.0
+        elif overlap_count >= 2:
+            niche_score = 22.0
+        elif overlap_count >= 1:
+            niche_score = 18.0
+        elif creator_tokens:
+            niche_score = 14.0
 
     # Content type match component (0-20)
     type_score = _TREND_TYPE_SCORES.get(trend.trend_type, 10.0)
@@ -345,14 +470,7 @@ def _fallback_recommendations(
 
     fallback_trends = trends[:3]
     if not fallback_trends:
-        fallback_trends = [
-            GlobalTrend(
-                topic_name="Evergreen Content",
-                trend_type="topic",
-                momentum="rising",
-                description="A reliable evergreen format for testing content-market fit.",
-            )
-        ]
+        return []
 
     recommendations: list[TrendRecommendation] = []
     for index, trend in enumerate(fallback_trends, start=1):
@@ -374,6 +492,10 @@ def _fallback_recommendations(
                     f"to test in slot {index}."
                 ),
                 trend_reference=trend.topic_name,
+                format_family=_classify_format_family(trend, None),
+                angle_type=_classify_angle_type(trend, None),
+                creator_level="intermediate",
+                is_trending=trend.momentum in {"rising", "peaking"},
             )
         )
 
@@ -493,6 +615,10 @@ async def generate_trend_recommendations(
 
             # Difficulty
             difficulty = _compute_difficulty(matching_trend, posts) if matching_trend else "Medium"
+            format_family = _classify_format_family(matching_trend, rec)
+            angle_type = _classify_angle_type(matching_trend, rec)
+            creator_level = _classify_creator_level(difficulty, matching_trend, rec)
+            is_trending = bool(matching_trend and matching_trend.momentum in {"rising", "peaking"})
 
             enriched.append(TrendRecommendation(
                 suggested_title=rec.suggested_title,
@@ -506,6 +632,10 @@ async def generate_trend_recommendations(
                 expected_reach_max=reach_max,
                 best_time=best_time,
                 difficulty=difficulty,
+                format_family=format_family,
+                angle_type=angle_type,
+                creator_level=creator_level,
+                is_trending=is_trending,
             ))
 
         # Compute content gaps and daily insights

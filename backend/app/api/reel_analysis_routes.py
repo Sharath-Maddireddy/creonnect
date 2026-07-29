@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from backend.app.api.auth import verify_api_key
+from backend.app.utils.env import is_production_environment
 from backend.app.services.reel_analysis_jobs import (
     enqueue_reel_analysis_job,
     get_reel_job_status,
@@ -21,8 +22,7 @@ router = APIRouter(prefix="/api/reel-analysis", tags=["Reel Analysis"])
 def _require_reel_analysis_api_key_if_configured(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> str | None:
-    env = (os.getenv("ENV") or "").strip().lower()
-    if env != "production":
+    if not is_production_environment():
         return None
 
     expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()

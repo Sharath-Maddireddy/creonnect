@@ -5,14 +5,14 @@
  * audience match bars, and side detail panel on row click.
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 
 export default function AllTrendingTopics({ accountUrl, onClose, onUseTopic }) {
     const [topics, setTopics] = useState([])
     const [loading, setLoading] = useState(true)
-    const [category, setCategory] = useState('All')
-    const [platform, setPlatform] = useState('All')
-    const [period, setPeriod] = useState('7d')
+    const [trendType, setTrendType] = useState('All')
+    const [momentum, setMomentum] = useState('All')
+    const [competition, setCompetition] = useState('All')
     const [search, setSearch] = useState('')
     const [page, setPage] = useState(1)
     const [total, setTotal] = useState(0)
@@ -26,17 +26,21 @@ export default function AllTrendingTopics({ accountUrl, onClose, onUseTopic }) {
         try {
             const baseUrl = accountUrl || '/api/v1/accounts/placeholder'
             const params = new URLSearchParams({
-                category: category === 'All' ? '' : category,
-                platform: platform === 'All' ? '' : platform,
+                search,
                 sort_by: sortBy,
+                sort_dir: sortDir,
                 limit: String(perPage),
                 offset: String((page - 1) * perPage),
             })
-            const r = await fetch(`${baseUrl}/trends?${params}`, { credentials: 'include' })
+            if (trendType !== 'All') params.set('trend_type', trendType.toLowerCase())
+            if (momentum !== 'All') params.set('momentum', momentum.toLowerCase())
+            if (competition !== 'All') params.set('competition_level', competition.toLowerCase())
+            const r = await fetch(`${baseUrl}/trends/topics?${params.toString()}`, { credentials: 'include' })
             if (r.ok) {
                 const data = await r.json()
-                setTopics(data.topics || data.data || [])
-                setTotal(data.total || data.topics?.length || 0)
+                const rows = data.topics || data.data || []
+                setTopics(rows)
+                setTotal(data.total || rows.length || 0)
             }
         } catch (e) {
             console.error('Failed to fetch topics:', e)
@@ -45,16 +49,13 @@ export default function AllTrendingTopics({ accountUrl, onClose, onUseTopic }) {
         }
     }
 
-    useEffect(() => { fetchTopics() }, [category, platform, period, page, sortBy, sortDir])
+    useEffect(() => { fetchTopics() }, [accountUrl, search, trendType, momentum, competition, page, sortBy, sortDir])
 
-    const totalPages = Math.ceil(total / perPage)
+    const totalPages = Math.max(1, Math.ceil(total / perPage))
 
-    const sortedTopics = useMemo(() => {
-        if (!search) return topics
-        return topics.filter(t =>
-            (t.name || t.topic_name || '').toLowerCase().includes(search.toLowerCase())
-        )
-    }, [topics, search])
+    useEffect(() => {
+        setPage(1)
+    }, [search, trendType, momentum, competition, sortBy, sortDir])
 
     const handleSort = (col) => {
         if (sortBy === col) {
@@ -78,34 +79,35 @@ export default function AllTrendingTopics({ accountUrl, onClose, onUseTopic }) {
             <div className="cs-all-topics__header">
                 <div className="cs-all-topics__header-left">
                     <h2>Trending Topics</h2>
-                    <span className="cs-all-topics__updated">Updated just now</span>
+                    <span className="cs-all-topics__updated">
+                        {loading ? 'Refreshing topic signals…' : `${total} topic trend${total === 1 ? '' : 's'} available`}
+                    </span>
                 </div>
                 <div className="cs-all-topics__header-right">
                     <button className="cs-btn cs-btn--ghost" onClick={fetchTopics}>🔄 Refresh</button>
-                    {onClose && <button className="cs-btn cs-btn--ghost" onClick={onClose}>← Back to Dashboard</button>}
+                    {onClose && <button className="cs-btn cs-btn--ghost" onClick={onClose}>← Back to Trends</button>}
                 </div>
             </div>
 
             {/* Filter Bar */}
             <div className="cs-all-topics__filters">
-                <select className="cs-select" value={category} onChange={e => { setCategory(e.target.value); setPage(1) }}>
-                    <option>All Categories</option>
-                    <option>Fashion</option>
-                    <option>Beauty</option>
-                    <option>Food</option>
-                    <option>Tech</option>
-                    <option>Travel</option>
+                <select className="cs-select" value={trendType} onChange={e => { setTrendType(e.target.value); setPage(1) }}>
+                    <option>All</option>
+                    <option>Topic</option>
+                    <option>Format</option>
+                    <option>Hashtag</option>
                 </select>
-                <select className="cs-select" value={platform} onChange={e => { setPlatform(e.target.value); setPage(1) }}>
-                    <option>All Platforms</option>
-                    <option>Instagram</option>
-                    <option>TikTok</option>
-                    <option>YouTube</option>
+                <select className="cs-select" value={momentum} onChange={e => { setMomentum(e.target.value); setPage(1) }}>
+                    <option>All</option>
+                    <option>Rising</option>
+                    <option>Peaking</option>
+                    <option>Falling</option>
                 </select>
-                <select className="cs-select" value={period} onChange={e => { setPeriod(e.target.value); setPage(1) }}>
-                    <option value="7d">Last 7 Days</option>
-                    <option value="30d">Last 30 Days</option>
-                    <option value="90d">Last 90 Days</option>
+                <select className="cs-select" value={competition} onChange={e => { setCompetition(e.target.value); setPage(1) }}>
+                    <option>All</option>
+                    <option>Low</option>
+                    <option>Medium</option>
+                    <option>High</option>
                 </select>
                 <div className="cs-all-topics__search">
                     <span>🔍</span>
@@ -150,19 +152,19 @@ export default function AllTrendingTopics({ accountUrl, onClose, onUseTopic }) {
                                         </td>
                                     </tr>
                                 ))
-                            ) : sortedTopics.length === 0 ? (
+                            ) : topics.length === 0 ? (
                                 <tr>
                                     <td colSpan={6} className="cs-all-topics__empty">
-                                        No trending topics found
+                                        No topic trends match this filter
                                     </td>
                                 </tr>
                             ) : (
-                                sortedTopics.map((topic, i) => {
-                                    const cmp = competitionColor(topic.competition)
-                                    const match = topic.audience_match || topic.audience_match_pct || Math.floor(Math.random() * 10 + 85)
-                                    const growth = topic.growth_pct || topic.momentum_pct || (Math.floor(Math.random() * 200 + 50))
-                                    const name = topic.topic_name || topic.name || topic.title || 'Trending Topic'
-                                    const categoryName = topic.category || topic.niche || 'General'
+                                topics.map((topic, i) => {
+                                    const cmp = competitionColor(topic.competition_level)
+                                    const match = topic.audience_match_pct || 0
+                                    const growth = topic.growth_pct || 0
+                                    const name = topic.topic_name || 'Trending Topic'
+                                    const categoryName = topic.trend_type || 'General'
                                     return (
                                         <tr
                                             key={topic.id || i}
@@ -196,7 +198,7 @@ export default function AllTrendingTopics({ accountUrl, onClose, onUseTopic }) {
                                                     className="cs-btn cs-btn--ghost cs-btn--sm cs-all-topics__generate-btn"
                                                     onClick={(e) => { e.stopPropagation(); onUseTopic?.(topic) }}
                                                 >
-                                                    🪄 Generate Ideas
+                                                    Generate Full Ideas
                                                 </button>
                                             </td>
                                         </tr>
@@ -214,36 +216,38 @@ export default function AllTrendingTopics({ accountUrl, onClose, onUseTopic }) {
                         <div className="cs-all-topics__detail-growth">
                             <span className="cs-all-topics__detail-growth-label">Growth (7 Days)</span>
                             <span className="cs-all-topics__detail-growth-value">
-                                +{selectedTopic.growth_pct || selectedTopic.momentum_pct || 320}%
+                                +{selectedTopic.growth_pct || 0}%
                             </span>
                         </div>
                         <div className="cs-all-topics__detail-stats">
                             <div className="cs-all-topics__detail-stat">
                                 <span className="cs-all-topics__detail-stat-label">Audience Match</span>
                                 <span className="cs-all-topics__detail-stat-value">
-                                    {selectedTopic.audience_match || selectedTopic.audience_match_pct || 99}%
+                                    {selectedTopic.audience_match_pct || 0}%
                                 </span>
                             </div>
                             <div className="cs-all-topics__detail-stat">
                                 <span className="cs-all-topics__detail-stat-label">Competition</span>
-                                <span className="cs-all-topics__detail-stat-value">{selectedTopic.competition || 'Low'}</span>
-                            </div>
-                        </div>
-                        <div className="cs-all-topics__detail-platforms">
-                            <span>Top Platforms</span>
-                            <div className="cs-all-topics__detail-platform-icons">
-                                <span>📸</span><span>🎵</span><span>📌</span><span>▶️</span>
+                                <span className="cs-all-topics__detail-stat-value">{selectedTopic.competition_level || 'Low'}</span>
                             </div>
                         </div>
                         <div className="cs-all-topics__detail-why">
-                            <span>Why it's trending?</span>
-                            <p>{selectedTopic.description || selectedTopic.rationale || 'This topic has seen a significant spike in engagement across platforms, driven by recent viral content and creator participation.'}</p>
+                            <span>Why this topic is showing up</span>
+                            <p>{selectedTopic.description || 'This topic is currently being surfaced from the creator trend analysis pipeline.'}</p>
+                            <span>Why it fits this creator</span>
+                            <p>{selectedTopic.why_it_fits || 'This topic aligns with the creator’s niche and recent content patterns.'}</p>
+                            {selectedTopic.example_reference && (
+                                <>
+                                    <span>Reference cue</span>
+                                    <p>{selectedTopic.example_reference}</p>
+                                </>
+                            )}
                         </div>
                         <button
                             className="cs-btn cs-btn--primary cs-all-topics__detail-cta"
                             onClick={() => onUseTopic?.(selectedTopic)}
                         >
-                            🪄 Generate Ideas
+                            Generate Full Ideas
                         </button>
                     </div>
                 )}
@@ -252,7 +256,7 @@ export default function AllTrendingTopics({ accountUrl, onClose, onUseTopic }) {
             {/* Pagination */}
             <div className="cs-all-topics__pagination">
                 <span className="cs-all-topics__pagination-info">
-                    Showing {(page - 1) * perPage + 1} to {Math.min(page * perPage, total)} of {total} topics
+                    Showing {total === 0 ? 0 : (page - 1) * perPage + 1} to {Math.min(page * perPage, total)} of {total} topics
                 </span>
                 <div className="cs-all-topics__pagination-btns">
                     {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {

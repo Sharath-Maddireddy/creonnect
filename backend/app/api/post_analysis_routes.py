@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from backend.app.ai.cringe_analysis import build_cringe_section_for_brand_safety
 from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.api.auth import verify_api_key
+from backend.app.utils.env import is_production_environment
 from backend.app.domain.post_models import SinglePostInsights, VisionAnalysis
 from backend.app.infra.redis_client import get_json, set_json
 from backend.app.services.post_insights_service import build_single_post_insights
@@ -44,8 +45,7 @@ _CRINGE_SUMMARY_CACHE_LOCK = threading.Lock()
 def _require_post_analysis_api_key_if_configured(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> str | None:
-    env = (os.getenv("ENV") or "").strip().lower()
-    if env != "production":
+    if not is_production_environment():
         return None
 
     expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()

@@ -46,6 +46,17 @@ jobs:
           RATE_LIMIT_USE_REDIS: "false"
         run: pytest backend/app/tests -q
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:

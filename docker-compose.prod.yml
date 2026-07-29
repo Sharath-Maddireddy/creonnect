@@ -51,9 +51,23 @@ services:
       - .env
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      RQ_QUEUES: account-analysis,single-post-analysis,embedding-ingestion
     depends_on:
       - redis
-    command: ["python", "-m", "backend.app.workers.sqs_worker"]
+    command: ["python", "-m", "backend.app.workers.rq_worker"]
+
+  worker-content:
+    image: ${ECR_IMAGE}
+    container_name: creonnect-python-worker-content
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      RQ_QUEUES: trend-analysis,content-suggestions
+    depends_on:
+      - redis
+    command: ["python", "-m", "backend.app.workers.rq_worker"]
 
 volumes:
   redis-data:

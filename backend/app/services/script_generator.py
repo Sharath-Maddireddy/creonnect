@@ -16,6 +16,7 @@ async def generate_script(
     title: str,
     hook: str | None,
     script_type: str,
+    content_type: str,
     tone: str,
     language: str,
     duration_seconds: int,
@@ -26,7 +27,8 @@ async def generate_script(
         idea_id: The idea ID for lineage tracking
         title: The idea title
         hook: Optional existing hook to build on
-        script_type: viral | natural | story
+        script_type: The selected format-specific creative approach
+        content_type: reel | carousel | photo
         tone: friendly | professional | funny
         language: Language code (en, hi, es, etc.)
         duration_seconds: Target duration in seconds
@@ -34,34 +36,42 @@ async def generate_script(
     Returns:
         GenerateScriptResponse with hook, scenes, CTA, and full script
     """
-    logger.info("[ScriptGenerator] Generating script for idea=%s type=%s", idea_id, script_type)
+    normalized_content_type = (content_type or "reel").strip().lower()
+    if normalized_content_type not in {"reel", "carousel", "photo"}:
+        normalized_content_type = "reel"
+    logger.info("[ScriptGenerator] Generating plan for idea=%s type=%s format=%s", idea_id, script_type, normalized_content_type)
+
+    format_guidance = {
+        "reel": "Create a short-form video script with timed scenes, spoken narration, and visual notes.",
+        "carousel": "Create an Instagram carousel plan. Each scene is one slide: use time_range as 'Slide N', description as the exact slide copy, and visual_notes as the layout or image direction. Do not write voiceover.",
+        "photo": "Create a single-photo post creative brief. Use one scene only: description is the on-image text or headline, and visual_notes gives the composition, subject, lighting, crop, and prop direction. Do not write voiceover or multiple shots.",
+    }[normalized_content_type]
 
     system_prompt = (
-        "You are a professional short-form video scriptwriter. "
-        "Create scripts optimized for social media engagement. "
-        "Use clear scene breakdowns with timing. "
-        "Each scene description must be the exact spoken line or narration, written word-for-word, not a summary label. "
-        "Keep visual direction separate in visual_notes. "
+        "You are a professional social media creative director. "
+        "Create production-ready content plans optimized for engagement. "
+        f"{format_guidance} "
         "Return ONLY one valid JSON object and no markdown."
     )
 
-    user_prompt = f"""Write a {script_type} script for: {title}
+    user_prompt = f"""Create a {script_type} {normalized_content_type} plan for: {title}
 
 Hook: {hook or 'Create an attention-grabbing hook'}
 Tone: {tone}
 Language: {language}
-Target duration: {duration_seconds} seconds
+Target duration: {duration_seconds} seconds (only relevant for reels)
 
 Structure:
-- hook: The opening line (0-3 seconds)
-- scenes: List of scenes with scene_number, time_range, description, visual_notes
+- hook: The opening hook, headline, or first-slide text
+- scenes: Format-specific production steps with scene_number, time_range, description, visual_notes
 - cta: Call to action at the end
 - estimated_duration_sec: Actual estimated duration
 
 Important quality rules:
-- description must be actual creator dialogue or voiceover, not labels like "Main content" or "Explain the trend"
-- visual_notes must only describe what the viewer sees on screen
-- make the full script sound natural, specific, and ready to record
+- for reels, description must be actual creator dialogue or voiceover, not labels like "Main content"
+- for carousels, description must be concise, ready-to-paste slide copy
+- for photos, description must be concise on-image text and visual_notes must be a complete creative brief
+- make the plan specific and ready to produce
 - do not repeat the same sentence in every scene
 - keep the language aligned to the requested tone
 
@@ -127,7 +137,7 @@ Return JSON shape:
     except Exception as e:
         logger.exception("[ScriptGenerator] Failed: %s", e)
         # Return fallback script
-        return _fallback_script(idea_id, title, hook, duration_seconds)
+        return _fallback_script(idea_id, title, hook, duration_seconds, normalized_content_type)
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -257,9 +267,21 @@ def _fallback_script(
     title: str,
     hook: str | None,
     duration_seconds: int,
+    content_type: str = "reel",
 ) -> GenerateScriptResponse:
     """Return a fallback script when LLM fails."""
     base_hook = (hook or f"Watch how I {title.lower()}").strip()
+    if content_type == "carousel":
+        slides = [
+            Scene(scene_number=1, time_range="Slide 1", description=base_hook, visual_notes="Bold cover headline with a simple visual that previews the payoff."),
+            Scene(scene_number=2, time_range="Slide 2", description=f"The problem behind {title.lower()}.", visual_notes="Use a clean supporting photo or an easy-to-scan comparison."),
+            Scene(scene_number=3, time_range="Slide 3", description="The practical takeaway your audience can use today.", visual_notes="Use a numbered tip, checklist, or before-and-after layout."),
+            Scene(scene_number=4, time_range="Slide 4", description="Save this for your next post plan.", visual_notes="Close with a branded CTA slide and generous whitespace."),
+        ]
+        return GenerateScriptResponse(idea_id=idea_id, hook=base_hook, scenes=slides, cta="Save this carousel for later.", estimated_duration_sec=0, full_script=_format_full_script({"hook": base_hook, "scenes": [slide.model_dump() for slide in slides], "cta": "Save this carousel for later."}))
+    if content_type == "photo":
+        photo_scene = Scene(scene_number=1, time_range="Single photo", description=base_hook, visual_notes=f"Hero image for {title}: use one clear subject, natural directional light, an uncluttered background, and crop for a 4:5 Instagram feed post.")
+        return GenerateScriptResponse(idea_id=idea_id, hook=base_hook, scenes=[photo_scene], cta="Use the caption to invite comments or saves.", estimated_duration_sec=0, full_script=_format_full_script({"hook": base_hook, "scenes": [photo_scene.model_dump()], "cta": "Use the caption to invite comments or saves."}))
     scene_2 = f"Here is exactly why {title.lower()} is getting so much attention right now."
     scene_3 = "The trick is to show one clear takeaway, one proof point, and one thing your audience can copy today."
     scene_4 = "If you want more ideas like this, save this and come back when you plan your next post."

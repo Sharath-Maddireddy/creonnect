@@ -27,6 +27,7 @@ from backend.app.domain.content_suggestion_models import (
     PaginationMeta,
     PlannerResponse,
     PersistQuickIdeaRequest,
+    UpdateIdeaRequest,
     DaySchedule,
     RegenerateRequest,
     RegenerateResponse,
@@ -45,6 +46,8 @@ from backend.app.infra.models import (
     Collection,
     CollectionIdea,
     Idea,
+    IdeaGenerationJob,
+    CreatorTrendResult,
     ScheduledItem,
 )
 from backend.app.services.content_suggestion_jobs import (
@@ -231,6 +234,25 @@ async def get_generation_status(
         emit_event("trend_generate_failed", account_id=account_id, properties={"job_id": job_id, "error": status.get("error")})
         emit_counter("trends_generation_failed", account_id=account_id)
     return status
+
+
+@router.get("/{account_id}/ideas/jobs/{job_id}/status")
+async def get_idea_job_status(
+    account_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Poll an account-owned asynchronous idea action."""
+    result = await db.execute(
+        select(IdeaGenerationJob).where(
+            IdeaGenerationJob.id == job_id,
+            IdeaGenerationJob.account_id == account_id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return await asyncio.to_thread(get_idea_generation_status, job_id)
 
 
 # ── Paginated Ideas List ──────────────────────────────────────────────────────
@@ -457,6 +479,7 @@ async def generate_script_endpoint(
         title=idea.title,
         hook=idea.hook,
         script_type=request.script_type,
+        content_type=idea.content_type,
         tone=request.tone,
         language=request.language,
         duration_seconds=request.duration_seconds,
@@ -469,6 +492,7 @@ async def generate_script_endpoint(
         "cta": response.cta,
         "estimated_duration_sec": response.estimated_duration_sec,
         "full_script": response.full_script,
+        "content_type": idea.content_type,
     }
     await db.commit()
 
@@ -662,7 +686,6 @@ async def generate_thumbnails_endpoint(
         raise HTTPException(status_code=404, detail="Idea not found")
 
     import uuid
-    import hashlib
 
     # Generate 4 thumbnail concepts with different prompts
     labels = [
@@ -678,16 +701,13 @@ async def generate_thumbnails_endpoint(
     for i, label in enumerate(labels):
         tid = str(uuid.uuid4())[:8]
         prompt = f"{prompt_base} Style variant {i+1}: {'bold typography' if i==0 else 'minimalist' if i==1 else 'colorful gradient' if i==2 else 'dark moody'}"
-        # Generate deterministic placeholder URL (real image gen would use DALL-E/Replicate)
-        hash_val = hashlib.md5(f"{idea_id}-{i}".encode()).hexdigest()[:6]
-        image_url = f"https://placehold.co/1080x1080/7c3aed/ffffff?text={label.replace(' ', '+')[:30]}&font=roboto"
-        
         thumbnails.append({
             "id": tid,
-            "image_url": image_url,
+            "image_url": None,
             "label": label,
             "prompt": prompt,
             "resolution": "1080x1080",
+            "status": "concept_only",
         })
 
     return {"idea_id": idea_id, "thumbnails": thumbnails}
@@ -791,7 +811,7 @@ async def duplicate_idea_endpoint(
     """Duplicate an idea."""
     import uuid
 
-    result = await db.execute(select(Idea).where(Idea.id == idea_id))
+    result = await db.execute(select(Idea).where(Idea.id == idea_id, Idea.account_id == account_id))
     idea = result.scalar_one_or_none()
     if not idea:
         raise HTTPException(status_code=404, detail="Idea not found")
@@ -916,7 +936,7 @@ async def get_idea_reasoning(
 async def update_idea_endpoint(
     account_id: str,
     idea_id: str,
-    updates: dict[str, Any],
+    updates: UpdateIdeaRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Update idea fields (content_type, status, etc.)."""
@@ -927,14 +947,14 @@ async def update_idea_endpoint(
     if not idea:
         raise HTTPException(status_code=404, detail="Idea not found")
 
-    # Only allow updating specific fields
-    allowed_fields = {"content_type", "status", "title", "hook", "description", "tags"}
-    for key, value in updates.items():
-        if key in allowed_fields and hasattr(idea, key):
+    changed: dict[str, Any] = {}
+    for key, value in updates.model_dump(exclude_none=True).items():
+        if hasattr(idea, key):
             setattr(idea, key, value)
+            changed[key] = value
 
     await db.commit()
-    return {"id": idea.id, "status": "updated"}
+    return {"id": idea.id, "status": "updated", "updated": changed}
 
 
 @router.delete("/{account_id}/ideas/{idea_id}", status_code=204, response_class=Response, response_model=None)
@@ -1472,7 +1492,34 @@ async def ai_assistant_endpoint(
     """Chat with AI assistant."""
     logger.info("[ContentSuggestionRoutes] AI assistant message for account=%s", account_id)
 
-    # TODO: Implement actual LLM chat with context
-    reply = f"I received your message: '{request.message}'. This is a placeholder response. The AI assistant will be implemented with full LLM integration."
+    result = await db.execute(
+        select(CreatorTrendResult).where(CreatorTrendResult.account_id == account_id)
+    )
+    trend_result = result.scalar_one_or_none()
+    trends = (trend_result.global_trends_json or []) if trend_result else []
+    recommendations = (trend_result.recommendations_json or []) if trend_result else []
 
-    return AssistantResponse(reply=reply, suggested_ideas=None)
+    context = {
+        "trends": trends[:5],
+        "recommendations": recommendations[:5],
+        "user_context": request.context or {},
+    }
+    prompt = {
+        "system": (
+            "You are a creator strategy assistant. Answer only from the supplied account trend context. "
+            "If there is insufficient context, say so plainly and ask the user to refresh analysis. "
+            "Do not invent trend names, performance figures, or Instagram data. Keep the answer concise."
+        ),
+        "user": f"Account context: {context}\n\nCreator question: {request.message}",
+    }
+    try:
+        from backend.app.ai.llm_client import LLMClient
+
+        reply = await asyncio.to_thread(LLMClient(temperature=0.4, max_tokens=350).generate, prompt)
+        if not isinstance(reply, str) or not reply.strip():
+            raise ValueError("Empty assistant response")
+    except Exception as exc:
+        logger.exception("[ContentSuggestionRoutes] AI assistant failed for account=%s", account_id)
+        raise HTTPException(status_code=503, detail="The AI assistant is unavailable. Please try again shortly.") from exc
+
+    return AssistantResponse(reply=reply.strip(), suggested_ideas=None)

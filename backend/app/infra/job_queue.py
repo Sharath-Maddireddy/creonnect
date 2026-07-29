@@ -1,4 +1,4 @@
-"""Common background-job queue abstraction backed by AWS SQS."""
+"""Common background-job queue abstraction backed by SQS or RQ."""
 
 from __future__ import annotations
 
@@ -29,6 +29,14 @@ SINGLE_POST_ANALYSIS_JOB_NAME = "single_post_analysis.run"
 
 _JOB_HANDLERS: dict[str, Callable[..., Any]] = {}
 _SQS_CLIENT = None
+
+
+def _resolve_queue_backend() -> str:
+    configured = (os.getenv("QUEUE_BACKEND") or "sqs").strip().lower()
+    if configured in {"sqs", "rq"}:
+        return configured
+    logger.warning('[JobQueue] Invalid QUEUE_BACKEND=%r. Falling back to "sqs".', configured)
+    return "sqs"
 
 
 def _json_default(value: Any) -> Any:
@@ -114,18 +122,17 @@ def _build_sqs_message(
     }
 
 
-def enqueue_callable(
+def _enqueue_via_sqs(
     *,
     queue_name: str,
     job_name: str,
-    func: Callable[..., Any],
     payload: Any,
-    job_id: str | None = None,
-    timeout_seconds: int = DEFAULT_JOB_TIMEOUT_SECONDS,
-    result_ttl_seconds: int = DEFAULT_RESULT_TTL_SECONDS,
-    failure_ttl_seconds: int = DEFAULT_FAILURE_TTL_SECONDS,
-    retry_max: int | None = None,
-    retry_intervals: list[int] | None = None,
+    job_id: str | None,
+    timeout_seconds: int,
+    result_ttl_seconds: int,
+    failure_ttl_seconds: int,
+    retry_max: int | None,
+    retry_intervals: list[int] | None,
 ) -> EnqueuedJob:
     """Enqueue a job via AWS SQS."""
     queue_url = get_sqs_queue_url(queue_name)
@@ -167,4 +174,91 @@ def enqueue_callable(
         queue_name=queue_name,
         job_id=job_id,
         raw_status=message_id if isinstance(message_id, str) else None,
+    )
+
+
+def _enqueue_via_rq(
+    *,
+    queue_name: str,
+    func: Callable[..., Any],
+    payload: Any,
+    job_id: str | None,
+    timeout_seconds: int,
+    result_ttl_seconds: int,
+    failure_ttl_seconds: int,
+    retry_max: int | None,
+    retry_intervals: list[int] | None,
+) -> EnqueuedJob:
+    """Enqueue a job via Redis Queue (RQ)."""
+    from rq import Retry
+
+    from backend.app.infra.rq_queue import get_queue
+
+    queue = get_queue(queue_name)
+    retry = None
+    if retry_max is not None:
+        retry = Retry(max=retry_max, interval=retry_intervals or 30)
+
+    rq_job = queue.enqueue(
+        func,
+        payload,
+        job_id=job_id,
+        job_timeout=timeout_seconds,
+        result_ttl=result_ttl_seconds,
+        failure_ttl=failure_ttl_seconds,
+        retry=retry,
+    )
+    status = rq_job.get_status(refresh=False)
+    logger.info(
+        "[JobQueue] Enqueued backend=rq queue=%s job_id=%s rq_status=%s",
+        queue_name,
+        rq_job.id,
+        status,
+    )
+    return EnqueuedJob(
+        backend="rq",
+        queue_name=queue_name,
+        job_id=rq_job.id,
+        raw_status=status,
+    )
+
+
+def enqueue_callable(
+    *,
+    queue_name: str,
+    job_name: str,
+    func: Callable[..., Any],
+    payload: Any,
+    job_id: str | None = None,
+    timeout_seconds: int = DEFAULT_JOB_TIMEOUT_SECONDS,
+    result_ttl_seconds: int = DEFAULT_RESULT_TTL_SECONDS,
+    failure_ttl_seconds: int = DEFAULT_FAILURE_TTL_SECONDS,
+    retry_max: int | None = None,
+    retry_intervals: list[int] | None = None,
+) -> EnqueuedJob:
+    """Enqueue a job via the configured backend (QUEUE_BACKEND=sqs|rq)."""
+    backend = _resolve_queue_backend()
+    if backend == "rq":
+        return _enqueue_via_rq(
+            queue_name=queue_name,
+            func=func,
+            payload=payload,
+            job_id=job_id,
+            timeout_seconds=timeout_seconds,
+            result_ttl_seconds=result_ttl_seconds,
+            failure_ttl_seconds=failure_ttl_seconds,
+            retry_max=retry_max,
+            retry_intervals=retry_intervals,
+        )
+
+    return _enqueue_via_sqs(
+        queue_name=queue_name,
+        job_name=job_name,
+        payload=payload,
+        job_id=job_id,
+        timeout_seconds=timeout_seconds,
+        result_ttl_seconds=result_ttl_seconds,
+        failure_ttl_seconds=failure_ttl_seconds,
+        retry_max=retry_max,
+        retry_intervals=retry_intervals,
     )

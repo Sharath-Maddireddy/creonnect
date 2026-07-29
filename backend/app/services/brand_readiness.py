@@ -260,7 +260,7 @@ def _get_label(score: float) -> str:
     elif score >= 40:
         return "Early Stage"
     else:
-        return "Needs Work"
+        return "Building Momentum"
 
 
 def _identify_improvements(

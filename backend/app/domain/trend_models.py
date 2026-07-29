@@ -222,6 +222,37 @@ class TrendRecommendation(BaseModel):
         ),
     )
 
+    format_family: Optional[str] = Field(
+        None,
+        description=(
+            "Backend classification for primary format family used by frontend filters. "
+            "Expected values include 'reel', 'carousel', or 'photo'."
+        ),
+    )
+
+    angle_type: Optional[str] = Field(
+        None,
+        description=(
+            "Backend classification for the recommendation angle used by frontend filters. "
+            "Expected values include 'educational', 'personal_story', 'brand_friendly', or 'general'."
+        ),
+    )
+
+    creator_level: Optional[str] = Field(
+        None,
+        description=(
+            "Backend classification for creator execution level used by frontend filters. "
+            "Expected values include 'beginner', 'intermediate', or 'advanced'."
+        ),
+    )
+
+    is_trending: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether this recommendation is tied to a currently active rising or peaking trend."
+        ),
+    )
+
 
 class ContentGap(BaseModel):
     """A detected gap in the creator's content strategy."""
@@ -315,6 +346,34 @@ class ResolvedAccount(BaseModel):
     reason: str | None = Field(default=None, description="Resolution failure reason when not resolved.")
 
 
+class TrendingTopicDetail(BaseModel):
+    """Detailed trending topic row for sidebar and full discovery views."""
+
+    id: str = Field(..., description="Stable topic row identifier.")
+    topic_name: str = Field(..., description="Human-readable topic name.")
+    trend_type: str = Field(..., description="Topic, format, hashtag, or audio-derived classification.")
+    momentum: str = Field(..., description="Current momentum stage.")
+    audience_match_pct: int = Field(..., ge=0, le=100, description="Audience fit percentage for this creator.")
+    growth_pct: int = Field(..., description="Derived growth percentage for the topic.")
+    competition_level: str = Field(..., description="Estimated competition level for acting on this topic.")
+    description: str = Field(..., description="What the trend is and why it matters.")
+    why_it_fits: str = Field(..., description="Why this topic fits the current creator.")
+    example_reference: str | None = Field(default=None, description="Optional example reference for the topic.")
+
+
+class TrendingAudioDetail(BaseModel):
+    """Detailed audio trend row for sidebar and audio discovery views."""
+
+    id: str = Field(..., description="Stable audio row identifier.")
+    audio_name: str = Field(..., description="Display name of the relevant audio trend.")
+    momentum: str = Field(..., description="Current momentum stage.")
+    growth_pct: int = Field(..., description="Derived usage-growth percentage for the audio trend.")
+    audience_match_pct: int = Field(..., ge=0, le=100, description="Audience fit percentage for this creator.")
+    fit_reason: str = Field(..., description="Why this audio trend fits the creator.")
+    suggested_angle: str = Field(..., description="Suggested content angle using this audio trend.")
+    example_reference: str | None = Field(default=None, description="Optional example reference for the audio trend.")
+
+
 class TrendAnalysisResult(BaseModel):
     """Aggregated result of running trend analysis for a specific creator.
 
@@ -390,5 +449,7 @@ __all__ = [
     "DailyInsights",
     "WeeklyOpportunity",
     "ResolvedAccount",
+    "TrendingTopicDetail",
+    "TrendingAudioDetail",
     "TrendAnalysisResult",
 ]

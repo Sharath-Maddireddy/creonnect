@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback } from 'react'
 import ScriptGenerator from './ScriptGenerator'
 import CaptionGenerator from './CaptionGenerator'
 
-export default function IdeaDetailDrawer({ idea, accountUrl, onClose, onCopy }) {
+export default function IdeaDetailDrawer({ idea, accountUrl, onClose, onCopy, onGenerate }) {
     const [detail, setDetail] = useState(idea || null)
     const [loading, setLoading] = useState(!idea)
     const [error, setError] = useState(null)
@@ -245,13 +245,13 @@ export default function IdeaDetailDrawer({ idea, accountUrl, onClose, onCopy }) 
                     <div className="cs-drawer__cta-bar">
                         <button
                             className="cs-btn cs-btn--primary"
-                            onClick={() => setShowScriptGen(true)}
+                            onClick={() => onGenerate ? onGenerate('script', detail) : setShowScriptGen(true)}
                         >
                             Generate Script
                         </button>
                         <button
                             className="cs-btn cs-btn--ghost"
-                            onClick={() => setShowCaptionGen(true)}
+                            onClick={() => onGenerate ? onGenerate('caption', detail) : setShowCaptionGen(true)}
                         >
                             Generate Caption
                         </button>

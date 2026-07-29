@@ -57,6 +57,9 @@ smoke_*.json
 test_output.txt
 test_reel_e2e.py
 test_brand_match.py
+backend/*.db
+*.sqlite
+*.sqlite3
 
 pytest-cache-files-*/
 

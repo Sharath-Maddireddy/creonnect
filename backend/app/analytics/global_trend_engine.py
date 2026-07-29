@@ -67,9 +67,8 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
     objects matching the `GlobalTrend` schema (fields: topic_name, trend_type,
     momentum, description, example_reference).
 
-    On failure the function logs the error and returns a conservative
-    fallback list containing a single generic `GlobalTrend` named
-    "Evergreen Content".
+    On failure the function logs the error and returns no trends. Callers can
+    surface a degraded state without presenting fabricated trend data.
     """
 
     system_prompt = (
@@ -138,15 +137,4 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
 
     except Exception as e:
         logger.exception("fetch_global_trends failed: %s", e)
-        # Fallback: single generic evergreen trend to keep pipeline moving
-        fallback = GlobalTrend(
-            topic_name="Evergreen Content",
-            trend_type="topic",
-            momentum="rising",
-            description=(
-                "A reliable evergreen topic format that performs consistently across "
-                "niches; useful as a safe fallback when fresh trend signals are unavailable."
-            ),
-            example_reference=None,
-        )
-        return [fallback]
+        return []

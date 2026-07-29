@@ -27,11 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies first (Docker layer cache optimisation)
-COPY requirements.txt ./
 COPY backend/requirements.txt ./backend/requirements.txt
 
 RUN pip install --upgrade pip && \
-    pip install --prefix=/install -r requirements.txt && \
     pip install --prefix=/install -r backend/requirements.txt
 
 

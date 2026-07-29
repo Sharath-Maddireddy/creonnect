@@ -94,6 +94,31 @@ class PaginatedIdeasResponse(BaseModel):
     meta: PaginationMeta
 
 
+class IdeaReasoningFactor(BaseModel):
+    """One contributing factor in an idea's opportunity reasoning breakdown."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    value: int = Field(ge=0, le=100)
+    tooltip: str
+
+
+class IdeaReasoningResponse(BaseModel):
+    """Transparent reasoning payload for an idea's opportunity score."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    idea_id: str
+    opportunity_score: float = Field(ge=0.0, le=100.0)
+    factors: list[IdeaReasoningFactor]
+    ai_confidence_pct: int = Field(ge=0, le=100)
+    percentile_rank: int | None = Field(default=None, ge=1, le=100)
+    strongest_factor: str | None = None
+    weakest_factor: str | None = None
+    summary_explanation: str
+
+
 # ── Script Generation ──────────────────────────────────────────────────────────
 
 
@@ -197,6 +222,19 @@ class PersistQuickIdeaRequest(BaseModel):
     trend: dict[str, Any] = Field(default_factory=dict)
     recommendation: dict[str, Any] = Field(default_factory=dict)
     source: str = Field(default="quick_trend_card")
+
+
+class UpdateIdeaRequest(BaseModel):
+    """Validated fields that may be changed on a persisted idea."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content_type: Literal["reel", "carousel", "photo"] | None = None
+    status: Literal["draft", "generated", "scheduled", "hidden"] | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    hook: str | None = Field(default=None, max_length=1_000)
+    description: str | None = Field(default=None, max_length=10_000)
+    tags: list[str] | None = Field(default=None, max_length=25)
 
 
 # ── Idea Improvement ───────────────────────────────────────────────────────────

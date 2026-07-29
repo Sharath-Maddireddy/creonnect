@@ -12,6 +12,16 @@ function bandTone(value) {
     return 'danger'
 }
 
+function formatBand(value) {
+    const map = {
+        EXCEPTIONAL:  '🏆 Exceptional',
+        STRONG:       '💪 Strong',
+        AVERAGE:      '📈 Growing',
+        NEEDS_WORK:   '🚀 High Potential',
+    }
+    return map[value] || value || 'Unknown'
+}
+
 function scoreTone(value) {
     if (typeof value !== 'number' || Number.isNaN(value)) {
         return 'neutral'
@@ -31,7 +41,7 @@ function PillarBar({ label, score, band, notes }) {
                     <p className="account-demo-overline">{label}</p>
                     <strong>{formatDecimal(score)}</strong>
                 </div>
-                <span className={`account-demo-chip ${bandTone(band)}`}>{band || 'UNKNOWN'}</span>
+                <span className={`account-demo-chip ${bandTone(band)}`}>{formatBand(band)}</span>
             </div>
             <div className="account-demo-bar-track" aria-hidden="true">
                 <div
@@ -163,7 +173,7 @@ function AccountAnalysisDemo() {
                     <article className="account-demo-stat-card">
                         <span className="account-demo-stat-label">AHS Score</span>
                         <strong>{formatDecimal(accountResult?.ahs_score)}</strong>
-                        <span className={`account-demo-chip ${bandTone(accountResult?.ahs_band)}`}>{accountResult?.ahs_band || 'UNKNOWN'}</span>
+                        <span className={`account-demo-chip ${bandTone(accountResult?.ahs_band)}`}>{formatBand(accountResult?.ahs_band)}</span>
                     </article>
                     <article className="account-demo-stat-card">
                         <span className="account-demo-stat-label">Posts Used</span>

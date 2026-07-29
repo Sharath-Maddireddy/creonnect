@@ -43,7 +43,7 @@ export default function ThumbnailGenerator({ ideaId, ideaTitle, accountUrl, onCl
         setDownloading(type)
         setTimeout(() => setDownloading(null), 1500)
 
-        if (type === 'image') {
+        if (type === 'image' && selected.image_url) {
             const a = document.createElement('a')
             a.href = selected.image_url
             a.download = `${selected.label || 'thumbnail'}.png`
@@ -74,7 +74,7 @@ export default function ThumbnailGenerator({ ideaId, ideaTitle, accountUrl, onCl
                 </div>
 
                 <div className="cs-thumbnail__content">
-                    <p className="cs-thumbnail__instruction">Choose your preferred thumbnail</p>
+                    <p className="cs-thumbnail__instruction">Choose a creative concept. Image rendering is not enabled yet.</p>
 
                     {loading && (
                         <div className="cs-thumbnail__grid">
@@ -104,12 +104,12 @@ export default function ThumbnailGenerator({ ideaId, ideaTitle, accountUrl, onCl
                                     onClick={() => setSelected(thumb)}
                                 >
                                     <div className="cs-thumbnail__img-wrap">
-                                        <img
+                                        {thumb.image_url && <img
                                             src={thumb.image_url}
                                             alt={thumb.label}
                                             className="cs-thumbnail__img"
                                             onError={(e) => { e.target.style.display = 'none' }}
-                                        />
+                                        />}
                                         <div className="cs-thumbnail__img-fallback">
                                             <span>🎬</span>
                                         </div>
@@ -127,9 +127,9 @@ export default function ThumbnailGenerator({ ideaId, ideaTitle, accountUrl, onCl
                         <button
                             className="cs-btn cs-btn--ghost"
                             onClick={() => handleDownload('image')}
-                            disabled={!selected || downloading}
+                            disabled={!selected?.image_url || downloading}
                         >
-                            {downloading === 'image' ? '✓ Downloaded' : 'Download'}
+                            {downloading === 'image' ? '✓ Downloaded' : 'Image unavailable'}
                         </button>
                         <button
                             className="cs-btn cs-btn--ghost"

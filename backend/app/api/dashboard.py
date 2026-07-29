@@ -10,6 +10,7 @@ import os
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from backend.app.api.auth import verify_api_key
+from backend.app.utils.env import is_production_environment
 from backend.app.infra.token_store import get_token
 from backend.app.services.dashboard_service import build_creator_analytics_async, build_creator_dashboard_async
 from backend.app.services.script_service import generate_creator_script_service
@@ -22,8 +23,7 @@ router = APIRouter(prefix="/api", tags=["Dashboard"])
 def _require_dashboard_api_key_if_configured(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> str | None:
-    env = (os.getenv("ENV") or "").strip().lower()
-    if env != "production":
+    if not is_production_environment():
         return None
 
     expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()

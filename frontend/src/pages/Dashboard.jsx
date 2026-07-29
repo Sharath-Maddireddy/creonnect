@@ -205,7 +205,9 @@ function AccountHealthGauge({ score, band }) {
                     <span>/ 100</span>
                 </div>
             </div>
-            <p className="ai-gauge-band">{typeof band === 'string' && band ? band : 'UNRATED'}</p>
+            <p className="ai-gauge-band">{
+                ({ EXCEPTIONAL: '🏆 Exceptional', STRONG: '💪 Strong', AVERAGE: '📈 Growing', NEEDS_WORK: '🚀 High Potential' })[band] || (typeof band === 'string' && band ? band : 'Unrated')
+            }</p>
         </div>
     )
 }

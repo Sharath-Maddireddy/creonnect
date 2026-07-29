@@ -27,6 +27,16 @@ function isPersistedIdeaId(value) {
     return true
 }
 
+function topicDisplayName(topic, index = 0) {
+    const directName = topic?.topic_name || topic?.name || topic?.title || topic?.topic
+    if (typeof directName === 'string' && directName.trim()) return directName.trim()
+
+    const description = typeof topic?.description === 'string' ? topic.description.trim() : ''
+    if (description) return description.split(/[.!?]/)[0].slice(0, 72)
+
+    return `Trending topic ${index + 1}`
+}
+
 function buildScript(trend, rec) {
     const title = rec?.suggested_title || trend?.topic_name || 'Trend idea'
     const why = rec?.rationale || trend?.description || 'This idea fits your current trend opportunity.'
@@ -102,28 +112,6 @@ function buildCaptionPreview(trend, rec) {
     }]
 }
 
-function buildAssistantReply(prompt, data) {
-    const text = (prompt || '').trim()
-    const niche = data?.niche?.primary_category || 'your niche'
-    const trends = data?.global_trends || []
-    const recs = data?.recommendations || []
-    const firstTrend = trends[0]?.topic_name || 'an evergreen trend'
-    if (!text) {
-        return 'Ask a specific question about hooks, captions, formats, or content gaps.'
-    }
-    if (text.toLowerCase().includes('hook')) {
-        return `Try these hooks for ${niche}: 1. "Nobody tells you this about ${firstTrend}." 2. "I tested this ${niche} trend so you do not have to." 3. "Save this before you make your next post."`
-    }
-    if (text.toLowerCase().includes('without showing face')) {
-        return `Use hands-only demos, screen recordings, text overlays, POV b-roll, and before/after frames. Anchor the idea around ${firstTrend}.`
-    }
-    if (text.toLowerCase().includes('carousel')) {
-        return `Carousel structure: Slide 1 hook, Slide 2 common mistake, Slide 3 quick framework, Slide 4 example, Slide 5 checklist, Slide 6 CTA to save.`
-    }
-    const topRec = recs[0]?.suggested_title || firstTrend
-    return `For ${niche}, start with "${topRec}". Keep the post specific, show one clear example, and use the CTA from the recommendation card.`
-}
-
 function matchesFilter(card, activeFilter) {
     if (activeFilter === 'All') return true
 
@@ -175,17 +163,36 @@ const NAV_SECTIONS = [
     {
         title: 'CORE',
         items: [
-            { icon: '▦',  label: 'Overview',        path: '/analytics'             },
-            { icon: '📊', label: 'Analytics',        path: '/analytics'             },
-            { icon: '✨', label: 'AI Post Insights',  path: '/analytics'             },
-            { icon: '👤', label: 'Account Analysis',  path: '/account-analysis-demo' },
+            { icon: '▦', label: 'Overview', path: '/analytics' },
+            { icon: '⌁', label: 'Analytics', path: '/analytics' },
+            { icon: 'ϟ', label: 'AI Post Insights', path: '/analytics' },
+            { icon: '⌁', label: 'Account Analysis', path: '/account-analysis-demo' },
+        ]
+    },
+    {
+        title: 'TOOLKITS',
+        items: [
+            { icon: '◉', label: 'Creator Showcase', path: '/analytics' },
+            { icon: '↗', label: 'Superlinks', path: '/analytics' },
+        ]
+    },
+    {
+        title: 'GROWTH & REVENUE',
+        items: [
+            { icon: '♙', label: 'Auto DM Flows', path: '/analytics' },
+            { icon: '▣', label: 'Digital Store', path: '/analytics' },
+            { icon: '□', label: '1:1 Booking', path: '/analytics' },
+            { icon: '▱', label: 'Messaging Hub', path: '/analytics' },
+            { icon: '◇', label: 'Brand Collaborations', path: '/brand/campaign' },
         ]
     },
     {
         title: 'AI STUDIO',
         items: [
-            { icon: '📈', label: 'Trend Recommendations', path: '/trends', active: true },
-            { icon: '🎯', label: 'Brand Campaigns',        path: '/brand/campaign'       },
+            { icon: '✦', label: 'Content Suggestions', path: '/trends', active: true },
+            { icon: '✎', label: 'Caption Generator', path: '/trends' },
+            { icon: '▤', label: 'Script Generator', path: '/trends' },
+            { icon: '◈', label: 'Brand Pitch Writer', path: '/brand/campaign' },
         ]
     }
 ]
@@ -612,7 +619,7 @@ function RightPanel({ niche, trends, data, trendingTopics, trendingAudio, onShow
                                     {['🌊', '💎', '✈️'][i] || '🔥'}
                                 </div>
                                 <div className="cs-trending-item__body">
-                                    <span className="cs-trending-item__name">{t.topic_name}</span>
+                                    <span className="cs-trending-item__name">{topicDisplayName(t, i)}</span>
                                     <span className="cs-trending-item__match">{Math.round(t.audience_match_pct)}% Audience Match</span>
                                 </div>
                                 <div className="cs-trending-item__spark">
@@ -692,6 +699,7 @@ export default function TrendRecommendations() {
     const [data,         setData]         = useState(null)
     const [loading,      setLoading]      = useState(false)
     const [error,        setError]        = useState(null)
+    const [notice,       setNotice]       = useState(null)
     const [queued,       setQueued]       = useState(false)
     const [jobId,        setJobId]        = useState(null)
     const [polling,      setPolling]      = useState(false)
@@ -705,6 +713,7 @@ export default function TrendRecommendations() {
             return {}
         }
     })
+    const [hiddenIdeaIds, setHiddenIdeaIds] = useState(() => new Set())
     const [generated, setGenerated] = useState(null)
     const [assistantPrompt, setAssistantPrompt] = useState('')
     const [assistantReply, setAssistantReply] = useState('')
@@ -821,7 +830,11 @@ export default function TrendRecommendations() {
                 const audioJson = audioRes.ok ? await audioRes.json() : { audio_tracks: [] }
 
                 if (!cancelled) {
-                    setTrendTopics(Array.isArray(topicsJson?.topics) ? topicsJson.topics.slice(0, 3) : [])
+                    const topics = Array.isArray(topicsJson?.topics) ? topicsJson.topics : []
+                    setTrendTopics(topics.slice(0, 3).map((topic, index) => ({
+                        ...topic,
+                        topic_name: topicDisplayName(topic, index),
+                    })))
                     setTrendAudio(Array.isArray(audioJson?.audio_tracks) ? audioJson.audio_tracks.slice(0, 3) : [])
                 }
             } catch (_) {
@@ -908,7 +921,10 @@ export default function TrendRecommendations() {
         const trends = data?.global_trends || []
         const recs   = data?.recommendations || []
         const cards  = trends.map((t, i) => ({ trend: t, rec: recs[i] || null }))
-        const filtered = cards.filter(c => matchesFilter(c, activeFilter))
+        const filtered = cards.filter(c => {
+            const persistedIdeaId = quickIdeaMap[ideaKey(c.trend, c.rec)]?.ideaId
+            return !hiddenIdeaIds.has(persistedIdeaId) && matchesFilter(c, activeFilter)
+        })
         return [...filtered].sort((left, right) => {
             if (sortMode === 'Momentum') {
                 const order = { peaking: 3, rising: 2, falling: 1 }
@@ -1040,6 +1056,7 @@ export default function TrendRecommendations() {
                     ideaId: idea.id,
                     title: idea.title,
                     hook: idea.hook || rec?.hook || null,
+                    contentType: idea.content_type || rec?.content_type || 'reel',
                 })
             } else if (kind === 'caption') {
                 setShowCaptionGen({
@@ -1053,9 +1070,49 @@ export default function TrendRecommendations() {
         }
     }
 
-    function handleAskAI(prompt) {
-        setAssistantPrompt(prompt)
-        setAssistantReply(buildAssistantReply(prompt, data))
+    async function handleDrawerGenerate(kind, idea) {
+        try {
+            // Trend cards use display-only IDs, so persist the selected card first.
+            const persistedIdea = await ensureIdeaForRecommendation(idea, idea)
+            setShowIdeaDetail(null)
+            if (kind === 'script') {
+                setShowScriptGen({
+                    ideaId: persistedIdea.id,
+                    title: persistedIdea.title,
+                    hook: persistedIdea.hook || idea?.hook || null,
+                    contentType: persistedIdea.content_type || idea?.content_type || 'reel',
+                })
+            } else if (kind === 'caption') {
+                setShowCaptionGen({
+                    ideaId: persistedIdea.id,
+                    title: persistedIdea.title,
+                    hook: persistedIdea.hook || idea?.hook || null,
+                })
+            }
+        } catch (e) {
+            setError(e.message)
+        }
+    }
+
+    async function handleAskAI(prompt) {
+        const message = prompt.trim()
+        if (!message || !accountId) return
+        setAssistantPrompt(message)
+        setAssistantReply('Thinking...')
+        try {
+            const response = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/ai-assistant`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ message }),
+            })
+            const payload = await response.json().catch(() => ({}))
+            if (!response.ok) throw new Error(payload.detail || 'Assistant request failed')
+            setAssistantReply(payload.reply || 'No answer was returned.')
+        } catch (e) {
+            setAssistantReply('The assistant is unavailable right now. Please try again shortly.')
+            setError(e.message)
+        }
     }
 
     // ── New handlers for content suggestion features ──
@@ -1130,6 +1187,41 @@ export default function TrendRecommendations() {
         setShowMoreOptions({ ideaId, title })
     }
 
+    function pollIdeaAction(jobId, actionLabel) {
+        const maxAttempts = 45
+        let attempts = 0
+
+        const poll = async () => {
+            try {
+                const response = await fetch(
+                    `/api/v1/accounts/${encodeURIComponent(accountId)}/ideas/jobs/${encodeURIComponent(jobId)}/status`,
+                    { credentials: 'include' },
+                )
+                const payload = await response.json().catch(() => ({}))
+                if (!response.ok) throw new Error(payload.detail || 'Could not check action status')
+
+                if (payload.status === 'completed') {
+                    setNotice(`${actionLabel} complete.`)
+                    if (accountId) fetchExisting(accountId)
+                    return
+                }
+                if (payload.status === 'failed') {
+                    setError(`${actionLabel} failed: ${payload.error || 'Unknown error'}`)
+                    return
+                }
+                if (attempts++ < maxAttempts) {
+                    window.setTimeout(poll, 2000)
+                } else {
+                    setError(`${actionLabel} is still running. Please refresh in a moment.`)
+                }
+            } catch (e) {
+                setError(`${actionLabel} status check failed: ${e.message}`)
+            }
+        }
+
+        void poll()
+    }
+
         async function handleMoreOptionAction(actionId, ideaId) {
         const baseUrl = `/api/v1/accounts/${encodeURIComponent(accountId)}`
 
@@ -1143,10 +1235,10 @@ export default function TrendRecommendations() {
                         credentials: 'include',
                         body: JSON.stringify({ feedback: 'Make it more engaging', aspect: 'full' }),
                     })
-                    if (!improveRes.ok) {
-                        const errJson = await improveRes.json().catch(() => ({}))
-                        setError(`Improve failed: ${errJson.detail || improveRes.status}`)
-                    }
+                    const improvePayload = await improveRes.json().catch(() => ({}))
+                    if (!improveRes.ok) throw new Error(improvePayload.detail || 'Could not improve this idea')
+                    setNotice('Improvement queued. We will refresh this idea when it is ready.')
+                    pollIdeaAction(improvePayload.job_id, 'Improvement')
                     break
                 case 'variations':
                     setShowMoreOptions(null)
@@ -1156,10 +1248,10 @@ export default function TrendRecommendations() {
                         credentials: 'include',
                         body: JSON.stringify({ count: 3 }),
                     })
-                    if (!varRes.ok) {
-                        const errJson = await varRes.json().catch(() => ({}))
-                        setError(`Variations failed: ${errJson.detail || varRes.status}`)
-                    }
+                    const variationPayload = await varRes.json().catch(() => ({}))
+                    if (!varRes.ok) throw new Error(variationPayload.detail || 'Could not generate variations')
+                    setNotice('Variations queued. We will refresh this idea when they are ready.')
+                    pollIdeaAction(variationPayload.job_id, 'Variation generation')
                     break
                 case 'regenerate':
                     setShowMoreOptions(null)
@@ -1169,15 +1261,50 @@ export default function TrendRecommendations() {
                         credentials: 'include',
                         body: JSON.stringify({}),
                     })
-                    if (!regenRes.ok) {
-                        const errJson = await regenRes.json().catch(() => ({}))
-                        setError(`Regenerate failed: ${errJson.detail || regenRes.status}`)
-                    }
+                    const regeneratePayload = await regenRes.json().catch(() => ({}))
+                    if (!regenRes.ok) throw new Error(regeneratePayload.detail || 'Could not regenerate this idea')
+                    setNotice('Regeneration queued. We will refresh this idea when it is ready.')
+                    pollIdeaAction(regeneratePayload.job_id, 'Regeneration')
                     break
                 case 'schedule':
                     setShowMoreOptions(null)
                     setShowScheduler({ ideaId, title: 'Content Idea' })
                     break
+                case 'duplicate': {
+                    const response = await fetch(`${baseUrl}/ideas/${ideaId}/duplicate`, { method: 'POST', credentials: 'include' })
+                    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || 'Could not duplicate this idea')
+                    setNotice('Idea duplicated successfully.')
+                    break
+                }
+                case 'type': {
+                    const nextType = window.prompt('Choose content type: reel, carousel, or photo', 'reel')?.trim().toLowerCase()
+                    if (!nextType) break
+                    const response = await fetch(`${baseUrl}/ideas/${ideaId}`, {
+                        method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content_type: nextType }),
+                    })
+                    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || 'Could not change content type')
+                    setNotice(`Content type changed to ${nextType}.`)
+                    break
+                }
+                case 'hide': {
+                    const response = await fetch(`${baseUrl}/ideas/${ideaId}`, {
+                        method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'hidden' }),
+                    })
+                    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || 'Could not hide this idea')
+                    setHiddenIdeaIds(previous => new Set(previous).add(ideaId))
+                    setNotice('Idea hidden from recommendations.')
+                    break
+                }
+                case 'delete': {
+                    if (!window.confirm('Delete this idea? You can no longer use it to generate scripts or captions.')) break
+                    const response = await fetch(`${baseUrl}/ideas/${ideaId}`, { method: 'DELETE', credentials: 'include' })
+                    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || 'Could not delete this idea')
+                    setHiddenIdeaIds(previous => new Set(previous).add(ideaId))
+                    setNotice('Idea deleted successfully.')
+                    break
+                }
                 case 'save':
                     setShowMoreOptions(null)
                     setShowSaveModal(ideaId)
@@ -1210,7 +1337,6 @@ export default function TrendRecommendations() {
                         />
                     ) : (
                         <>
-                            <div>
                             {/* ── Top bar ── */}
                             <div className="cs-topbar">
                                 <div className="cs-topbar__left">
@@ -1234,11 +1360,20 @@ export default function TrendRecommendations() {
                                 <button className="cs-topbar__refresh-icon" onClick={() => accountId && fetchExisting(accountId)} disabled={busy} title="Refresh">↻</button>
                             </div>
 
-                                        {/* ── Error ── */}
+                            <div className="cs-content-grid">
+                                <div className="cs-content-grid__feed">
+
+                    {/* ── Error ── */}
                     {error && (
                         <div className="cs-error-bar">
                             <span>{error}</span>
                             <button onClick={() => accountId && fetchExisting(accountId)}>Retry</button>
+                        </div>
+                    )}
+                    {notice && (
+                        <div className="cs-notice-bar">
+                            <span>{notice}</span>
+                            <button onClick={() => setNotice(null)}>Dismiss</button>
                         </div>
                     )}
 
@@ -1374,7 +1509,7 @@ export default function TrendRecommendations() {
                                         )}
                                     </div>
                                     <div className="cs-card__actions">
-                                        <button className="cs-action-btn cs-action-btn--primary" onClick={() => setShowScriptGen({ ideaId: idea.id, title: idea.suggested_title || idea.title, hook: idea.hook })}>Generate Script</button>
+                                        <button className="cs-action-btn cs-action-btn--primary" onClick={() => setShowScriptGen({ ideaId: idea.id, title: idea.suggested_title || idea.title, hook: idea.hook, contentType: idea.content_type || 'reel' })}>{idea.content_type === 'carousel' ? 'Generate Slides' : idea.content_type === 'photo' ? 'Generate Photo Brief' : 'Generate Script'}</button>
                                         <button className="cs-action-btn cs-action-btn--ghost" onClick={() => setShowCaptionGen({ ideaId: idea.id, title: idea.suggested_title || idea.title })}>Generate Caption</button>
                                         <button className="cs-action-btn cs-action-btn--save" onClick={() => setShowSaveModal(idea.id)}>Save Idea</button>
                                         <button className="cs-action-btn cs-action-btn--ghost" onClick={() => setShowScheduler({ ideaId: idea.id, title: idea.suggested_title || idea.title })}>Schedule</button>
@@ -1450,6 +1585,7 @@ export default function TrendRecommendations() {
                                 assistantReply={assistantReply}
                                 onAskAI={handleAskAI}
                             />
+                            </div>
                         </>
                     )}
                 </div>
@@ -1521,6 +1657,7 @@ export default function TrendRecommendations() {
                     ideaId={showScriptGen.ideaId}
                     ideaTitle={showScriptGen.title}
                     hook={showScriptGen.hook}
+                    contentType={showScriptGen.contentType}
                     previewOnly={showScriptGen.previewOnly}
                     previewScript={showScriptGen.previewScript}
                     accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
@@ -1587,6 +1724,7 @@ export default function TrendRecommendations() {
                     idea={showIdeaDetail}
                     accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
                     onClose={() => setShowIdeaDetail(null)}
+                    onGenerate={handleDrawerGenerate}
                     onCopy={(idea) => {
                         // Save to clipboard or trigger save flow
                         const text = `${idea.title || idea.suggested_title}\nHook: ${idea.hook || ''}\nDescription: ${idea.description || idea.rationale || ''}`

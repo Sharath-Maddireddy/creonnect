@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
-
+import asyncio
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from backend.app.analytics.draft_optimizer_engine import optimize_draft_post
 from backend.app.api.auth import verify_api_key
+from backend.app.utils.env import is_production_environment
 from backend.app.domain.draft_models import DraftPostAnalysisRequest, DraftPostOptimizationResponse
 from backend.app.services.draft_history_service import load_draft_history_context
 from backend.app.utils.logger import logger
@@ -20,8 +20,7 @@ router = APIRouter(prefix="/api/v1", tags=["Draft Optimization"])
 def _require_draft_api_key_if_configured(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> str | None:
-    env = (os.getenv("ENV") or "").strip().lower()
-    if env != "production":
+    if not is_production_environment():
         return None
 
     expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()

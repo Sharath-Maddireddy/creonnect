@@ -34,18 +34,6 @@ function buildCampaignHeaders({ json = false } = {}) {
     if (json) {
         headers['Content-Type'] = 'application/json'
     }
-
-    let apiKey = ''
-    try {
-        apiKey = localStorage.getItem('brand_api_key') || localStorage.getItem('api_key') || ''
-    } catch {
-        apiKey = ''
-    }
-
-    if (apiKey) {
-        headers['X-API-Key'] = apiKey
-    }
-
     return headers
 }
 function formatFollowerRange(minFollowers, maxFollowers) {

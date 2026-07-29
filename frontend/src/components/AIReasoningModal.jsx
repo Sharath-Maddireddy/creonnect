@@ -16,28 +16,6 @@ const FACTOR_LABELS = {
     content_type_match: { label: 'Content Fit', icon: '🎬' },
 }
 
-function buildDeterministicFallback(score) {
-    const safeScore = Math.round(Math.max(0, Math.min(100, score || 0)))
-    const factors = [
-        { key: 'niche_relevance', value: Math.min(100, Math.round(safeScore * 0.86)), tooltip: 'How well this topic aligns with your content niche' },
-        { key: 'competitive_score', value: Math.min(100, Math.round(safeScore * 0.7)), tooltip: 'Lower is better — less competition for this topic' },
-        { key: 'audience_match', value: Math.min(100, Math.round(safeScore * 0.9)), tooltip: 'How well this trend matches your audience interests' },
-        { key: 'post_performance', value: Math.min(100, Math.round(safeScore * 0.68)), tooltip: 'Your past performance on similar content' },
-        { key: 'best_timing', value: Math.min(100, Math.round(safeScore * 0.76)), tooltip: 'How optimal the posting time is for this content type' },
-    ]
-    const strongest = factors.reduce((best, factor) => !best || factor.value > best.value ? factor : best, null)
-    const weakest = factors.reduce((best, factor) => !best || factor.value < best.value ? factor : best, null)
-    return {
-        opportunity_score: safeScore,
-        factors,
-        ai_confidence_pct: Math.max(55, Math.min(95, Math.round(58 + safeScore * 0.35))),
-        percentile_rank: Math.max(1, Math.min(99, Math.round(100 - safeScore))),
-        strongest_factor: strongest?.key || null,
-        weakest_factor: weakest?.key || null,
-        summary_explanation: 'Detailed score metadata is unavailable for this draft, so we are showing a conservative breakdown based on the overall score.',
-    }
-}
-
 export default function AIReasoningModal({ ideaId, accountUrl, opportunityScore, onClose }) {
     const [reasoning, setReasoning] = useState(null)
     const [loading, setLoading] = useState(false)
@@ -48,8 +26,8 @@ export default function AIReasoningModal({ ideaId, accountUrl, opportunityScore,
         let cancelled = false
 
         if (!ideaId || ideaId.startsWith('trend-')) {
-            setReasoning(buildDeterministicFallback(opportunityScore || 75))
-            setTimeout(() => setAnimated(true), 100)
+            setReasoning(null)
+            setError('Detailed score reasoning is available after this idea is saved or generated as a full database-backed idea.')
             return () => { cancelled = true }
         }
 
@@ -60,14 +38,13 @@ export default function AIReasoningModal({ ideaId, accountUrl, opportunityScore,
             .then(r => r.ok ? r.json() : Promise.reject(r))
             .then(d => {
                 if (cancelled) return
-                setReasoning(d && typeof d === 'object' ? d : buildDeterministicFallback(opportunityScore || 75))
+                setReasoning(d && typeof d === 'object' ? d : null)
                 setTimeout(() => setAnimated(true), 100)
             })
             .catch(() => {
                 if (cancelled) return
-                setReasoning(buildDeterministicFallback(opportunityScore || 75))
-                setError('Showing fallback reasoning because the detailed explanation could not be loaded.')
-                setTimeout(() => setAnimated(true), 100)
+                setReasoning(null)
+                setError('Detailed score reasoning could not be loaded right now.')
             })
             .finally(() => {
                 if (!cancelled) setLoading(false)
@@ -79,7 +56,7 @@ export default function AIReasoningModal({ ideaId, accountUrl, opportunityScore,
     const score = reasoning?.opportunity_score ?? opportunityScore ?? 0
     const band = score >= 80 ? 'High' : score >= 60 ? 'Good' : score >= 40 ? 'Moderate' : 'Low'
     const percentileText = typeof reasoning?.percentile_rank === 'number'
-        ? `Top ${reasoning.percentile_rank}% Ideas`
+        ? `${reasoning.percentile_rank}th percentile among saved ideas`
         : null
 
     const strongestLabel = useMemo(() => {

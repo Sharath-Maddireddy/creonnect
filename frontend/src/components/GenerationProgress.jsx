@@ -21,8 +21,18 @@ export default function GenerationProgress({ jobId, accountUrl, onComplete, onEr
         if (!jobId) return
 
         let cancelled = false
-        const pollInterval = setInterval(async () => {
+        const MAX_POLL_MS = 360_000 // 6 minutes — reasoning models (gpt-5.6-terra) can take a while
+        const startTime = Date.now()
+        let consecutivePollErrors = 0
+
+        const poll = async () => {
             if (cancelled) return
+
+            // Timeout guard — stop polling after 2 minutes
+            if (Date.now() - startTime > MAX_POLL_MS) {
+                if (!cancelled) onError('Generation timed out. Please try again.')
+                return
+            }
 
             try {
                 const res = await fetch(
@@ -33,21 +43,26 @@ export default function GenerationProgress({ jobId, accountUrl, onComplete, onEr
                 const data = await res.json()
 
                 if (cancelled) return
+                consecutivePollErrors = 0
                 setProgress(data)
 
                 if (data.status === 'completed') {
-                    clearInterval(pollInterval)
                     onComplete(data.ideas || [])
                 } else if (data.status === 'failed') {
-                    clearInterval(pollInterval)
                     onError(data.error || 'Generation failed')
                 }
             } catch (e) {
-                if (!cancelled) {
-                    console.error('Poll error:', e)
+                consecutivePollErrors += 1
+                if (!cancelled && consecutivePollErrors >= 3) {
+                    onError('Unable to check generation status. Please verify the API is running and try again.')
                 }
             }
-        }, 2000)
+        }
+
+        // Start immediately so the UI reflects a queued/failed job without an
+        // unnecessary initial delay, then continue polling for progress.
+        poll()
+        const pollInterval = setInterval(poll, 2000)
 
         return () => {
             cancelled = true
@@ -55,12 +70,13 @@ export default function GenerationProgress({ jobId, accountUrl, onComplete, onEr
         }
     }, [jobId, accountUrl, onComplete, onError])
 
+
     return (
         <div className="cs-modal-backdrop">
             <div className="cs-modal cs-modal--progress">
                 <div className="cs-modal__header">
                     <h3>Generating Ideas...</h3>
-                    <p className="cs-modal__subtitle">This may take a few seconds</p>
+                    <p className="cs-modal__subtitle">This may take 1–3 minutes with our advanced AI model</p>
                 </div>
 
                 <div className="cs-modal__body">
