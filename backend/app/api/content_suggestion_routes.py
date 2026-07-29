@@ -42,6 +42,7 @@ from backend.app.domain.content_suggestion_models import (
     AssistantResponse,
 )
 from backend.app.infra.database import get_db
+from backend.app.api.instagram_auth_routes import require_current_account
 from backend.app.infra.models import (
     Collection,
     CollectionIdea,
@@ -61,7 +62,11 @@ from backend.app.utils.logger import logger
 from backend.app.utils.env import is_feature_enabled
 from backend.app.utils.telemetry import emit_counter, emit_histogram, emit_event, timed
 
-router = APIRouter(prefix="/api/v1/accounts", tags=["content-suggestions"])
+router = APIRouter(
+    prefix="/api/v1/accounts",
+    tags=["content-suggestions"],
+    dependencies=[Depends(require_current_account)],
+)
 
 
 def _clamp_int(value: float | int | None, default: int) -> int:
@@ -175,6 +180,26 @@ async def _compute_idea_percentile_rank(account_id: str, db: AsyncSession, score
     return max(1, min(100, percentile))
 
 
+async def _get_account_idea_or_404(db: AsyncSession, account_id: str, idea_id: str) -> Idea:
+    """Load an idea only when it belongs to the account in the route."""
+    result = await db.execute(select(Idea).where(Idea.id == idea_id, Idea.account_id == account_id))
+    idea = result.scalar_one_or_none()
+    if not idea:
+        raise HTTPException(status_code=404, detail="Idea not found")
+    return idea
+
+
+async def _get_account_collection_or_404(db: AsyncSession, account_id: str, collection_id: str) -> Collection:
+    """Load a collection only when it belongs to the account in the route."""
+    result = await db.execute(
+        select(Collection).where(Collection.id == collection_id, Collection.account_id == account_id)
+    )
+    collection = result.scalar_one_or_none()
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    return collection
+
+
 def _compute_reasoning_confidence(idea: Idea, factors: list[dict[str, Any]]) -> int:
     metadata = idea.generation_metadata or {}
     evidence_points = 0
@@ -224,6 +249,14 @@ async def get_generation_status(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Poll idea generation progress."""
+    job_result = await db.execute(
+        select(IdeaGenerationJob).where(
+            IdeaGenerationJob.id == job_id,
+            IdeaGenerationJob.account_id == account_id,
+        )
+    )
+    if not job_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Job not found")
     status = await asyncio.to_thread(get_idea_generation_status, job_id)
     if status.get("status") == "not_found":
         raise HTTPException(status_code=404, detail="Job not found")
@@ -556,6 +589,7 @@ async def improve_idea_endpoint(
 ) -> ImproveIdeaResponse:
     """Improve an idea based on feedback."""
     logger.info("[ContentSuggestionRoutes] Improving idea=%s aspect=%s", idea_id, request.aspect)
+    await _get_account_idea_or_404(db, account_id, idea_id)
     job_id = await asyncio.to_thread(enqueue_idea_improve, account_id, idea_id, request)
     return ImproveIdeaResponse(job_id=job_id, status="processing")
 
@@ -569,6 +603,7 @@ async def generate_variations_endpoint(
 ) -> VariationsResponse:
     """Generate variations of an idea."""
     logger.info("[ContentSuggestionRoutes] Generating variations for idea=%s count=%d", idea_id, request.count)
+    await _get_account_idea_or_404(db, account_id, idea_id)
     job_id = await asyncio.to_thread(enqueue_idea_variations, account_id, idea_id, request)
     return VariationsResponse(job_id=job_id, status="processing")
 
@@ -726,7 +761,9 @@ async def multi_save_idea_endpoint(
     logger.info("[ContentSuggestionRoutes] Saving idea=%s to %d collections", idea_id, len(request.collection_ids))
 
     saved = []
+    await _get_account_idea_or_404(db, account_id, idea_id)
     for coll_id in request.collection_ids:
+        await _get_account_collection_or_404(db, account_id, coll_id)
         existing = await db.execute(
             select(CollectionIdea).where(
                 CollectionIdea.collection_id == coll_id,
@@ -763,27 +800,31 @@ async def get_niche_details(
         return {
             "primary_niche": account.niche_category,
             "sub_niches": [
-                {"name": n, "confidence": 0.85}
+                {"name": n, "confidence": account.niche_confidence_score or 0.0}
                 for n in (account.sub_niches or [])[:5]
             ],
-            "confidence_score": account.niche_confidence_score or 0.85,
-            "explanation": account.niche_explanation or f"Your content consistently aligns with {account.niche_category} topics, trending patterns, and audience engagement signals.",
-            "content_style_summary": account.content_style_summary or "Creates engaging content with a unique perspective.",
-            "creator_strengths": account.creator_strengths or ["Consistent posting", "High engagement rate", "Trend awareness"],
+            "confidence_score": account.niche_confidence_score or 0.0,
+            "explanation": account.niche_explanation or "No niche explanation is available yet.",
+            "content_style_summary": account.content_style_summary or "No content style summary is available yet.",
+            "creator_strengths": account.creator_strengths or [],
         }
 
-    # Fallback: basic niche info
-    return {
-        "primary_niche": "Creator",
-        "sub_niches": [
-            {"name": "Lifestyle", "confidence": 0.72},
-            {"name": "Entertainment", "confidence": 0.65},
-        ],
-        "confidence_score": 0.70,
-        "explanation": "Based on your recent content patterns and audience engagement trends.",
-        "content_style_summary": "Creates engaging short-form video content.",
-        "creator_strengths": ["Visual storytelling", "Authentic connection with audience"],
-    }
+    trend_result = await db.get(CreatorTrendResult, account_id)
+    niche = trend_result.niche_json if trend_result and isinstance(trend_result.niche_json, dict) else {}
+    primary_category = niche.get("primary_category")
+    if isinstance(primary_category, str) and primary_category.strip():
+        confidence = float(niche.get("confidence_score") or 0.0)
+        sub_niches = [name for name in niche.get("sub_niches", []) if isinstance(name, str) and name.strip()]
+        return {
+            "primary_niche": primary_category,
+            "sub_niches": [{"name": name, "confidence": confidence} for name in sub_niches[:5]],
+            "confidence_score": confidence,
+            "explanation": "Niche detected from the latest trend analysis.",
+            "content_style_summary": "No content style summary is available yet.",
+            "creator_strengths": [],
+        }
+
+    raise HTTPException(status_code=404, detail="Niche analysis is not available yet. Refresh trend analysis first.")
 
 
 @router.post("/{account_id}/ideas/{idea_id}/regenerate", response_model=RegenerateResponse)
@@ -795,6 +836,7 @@ async def regenerate_idea_endpoint(
 ) -> RegenerateResponse:
     """Regenerate an idea from scratch."""
     logger.info("[ContentSuggestionRoutes] Regenerating idea=%s", idea_id)
+    await _get_account_idea_or_404(db, account_id, idea_id)
     job_id = await asyncio.to_thread(enqueue_idea_regenerate, account_id, idea_id)
     return RegenerateResponse(job_id=job_id, status="processing")
 
@@ -1039,6 +1081,8 @@ async def add_idea_to_collection_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Add idea to collection."""
+    await _get_account_collection_or_404(db, account_id, collection_id)
+    await _get_account_idea_or_404(db, account_id, request.idea_id)
     # Check if already exists
     existing = await db.execute(
         select(CollectionIdea).where(
@@ -1068,6 +1112,8 @@ async def remove_idea_from_collection_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Remove idea from collection."""
+    await _get_account_collection_or_404(db, account_id, collection_id)
+    await _get_account_idea_or_404(db, account_id, idea_id)
     result = await db.execute(
         select(CollectionIdea).where(
             CollectionIdea.collection_id == collection_id,
@@ -1090,10 +1136,11 @@ async def list_collections_for_idea_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, str]]:
     """List collections containing an idea."""
+    await _get_account_idea_or_404(db, account_id, idea_id)
     stmt = (
         select(Collection.id, Collection.name)
         .join(CollectionIdea, CollectionIdea.collection_id == Collection.id)
-        .where(CollectionIdea.idea_id == idea_id)
+        .where(CollectionIdea.idea_id == idea_id, Collection.account_id == account_id)
     )
     result = await db.execute(stmt)
     return [{"collection_id": row[0], "name": row[1]} for row in result.all()]
@@ -1112,6 +1159,7 @@ async def schedule_idea_endpoint(
     if not is_feature_enabled("TREND_RECOMMENDATIONS_V2"):
         raise HTTPException(status_code=503, detail="Trend Recommendations V2 is not yet available. Check back soon.")
     logger.info("[ContentSuggestionRoutes] Scheduling idea=%s for %s %s", request.idea_id, request.scheduled_date, request.scheduled_time)
+    await _get_account_idea_or_404(db, account_id, request.idea_id)
     emit_event("planner_schedule_clicked", account_id=account_id, properties={"idea_id": request.idea_id, "platform": request.platform, "scheduled_at": f"{request.scheduled_date}T{request.scheduled_time}"})
 
     from datetime import datetime

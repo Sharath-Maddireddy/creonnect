@@ -24,7 +24,7 @@ REEL_INFO_PATH = ARTIFACTS_DIR / "reel_info.json"
 
 # ── Config ──────────────────────────────────────────────────────────────────
 REEL_URL     = "https://www.instagram.com/reel/DVbTkfTE98X/"
-GEMINI_API_KEY = "AIzaSyAFQrQLbN2FoCQ4qBIdfJxdR27K97hC2Y8"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 MODEL_NAME   = "gemini-2.5-flash"
 
 # Gemini 2.5 Flash pricing (as of 2025)

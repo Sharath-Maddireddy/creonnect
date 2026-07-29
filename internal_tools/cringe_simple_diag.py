@@ -8,7 +8,7 @@ import io
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-GEMINI_API_KEY = "AIzaSyAFQrQLbN2FoCQ4qBIdfJxdR27K97hC2Y8"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 THUMBNAIL_URL = (
     "https://instagram.fhyd3-1.fna.fbcdn.net/v/t51.71878-15/"
     "622137790_2187922261949173_1738529400016264863_n.jpg"

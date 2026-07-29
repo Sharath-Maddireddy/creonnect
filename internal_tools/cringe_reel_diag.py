@@ -6,8 +6,8 @@ import os
 import json
 import sys
 
-# Set API key from backend .env or pass directly
-GEMINI_API_KEY = "AIzaSyAFQrQLbN2FoCQ4qBIdfJxdR27K97hC2Y8"
+# Read credentials from the environment; never commit them with diagnostic tools.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 THUMBNAIL_URL = (
     "https://instagram.fhyd3-1.fna.fbcdn.net/v/t51.71878-15/"

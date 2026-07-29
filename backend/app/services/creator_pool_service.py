@@ -17,6 +17,10 @@ class LookalikeEmbeddingError(RuntimeError):
     """Raised when lookalike search cannot compute required embeddings."""
 
 
+class CreatorPoolUnavailable(RuntimeError):
+    """Raised when creator-pool storage cannot be queried reliably."""
+
+
 def _get_hnsw_ef_search() -> int:
     raw_value = (os.getenv("PGVECTOR_HNSW_EF_SEARCH") or "").strip()
     if not raw_value:
@@ -74,7 +78,7 @@ def _run_creator_query(statement: Select) -> list[dict]:
             return [_creator_to_dict(meta, vector) for meta, vector in rows]
     except SQLAlchemyError as exc:
         logger.warning("[CreatorPoolService] Database query failed: %s", exc)
-        return []
+        raise CreatorPoolUnavailable("Creator-pool database query failed.") from exc
 
 
 def reload_creator_pool() -> None:
@@ -132,7 +136,7 @@ def _get_vector_embeddings_by_account_id() -> dict[str, list[float]]:
             rows = session.execute(select(CreatorVector.account_id, CreatorVector.embedding)).all()
     except SQLAlchemyError as exc:
         logger.warning("[CreatorPoolService] Failed to load embeddings for sqlite fallback: %s", exc)
-        return {}
+        raise CreatorPoolUnavailable("Creator-pool embedding query failed.") from exc
 
     normalized: dict[str, list[float]] = {}
     for account_id, raw_embedding in rows:
@@ -202,6 +206,6 @@ def find_lookalikes(account_id: str, k: int = 3) -> list[dict] | None:
             ordered_ids = [row.account_id for row in result]
     except SQLAlchemyError as exc:
         logger.warning("[CreatorPoolService] Lookalike search failed: %s", exc)
-        return []
+        raise CreatorPoolUnavailable("Creator-pool lookalike query failed.") from exc
 
     return _get_creators_by_ids(ordered_ids)

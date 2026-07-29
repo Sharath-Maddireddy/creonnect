@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import re
+import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.analytics.brand_match_engine import score_creator_against_brand
 from backend.app.ai.llm_client import LLMClient, LLMClientError
-from backend.app.api.auth import verify_api_key
+from backend.app.api.instagram_auth_routes import SESSION_USER_ID_KEY
 from backend.app.api.rate_limiter import InMemoryRateLimiter
 from backend.app.domain.brand_models import BrandProfile, CreatorMatchScore
 from backend.app.services.campaign_prompt_service import (
@@ -20,6 +22,7 @@ from backend.app.services.campaign_prompt_service import (
 )
 from backend.app.services.brand_chat_service import brand_chat_discover as brand_chat_discover_service
 from backend.app.services.creator_pool_service import (
+    CreatorPoolUnavailable,
     LookalikeEmbeddingError,
     find_lookalikes,
     query_creator_pool,
@@ -33,11 +36,27 @@ MAX_MATCH_CANDIDATES = 1000
 ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,120}$")
 
 
-def _rate_limit_by_api_key(api_key: str = Depends(verify_api_key)) -> str:
-    """Apply campaign route rate limiting using the caller API key as the bucket."""
-    if rate_limiter.check(api_key):
+def _campaign_actor(
+    request: Request,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> str:
+    """Authorize server integrations by key and the first-party UI by session."""
+    expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
+    if x_api_key and expected_api_key and secrets.compare_digest(x_api_key, expected_api_key):
+        return f"api-key:{x_api_key}"
+
+    user_id = request.session.get(SESSION_USER_ID_KEY)
+    if user_id:
+        return f"session:{user_id}"
+
+    raise HTTPException(status_code=401, detail="Sign in or provide a valid API key.")
+
+
+def _rate_limit_campaign_actor(actor: str = Depends(_campaign_actor)) -> str:
+    """Apply campaign route rate limiting using the authenticated actor as the bucket."""
+    if rate_limiter.check(actor):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
-    return api_key
+    return actor
 
 
 class CampaignMatchRequest(BaseModel):
@@ -113,9 +132,9 @@ def _process_pool_matching(
                 avg_likes=creator.get("avg_likes", 0),
                 avg_comments=creator.get("avg_comments", 0),
                 ahs_score=creator.get("ahs_score", 0.0),
-                predicted_engagement_rate=creator.get("predicted_engagement_rate", 0.0),
+                predicted_engagement_rate=creator.get("predicted_engagement_rate"),
                 visual_quality_score_total=creator.get("avg_visual_quality_score", 0.0),
-                brand_safety_score_total_0_50=creator.get("avg_brand_safety_score", 0.0),
+                brand_safety_score_total_0_50=creator.get("avg_brand_safety_score"),
                 adult_content_detected=creator.get("adult_content_detected"),
             )
             scored_matches.append(match_score)
@@ -128,18 +147,15 @@ def _process_pool_matching(
                 exc,
             )
 
-    scored_matches.sort(
-        key=lambda x: (not bool(x.disqualify_reasons), x.total_match_score),
-        reverse=True,
-    )
-
-    return scored_matches[:10], len(candidates), disqualified_count
+    eligible_matches = [match for match in scored_matches if not match.disqualified]
+    eligible_matches.sort(key=lambda match: match.total_match_score, reverse=True)
+    return eligible_matches[:10], len(candidates), disqualified_count
 
 
 @router.post("/match", response_model=CampaignMatchResponse)
 def manual_campaign_match(
     request: CampaignMatchRequest,
-    api_key: str = Depends(_rate_limit_by_api_key),
+    _actor: str = Depends(_rate_limit_campaign_actor),
 ):
     """Score the creator pool against a structured brand profile."""
     try:
@@ -160,6 +176,9 @@ def manual_campaign_match(
             brand_profile=brand.model_dump(mode="json"),
         )
 
+    except CreatorPoolUnavailable as exc:
+        logger.warning("[CampaignRoutes] Creator pool unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Creator search is temporarily unavailable.") from exc
     except Exception as exc:
         logger.exception("[CampaignRoutes] Error during manual campaign match.")
         raise HTTPException(status_code=500, detail="Internal server error matching creators.") from exc
@@ -168,7 +187,7 @@ def manual_campaign_match(
 @router.post("/discover", response_model=CampaignDiscoverResponse)
 def ai_campaign_discover(
     campaign_request: CampaignDiscoverRequest,
-    api_key: str = Depends(_rate_limit_by_api_key),
+    _actor: str = Depends(_rate_limit_campaign_actor),
 ):
     """Use AI to parse a prompt, build a profile, and find creator matches."""
     try:
@@ -179,11 +198,12 @@ def ai_campaign_discover(
 
         try:
             brand = build_brand_profile_from_parsed(parsed_brief)
-        except ValueError as ve:
-            logger.warning("[CampaignRoutes] Invalid parsed brief: %s. Falling back.", ve)
-            parsed_brief["min_followers"] = None
-            parsed_brief["max_followers"] = None
-            brand = build_brand_profile_from_parsed(parsed_brief)
+        except ValueError as exc:
+            logger.warning("[CampaignRoutes] Invalid parsed brief: %s", exc)
+            raise HTTPException(
+                status_code=422,
+                detail="The campaign brief contains incompatible requirements. Please refine the follower range and try again.",
+            ) from exc
 
         llm = LLMClient()
         try:
@@ -217,6 +237,9 @@ def ai_campaign_discover(
 
     except HTTPException:
         raise
+    except CreatorPoolUnavailable as exc:
+        logger.warning("[CampaignRoutes] Creator pool unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Creator search is temporarily unavailable.") from exc
     except Exception as exc:
         logger.exception("[CampaignRoutes] Error during AI campaign discovery.")
         raise HTTPException(
@@ -228,7 +251,7 @@ def ai_campaign_discover(
 @router.post("/chat", response_model=BrandChatResponse)
 def brand_chat_discover(
     request: BrandChatRequest,
-    api_key: str = Depends(_rate_limit_by_api_key),
+    _actor: str = Depends(_rate_limit_campaign_actor),
 ):
     """Use tool-calling workflow for conversational brand discovery."""
     try:
@@ -256,7 +279,7 @@ def brand_chat_discover(
 @router.get("/lookalikes/{account_id}", response_model=LookalikeResponse)
 def get_creator_lookalikes(
     account_id: str,
-    api_key: str = Depends(_rate_limit_by_api_key),
+    _actor: str = Depends(_rate_limit_campaign_actor),
 ):
     """Return semantic lookalikes for a creator account."""
     if not ACCOUNT_ID_PATTERN.fullmatch(account_id):
@@ -264,7 +287,7 @@ def get_creator_lookalikes(
 
     try:
         lookalikes = find_lookalikes(account_id, k=5)
-    except LookalikeEmbeddingError as exc:
+    except (CreatorPoolUnavailable, LookalikeEmbeddingError) as exc:
         logger.warning("[CampaignRoutes] Lookalike lookup failed for %s: %s", account_id, exc)
         raise HTTPException(status_code=503, detail="Lookalike search is temporarily unavailable.")
 

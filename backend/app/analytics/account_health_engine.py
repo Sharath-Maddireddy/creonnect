@@ -243,7 +243,7 @@ def _build_engagement_quality(
             notes.append("Strong save/share signal boosted engagement quality.")
         elif save_share_sum <= 0.01:
             score -= 5.0
-            notes.append("Weak save/share signal reduced engagement quality.")
+            notes.append("Save/share activity is an opportunity to strengthen engagement quality.")
 
     return _clamp(score, 0.0, 100.0), notes, True, {
         "median_engagement_rate": median_engagement_rate,
@@ -424,10 +424,10 @@ def _build_drivers_and_recommendations(
         drivers.append(
             DeterministicDriver(
                 id="content_quality_low",
-                label="Content clarity/quality needs improvement",
+                label="Content presentation opportunity",
                 type="LIMITING",
                 explanation=(
-                    "Mean content signals are low "
+                    "Current content signals show room to build "
                     f"(S1={content_metrics.get('mean_s1_0_50')}, "
                     f"S2={content_metrics.get('mean_s2_0_50')}, "
                     f"S3={content_metrics.get('mean_s3_0_50')})."
@@ -438,7 +438,7 @@ def _build_drivers_and_recommendations(
             [
                 DeterministicRecommendation(
                     id="improve_visual_hook_and_clarity",
-                    text="Improve opening visual hook and framing to raise S1/S3 on most posts.",
+                    text="Strengthen opening visual hooks and framing to build S1/S3 across posts.",
                     impact_level="HIGH",
                 ),
                 DeterministicRecommendation(
@@ -455,10 +455,10 @@ def _build_drivers_and_recommendations(
         drivers.append(
             DeterministicDriver(
                 id="engagement_quality_low",
-                label="Engagement under benchmark",
+                label="Engagement growth opportunity",
                 type="LIMITING",
                 explanation=(
-                    f"Median engagement performance trails benchmark (ratio={ratio_text})."
+                    f"Median engagement is currently at {ratio_text}x of the available benchmark."
                 ),
             )
         )
@@ -483,9 +483,9 @@ def _build_drivers_and_recommendations(
         drivers.append(
             DeterministicDriver(
                 id="niche_fit_low",
-                label="Content misaligned with audience",
+                label="Audience alignment opportunity",
                 type="LIMITING",
-                explanation=f"Average S4 audience relevance is low (mean S4={mean_s4_text}/50).",
+                explanation=f"Average S4 audience relevance is {mean_s4_text}/50, highlighting an opportunity to align topics more closely.",
             )
         )
         recommendations.append(
@@ -504,9 +504,9 @@ def _build_drivers_and_recommendations(
         drivers.append(
             DeterministicDriver(
                 id="consistency_low",
-                label="Inconsistent posting/performance",
+                label="Consistency opportunity",
                 type="LIMITING",
-                explanation=f"Cadence/performance consistency is weak (posts_per_week={ppw_text}, stddev={std_text}).",
+                explanation=f"Cadence and performance signals (posts_per_week={ppw_text}, stddev={std_text}) point to an opportunity for a steadier rhythm.",
             )
         )
         recommendations.append(
@@ -522,9 +522,9 @@ def _build_drivers_and_recommendations(
         drivers.append(
             DeterministicDriver(
                 id="brand_safety_risks",
-                label="Brand safety risks detected",
+                label="Brand safety review recommended",
                 type="LIMITING",
-                explanation=f"Brand safety weakened by recurring penalties (severe_posts={severe_count}).",
+                explanation=f"Recurring brand-safety signals require review before publishing (severe_posts={severe_count}).",
             )
         )
         recommendations.extend(

@@ -81,7 +81,7 @@ def _build_commentary(
         return "Mixed signal: engagement is above niche average, but save rate is below niche average."
 
     if engagement_below and save_below:
-        return "This post is underperforming versus niche averages for both engagement and saves."
+        return "This post has a clear opportunity to lift both engagement and saves relative to available niche averages."
 
     if engagement_above and not save_comparable:
         return "Engagement is above niche average."

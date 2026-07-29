@@ -79,6 +79,15 @@ def _set_action_job_state(
     job.error_message = error
 
 
+def _mark_enqueue_failure(job_id: str, error: Exception) -> None:
+    """Persist queue outages instead of running expensive LLM work in the API process."""
+    session_factory = get_sync_sessionmaker()
+    with session_factory() as db:
+        _set_action_job_state(db, job_id, "failed", error="Content queue is unavailable. Please try again shortly.")
+        db.commit()
+    logger.warning("[ContentSuggestionJob] Queue unavailable for job_id=%s: %s", job_id, error)
+
+
 # ── Enqueue Functions ──────────────────────────────────────────────────────────
 
 
@@ -120,9 +129,7 @@ def enqueue_idea_generation(account_id: str, request: GenerateIdeasRequest) -> s
         )
         logger.info("[ContentSuggestionJob] Enqueued to RQ job_id=%s", job_id)
     except Exception as e:
-        logger.warning("[ContentSuggestionJob] RQ enqueue failed, running synchronously: %s", e)
-        # Fallback: run synchronously if RQ unavailable
-        run_idea_generation(account_id, job_id)
+        _mark_enqueue_failure(job_id, e)
 
     return job_id
 
@@ -148,8 +155,7 @@ def enqueue_idea_improve(account_id: str, idea_id: str, request: ImproveIdeaRequ
         )
         logger.info("[ContentSuggestionJob] Enqueued improve job_id=%s idea_id=%s", job_id, idea_id)
     except Exception as e:
-        logger.warning("[ContentSuggestionJob] RQ enqueue failed for improve: %s", e)
-        run_idea_improve(account_id, idea_id, request.feedback, request.aspect, job_id)
+        _mark_enqueue_failure(job_id, e)
 
     return job_id
 
@@ -174,8 +180,7 @@ def enqueue_idea_variations(account_id: str, idea_id: str, request: VariationsRe
         )
         logger.info("[ContentSuggestionJob] Enqueued variations job_id=%s idea_id=%s", job_id, idea_id)
     except Exception as e:
-        logger.warning("[ContentSuggestionJob] RQ enqueue failed for variations: %s", e)
-        run_idea_variations(account_id, idea_id, request.count, job_id)
+        _mark_enqueue_failure(job_id, e)
 
     return job_id
 
@@ -199,8 +204,7 @@ def enqueue_idea_regenerate(account_id: str, idea_id: str) -> str:
         )
         logger.info("[ContentSuggestionJob] Enqueued regenerate job_id=%s idea_id=%s", job_id, idea_id)
     except Exception as e:
-        logger.warning("[ContentSuggestionJob] RQ enqueue failed for regenerate: %s", e)
-        run_idea_regenerate(account_id, idea_id, job_id)
+        _mark_enqueue_failure(job_id, e)
 
     return job_id
 
@@ -434,7 +438,7 @@ def run_idea_improve(account_id: str, idea_id: str, feedback: str, aspect: str, 
         _set_action_job_state(db, job_id, "processing")
         db.commit()
         idea = db.get(Idea, idea_id)
-        if not idea:
+        if not idea or idea.account_id != account_id:
             logger.error("[ContentSuggestionJob] Idea not found: %s", idea_id)
             _set_action_job_state(db, job_id, "failed", error="Idea not found")
             db.commit()
@@ -508,7 +512,7 @@ def run_idea_variations(account_id: str, idea_id: str, count: int, job_id: str) 
         _set_action_job_state(db, job_id, "processing")
         db.commit()
         idea = db.get(Idea, idea_id)
-        if not idea:
+        if not idea or idea.account_id != account_id:
             logger.error("[ContentSuggestionJob] Idea not found: %s", idea_id)
             _set_action_job_state(db, job_id, "failed", error="Idea not found")
             db.commit()
@@ -581,7 +585,7 @@ def run_idea_regenerate(account_id: str, idea_id: str, job_id: str) -> None:
         _set_action_job_state(db, job_id, "processing")
         db.commit()
         idea = db.get(Idea, idea_id)
-        if not idea:
+        if not idea or idea.account_id != account_id:
             logger.error("[ContentSuggestionJob] Idea not found: %s", idea_id)
             _set_action_job_state(db, job_id, "failed", error="Idea not found")
             db.commit()
@@ -617,6 +621,7 @@ Return JSON shape:
             parsed = _parse_json_improvement(raw)
 
             # Update the idea with completely new content
+            original_title = idea.title
             if parsed.get("title"):
                 idea.title = parsed["title"]
             if parsed.get("hook"):
@@ -627,7 +632,7 @@ Return JSON shape:
             idea.generation_metadata = {
                 **(idea.generation_metadata if isinstance(idea.generation_metadata, dict) else {}),
                 "regenerated_at": datetime.utcnow().isoformat(),
-                "original_title": idea.title,
+                "original_title": original_title,
             }
             idea.updated_at = datetime.utcnow()
             _set_action_job_state(db, job_id, "completed")

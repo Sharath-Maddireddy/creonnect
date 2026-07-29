@@ -46,6 +46,16 @@ def get_current_instagram_user(request: Request) -> AuthenticatedInstagramUser:
     return AuthenticatedInstagramUser(id=str(user_id), username=str(username) if username else None)
 
 
+def require_current_account(
+    account_id: str | None = None,
+    current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user),
+) -> AuthenticatedInstagramUser:
+    """Require an authenticated user to access only their own account routes."""
+    if account_id is not None and not hmac.compare_digest(str(account_id), current_user.id):
+        raise HTTPException(status_code=403, detail="You are not allowed to access this account")
+    return current_user
+
+
 @router.get("/instagram/login")
 def instagram_login(request: Request):
     try:

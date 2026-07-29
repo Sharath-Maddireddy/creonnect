@@ -21,6 +21,10 @@ docs
 skills
 
 internal_tools/fixtures
+internal_tools
+backend/check_*.py
+backend/fetch_and_run.py
+azure_proxy*.py
 
 *.log
 local.db

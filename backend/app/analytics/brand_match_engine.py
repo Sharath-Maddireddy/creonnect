@@ -209,7 +209,7 @@ def score_creator_against_brand(
     ahs_score: float | None = None,
     predicted_engagement_rate: float | None = None,
     visual_quality_score_total: float = 0.0,
-    brand_safety_score_total_0_50: float = 50.0,
+    brand_safety_score_total_0_50: float | None = None,
     adult_content_detected: bool | None = None,
 ) -> CreatorMatchScore:
     """Compute deterministic match score for one creator against a brand profile."""
@@ -217,7 +217,12 @@ def score_creator_against_brand(
     disqualify_reasons: list[str] = []
 
     visual_quality = _clamp(float(visual_quality_score_total if visual_quality_score_total is not None else 0.0), 0.0, 50.0)
-    brand_safety = _clamp(float(brand_safety_score_total_0_50 if brand_safety_score_total_0_50 is not None else 50.0), 0.0, 50.0)
+    brand_safety = (
+        _clamp(float(brand_safety_score_total_0_50), 0.0, 50.0)
+        if isinstance(brand_safety_score_total_0_50, (int, float))
+        and not isinstance(brand_safety_score_total_0_50, bool)
+        else None
+    )
     has_engagement_data = _has_engagement_data(avg_views, avg_likes, avg_comments)
     authenticity_score = calculate_authenticity_score(
         follower_count=int(follower_count or 0),
@@ -238,7 +243,7 @@ def score_creator_against_brand(
         creator_embedding=creator_embedding,
     )
     engagement_quality, engagement_notes = _engagement_quality(ahs_score, predicted_er)
-    brand_safety_fit, safety_notes = _brand_safety_fit(brand_safety)
+    brand_safety_fit, safety_notes = _brand_safety_fit(brand_safety or 0.0)
     content_quality_fit, content_notes = _content_quality_fit(visual_quality)
     audience_size_fit, audience_notes = _audience_size_fit(follower_count, brand.min_followers, brand.max_followers)
     notes.extend(niche_notes + engagement_notes + safety_notes + content_notes + audience_notes)
@@ -262,8 +267,11 @@ def score_creator_against_brand(
     elif adult_content_detected is None:
         notes.append("Adult content status unknown; defaulting to non-disqualifying treatment.")
 
-    safety_score_0_100 = _clamp(brand_safety * 2.0, 0.0, 100.0)
-    if safety_score_0_100 < brand.required_brand_safety_min:
+    safety_score_0_100 = _clamp((brand_safety or 0.0) * 2.0, 0.0, 100.0)
+    if brand_safety is None:
+        disqualified = True
+        disqualify_reasons.append("Brand safety analysis is unavailable for this creator.")
+    elif safety_score_0_100 < brand.required_brand_safety_min:
         disqualified = True
         disqualify_reasons.append(
             f"Brand safety score {safety_score_0_100:.0f} below required {brand.required_brand_safety_min:.0f}."
@@ -278,13 +286,18 @@ def score_creator_against_brand(
 
     if (
         brand.min_engagement_rate is not None
-        and predicted_er is not None
-        and predicted_er < brand.min_engagement_rate
+        and (
+            predicted_er is None
+            or predicted_er < brand.min_engagement_rate
+        )
     ):
         disqualified = True
-        disqualify_reasons.append(
-            f"Engagement rate {predicted_er:.1%} below required {brand.min_engagement_rate:.1%}."
-        )
+        if predicted_er is None:
+            disqualify_reasons.append("Predicted engagement rate is unavailable for the required threshold.")
+        else:
+            disqualify_reasons.append(
+                f"Engagement rate {predicted_er:.1%} below required {brand.min_engagement_rate:.1%}."
+            )
 
     if disqualified:
         total = 0.0

@@ -122,7 +122,8 @@ function CreatorMatchCard({ match }) {
 
         try {
             const response = await fetch(`/api/brand/campaign/lookalikes/${encodeURIComponent(match.account_id)}`, {
-                headers: buildCampaignHeaders()
+                headers: buildCampaignHeaders(),
+                credentials: 'same-origin'
             })
             const json = await response.json()
             if (!response.ok) {
@@ -290,7 +291,7 @@ function BrandCampaign() {
         return {
             evaluated: typeof result?.total_evaluated === 'number' ? result.total_evaluated : matches.length,
             disqualified: disqualifiedCount,
-            matches: Math.max(0, matches.length - disqualifiedCount)
+            matches: matches.length
         }
     }, [result])
 
@@ -301,6 +302,7 @@ function BrandCampaign() {
             const res = await fetch('/api/brand/campaign/discover', {
                 method: 'POST',
                 headers: buildCampaignHeaders({ json: true }),
+                credentials: 'same-origin',
                 body: JSON.stringify({
                     prompt,
                     brand_name: optionalBrandName || null
@@ -337,6 +339,7 @@ function BrandCampaign() {
             const res = await fetch('/api/brand/campaign/match', {
                 method: 'POST',
                 headers: buildCampaignHeaders({ json: true }),
+                credentials: 'same-origin',
                 body: JSON.stringify(payload)
             })
             const json = await res.json()

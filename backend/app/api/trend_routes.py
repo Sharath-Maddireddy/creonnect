@@ -20,6 +20,7 @@ from backend.app.domain.trend_models import (
     TrendingTopicDetail,
 )
 from backend.app.infra.database import get_db
+from backend.app.api.instagram_auth_routes import require_current_account
 from backend.app.infra.models import AccountAnalysisResult, CreatorDiscoveryMeta, CreatorTrendResult
 from backend.app.infra.redis_client import aincr_with_expire
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
@@ -32,7 +33,11 @@ from backend.app.utils.logger import logger
 from backend.app.utils.telemetry import emit_counter, emit_histogram, timed
 
 
-router = APIRouter(prefix="/api/v1/accounts", tags=["trends"])
+router = APIRouter(
+    prefix="/api/v1/accounts",
+    tags=["trends"],
+    dependencies=[Depends(require_current_account)],
+)
 
 _DEFAULT_TRENDS_REFRESH_LIMIT = 3
 _HIGH_TEST_REFRESH_LIMIT = 100

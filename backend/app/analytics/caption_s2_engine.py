@@ -132,7 +132,7 @@ def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffecti
         # Start at 55; apply weak-phrase penalty before adding bonuses
         if _WEAK_HOOK_RE.search(first_line.strip()):
             hook_score = 35
-            notes.append("Weak opening phrase; start with curiosity, value, or tension instead")
+            notes.append("Opening line can create more curiosity, value, or tension to invite attention sooner.")
         else:
             hook_score = 60
         if "?" in first_line or "!" in first_line:
@@ -179,7 +179,7 @@ def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffecti
     total_0_50 = round(s2_raw_0_100 / 2.0, 1)
 
     if hook_score == 30:
-        notes.append("Weak or missing hook in first line")
+        notes.append("The first line is an opportunity to add a clearer hook.")
     if hashtag_score == 20:
         notes.append("No hashtags detected")
     if cta_score == 20:

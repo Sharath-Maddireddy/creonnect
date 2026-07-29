@@ -1274,6 +1274,23 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         persisted_result_payload = dict(result_payload)
         persisted_result_payload["draft_optimizer_history"] = _draft_optimizer_history(processed_posts)
 
+        predicted_engagement_rates = sorted(
+            rate
+            for post in processed_posts
+            if (rate := _safe_float(getattr(post, "predicted_engagement_rate", None))) is not None
+            and 0.0 <= rate <= 1.0
+        )
+        predicted_engagement_rate = (
+            predicted_engagement_rates[len(predicted_engagement_rates) // 2]
+            if len(predicted_engagement_rates) % 2 == 1
+            else (
+                (predicted_engagement_rates[(len(predicted_engagement_rates) // 2) - 1]
+                 + predicted_engagement_rates[len(predicted_engagement_rates) // 2]) / 2
+            )
+            if predicted_engagement_rates
+            else None
+        )
+
         def _enqueue_embedding() -> None:
             upsert_creator({
                 "account_id": account_id,
@@ -1283,7 +1300,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
                 "creator_dominant_category": payload.get("creator_dominant_category"),
                 "niche_tags": payload.get("niche_tags") or [],
                 "ahs_score": result.ahs_score,
-                "predicted_engagement_rate": result.pillars["engagement_quality"].score if "engagement_quality" in result.pillars else None,
+                "predicted_engagement_rate": predicted_engagement_rate,
                 "avg_visual_quality_score": result.pillars["content_quality"].score if "content_quality" in result.pillars else None,
                 "avg_brand_safety_score": result.pillars["brand_safety"].score if "brand_safety" in result.pillars else None,
                 "avg_views": sum((post.core_metrics.reach or 0) if post.core_metrics else 0 for post in processed_posts) / len(processed_posts) if processed_posts else 0,

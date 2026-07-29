@@ -902,17 +902,17 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             "caption_improvement, posting_intelligence, hashtag_quality_note, "
             "hashtag_analysis, viral_opportunity, creator_next_step. "
             f"Summary: FIRST sentence must cite actual numbers.{er_note} "
-            f"Name weakest dimension ({weakest}) and why it drags the score. "
+            f"Identify the highest-leverage opportunity ({weakest}) and explain how strengthening it can lift the result. "
             f"Mention strongest dimension ({strongest}). 3-5 sentences total. "
             "Driver requirements: max 5 items; reference specific metric value or vision signal. "
             "Recommendation requirements: 5 to 7 items; category is REQUIRED (CAPTION, VISUAL, TIMING, HASHTAGS, ENGAGEMENT); "
             "avoid generic phrases. "
             "caption_improvement: 1-sentence rewritten hook and 1-sentence improved CTA. "
             "posting_intelligence: 1-sentence comment on optimal timing. "
-            "hashtag_analysis: quality_band (Excellent|Good|Building Momentum|Poor), suggested_count (int), strategy_tip (str). "
+            "hashtag_analysis: quality_band (Excellent|Good|Building Momentum|Opportunity to Refine), suggested_count (int), strategy_tip (str). "
             "viral_opportunity: 2 sentences on viral potential and amplification mechanics. "
             "creator_next_step: single sentence on highest-priority action based on "
-            f"biggest gap ({weakest}). "
+            f"highest-leverage opportunity ({weakest}). Use constructive, specific language; never say 'needs work', 'weak', 'poor', or 'underperforming'. "
             "Allowed driver.type: POSITIVE or LIMITING. "
             "Allowed recommendation.impact_level: HIGH, MEDIUM, LOW."
         ),
@@ -1531,9 +1531,9 @@ def _build_deterministic_visual_drivers(vision: dict[str, Any]) -> list[AIDriver
         drivers.append(
             {
                 "id": "deterministic_weak_visual_hook",
-                "label": "Weak visual hook",
+                "label": "Visual hook opportunity",
                 "type": "LIMITING",
-                "explanation": f"Vision hook_strength_score is {hook_strength:.2f}, below the 0.40 threshold.",
+                "explanation": f"Vision hook_strength_score is {hook_strength:.2f}; a clearer opening visual can create a stronger first impression.",
             }
         )
 
@@ -1558,11 +1558,11 @@ def _build_deterministic_clarity_drivers(content_clarity_score: ContentClaritySc
         drivers.append(
             {
                 "id": "deterministic_unclear_main_message",
-                "label": "Unclear main message",
+                "label": "Message focus opportunity",
                 "type": "LIMITING",
                 "explanation": (
                     f"S3 content clarity total is {content_clarity_score.total:.2f}, "
-                    "indicating weak message singularity and reinforcement."
+                    "showing an opportunity to make the main message more focused and memorable."
                 ),
             }
         )
@@ -1571,11 +1571,11 @@ def _build_deterministic_clarity_drivers(content_clarity_score: ContentClaritySc
         drivers.append(
             {
                 "id": "deterministic_high_cognitive_load",
-                "label": "High cognitive load / clutter",
+                "label": "Simplify message delivery",
                 "type": "LIMITING",
                 "explanation": (
                     f"S3 cognitive_load is {content_clarity_score.cognitive_load:.2f}, "
-                    "which indicates overload from clutter and/or text density."
+                    "so simplifying the visual hierarchy or text density can make the message easier to absorb."
                 ),
             }
         )
@@ -1652,9 +1652,18 @@ async def analyze_single_post_ai(
     openai_api_key = os.getenv("OPENAI_API_KEY")
     gemini_enabled = bool(isinstance(gemini_api_key, str) and gemini_api_key.strip())
     openai_enabled = bool(isinstance(openai_api_key, str) and openai_api_key.strip())
-    vision_enabled = gemini_enabled or openai_enabled
+    external_ai_calls_enabled = os.getenv("AI_EXTERNAL_CALLS_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    vision_enabled = external_ai_calls_enabled and (gemini_enabled or openai_enabled)
     warnings: list[AIWarning] = []
     vision_error_reason: str | None = None
+    if not external_ai_calls_enabled:
+        warnings.append(
+            _build_ai_warning(
+                code="EXTERNAL_AI_DISABLED",
+                message="External AI calls are disabled by AI_EXTERNAL_CALLS_ENABLED.",
+                post_id=post_id,
+            )
+        )
     if not gemini_enabled:
         warnings.append(
             _build_ai_warning(
@@ -1740,16 +1749,21 @@ async def analyze_single_post_ai(
     logger.debug("[AIAnalysis] Vision finished media_id=%s status=%s", post.media_id, vision_status)
 
     visual_quality_score = compute_visual_quality_score(vision)
-    caption_effectiveness_score = (
-        post.caption_effectiveness_score
-        if isinstance(post.caption_effectiveness_score, CaptionEffectivenessScore)
-        else await analyze_caption_via_llm(post.caption_text)
-    )
-    content_clarity_score = await analyze_content_clarity_via_llm(vision, post.caption_text)
-    audience_relevance_score = await analyze_audience_relevance_via_llm(
-        post.post_category,
-        post.creator_dominant_category,
-    )
+    if external_ai_calls_enabled:
+        caption_effectiveness_score = (
+            post.caption_effectiveness_score
+            if isinstance(post.caption_effectiveness_score, CaptionEffectivenessScore)
+            else await analyze_caption_via_llm(post.caption_text)
+        )
+        content_clarity_score = await analyze_content_clarity_via_llm(vision, post.caption_text)
+        audience_relevance_score = await analyze_audience_relevance_via_llm(
+            post.post_category,
+            post.creator_dominant_category,
+        )
+    else:
+        caption_effectiveness_score = _resolve_score(post.caption_effectiveness_score, CaptionEffectivenessScore)
+        content_clarity_score = _resolve_score(post.content_clarity_score, ContentClarityScore)
+        audience_relevance_score = _resolve_score(post.audience_relevance_score, AudienceRelevanceScore)
     brand_safety_score = compute_s6_brand_safety(
         caption_text=post.caption_text,
         vision=vision,
@@ -1806,7 +1820,7 @@ async def analyze_single_post_ai(
     )
     prompt = _build_prompt(context, vision)
 
-    external_ai_enabled = bool(llm_client and (gemini_enabled or openai_enabled)) and os.getenv("AI_EXTERNAL_CALLS_ENABLED", "1").strip() not in ("0", "false", "no", "off")
+    external_ai_enabled = bool((gemini_enabled or openai_enabled) and external_ai_calls_enabled)
     if external_ai_enabled:
         llm_text = await _call_llm_async(prompt, llm_client)
         (
