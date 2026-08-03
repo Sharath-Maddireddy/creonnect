@@ -11,16 +11,12 @@ from typing import List
 from datetime import datetime
 
 import asyncio
-from backend.app.analytics.niche_discovery_engine import discover_creator_niche
-from backend.app.analytics.global_trend_engine import fetch_global_trends
-from backend.app.analytics.trend_recommendation_engine import generate_trend_recommendations
-from backend.app.domain.post_models import SinglePostInsights
 from backend.app.domain.trend_models import TrendAnalysisResult
 from backend.app.infra.database import get_sync_sessionmaker
 from backend.app.infra.models import CreatorTrendResult
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
 from backend.app.services.draft_history_service import load_draft_history_context
-from backend.app.services.trend_cache import TrendAnalysisCache
+from backend.app.services.creator_trend_service import CreatorTrendService, attach_weekly_opportunity
 from backend.app.utils.logger import logger
 
 
@@ -65,24 +61,18 @@ def run_trend_analysis(account_id: str) -> dict:
             follower_count=history_context.account_data.get("follower_count"),
         ))
 
-        # Discover niche
-        logger.debug(f"[TrendAnalysisJob] Discovering niche for account={account_id}")
-        niche = asyncio.run(discover_creator_niche(posts, bio, username))
-
-        # Fetch global trends
-        logger.debug(f"[TrendAnalysisJob] Fetching trends for account={account_id}")
-        trends = asyncio.run(fetch_global_trends(niche))
-
-        # Generate recommendations
-        logger.debug(f"[TrendAnalysisJob] Generating recommendations for account={account_id}")
-        recs = asyncio.run(generate_trend_recommendations(creator_intelligence, trends))
-
-        # Build result
-        result = TrendAnalysisResult(niche=niche, global_trends=trends, recommendations=recs)
-
-        # Cache result
-        logger.debug(f"[TrendAnalysisJob] Caching result for account={account_id}")
-        TrendAnalysisCache.set(account_id, posts, result)
+        # Use the same orchestrator as the synchronous endpoint so queued jobs include
+        # recommendations, opportunities, and insights with the current schema.
+        logger.debug(f"[TrendAnalysisJob] Building trend result for account={account_id}")
+        result = asyncio.run(CreatorTrendService().get_trends_and_recommendations(
+            account_id=account_id,
+            posts=posts,
+            bio=bio,
+            username=username,
+            creator_intelligence=creator_intelligence,
+            recommendation_count=5,
+        ))
+        result = attach_weekly_opportunity(result)
 
         # Upsert to database
         logger.debug(f"[TrendAnalysisJob] Upserting to database for account={account_id}")

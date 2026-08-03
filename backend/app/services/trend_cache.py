@@ -25,6 +25,7 @@ class TrendAnalysisCache:
 
     CACHE_TTL_SECONDS = 86400  # 24 hours
     CACHE_KEY_PREFIX = "trend_cache"
+    ANALYSIS_SCHEMA_VERSION = "v2"
 
     @staticmethod
     def _get_post_content_hash(posts: list[SinglePostInsights]) -> str:
@@ -44,7 +45,7 @@ class TrendAnalysisCache:
     def get_cache_key(account_id: str, posts: list[SinglePostInsights]) -> str:
         """Generate cache key from account ID and post content."""
         content_hash = TrendAnalysisCache._get_post_content_hash(posts)
-        return f"{TrendAnalysisCache.CACHE_KEY_PREFIX}:{account_id}:{content_hash}"
+        return f"{TrendAnalysisCache.CACHE_KEY_PREFIX}:{TrendAnalysisCache.ANALYSIS_SCHEMA_VERSION}:{account_id}:{content_hash}"
 
     @classmethod
     def get(

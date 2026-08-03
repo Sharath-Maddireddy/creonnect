@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { formatDate, formatNumber, formatPillarName } from '../utils/format'
 import {
     LineChart,
@@ -490,8 +490,15 @@ function Dashboard() {
         <div className="dashboard">
             {/* Header */}
             <div className="dashboard-header">
-                <h1>Creator Analytics</h1>
-                <p className="username">@{username || summary.username}</p>
+                <div className="dashboard-header-row">
+                    <div>
+                        <h1>Creator Analytics</h1>
+                        <p className="username">@{username || summary.username}</p>
+                    </div>
+                    <Link className="dashboard-header-link" to="/image-editor">
+                        Open Image Editor
+                    </Link>
+                </div>
             </div>
 
             {/* Summary Cards */}

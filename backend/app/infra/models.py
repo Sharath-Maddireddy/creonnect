@@ -230,6 +230,7 @@ class CreatorTrendResult(Base):
     global_trends_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     recommendations_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     content_gaps_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    dismissed_content_opportunities_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     daily_insights_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     opportunity_bullets_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
@@ -374,4 +375,87 @@ class IdeaGenerationJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ImageAsset(Base):
+    """Stores immutable originals and derived image editor assets."""
+
+    __tablename__ = "image_assets"
+    __table_args__ = (
+        Index("ix_image_assets_account_id", "account_id"),
+        Index("ix_image_assets_original_asset_id", "original_asset_id"),
+        Index("ix_image_assets_created_at", "created_at"),
+        Index("ix_image_assets_sha256", "sha256"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    original_asset_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("image_assets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    parent_asset_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("image_assets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[str] = mapped_column(Text, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    is_original: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ImageEditRequestRecord(Base):
+    """Stores backend-owned filter and AI edit requests."""
+
+    __tablename__ = "image_edit_requests"
+    __table_args__ = (
+        Index("ix_image_edit_requests_account_id", "account_id"),
+        Index("ix_image_edit_requests_original_asset_id", "original_asset_id"),
+        Index("ix_image_edit_requests_request_hash", "request_hash"),
+        Index("ix_image_edit_requests_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    original_asset_id: Mapped[str] = mapped_column(Text, ForeignKey("image_assets.id", ondelete="CASCADE"), nullable=False)
+    source_asset_id: Mapped[str] = mapped_column(Text, ForeignKey("image_assets.id", ondelete="CASCADE"), nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False, default="filter-only")
+    engine: Mapped[str] = mapped_column(Text, nullable=False)
+    config_version: Mapped[str] = mapped_column(Text, nullable=False)
+    request_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    style_id: Mapped[str] = mapped_column(Text, nullable=False)
+    intensity_id: Mapped[str] = mapped_column(Text, nullable=False)
+    quality_preset_id: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled_control_ids: Mapped[list[str]] = mapped_column(JsonListType, nullable=False, default=list)
+    output_format: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applied_profile_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    warnings_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ImageEditResultRecord(Base):
+    """Stores the generated output asset for an image edit request."""
+
+    __tablename__ = "image_edit_results"
+    __table_args__ = (
+        Index("ix_image_edit_results_request_id", "request_id"),
+        Index("ix_image_edit_results_result_asset_id", "result_asset_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_id: Mapped[str] = mapped_column(Text, ForeignKey("image_edit_requests.id", ondelete="CASCADE"), nullable=False)
+    result_asset_id: Mapped[str] = mapped_column(Text, ForeignKey("image_assets.id", ondelete="CASCADE"), nullable=False)
+    mime_type: Mapped[str] = mapped_column(Text, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_format: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

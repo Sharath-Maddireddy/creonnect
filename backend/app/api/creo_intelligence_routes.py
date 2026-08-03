@@ -116,9 +116,9 @@ async def creo_chat(
                 brand_name=request.brand_name,
             ):
                 yield chunk
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("[CreoIntelligenceRoutes] Unhandled error in SSE generator.")
-            error_event = f'event: error\ndata: {{"detail": "Internal server error: {exc}"}}\n\n'
+            error_event = 'event: error\ndata: {"detail": "Internal server error."}\n\n'
             yield error_event
 
     return StreamingResponse(

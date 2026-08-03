@@ -1,0 +1,105 @@
+{
+  "catalog_key": "creonnect-ai-filter-catalog",
+  "catalog_version": "1.0.0",
+  "filters": [
+    {
+      "id": "brand-kit-color-match",
+      "label": "Brand-Kit Color Match",
+      "category": "brand-production",
+      "mode": "ai-edit",
+      "description": "Match a creator image to an approved brand palette while preserving natural skin tones.",
+      "provider_preference": "gpt-image",
+      "campaign_eligible": true,
+      "requires_secondary_asset": false,
+      "settings": ["palette_hex", "strength", "preserve_skin_tones"]
+    },
+    {
+      "id": "product-pop-enhancement",
+      "label": "Product-Pop Enhancement",
+      "category": "brand-production",
+      "mode": "ai-edit",
+      "description": "Enhance product clarity and contrast without oversaturating the surrounding image.",
+      "provider_preference": "gpt-image",
+      "campaign_eligible": true,
+      "requires_secondary_asset": false,
+      "settings": ["product_region", "strength"]
+    },
+    {
+      "id": "relight",
+      "label": "Relight",
+      "category": "brand-production",
+      "mode": "ai-edit",
+      "description": "Apply an intentional lighting direction and mood while preserving the subject and product.",
+      "provider_preference": "gpt-image",
+      "campaign_eligible": true,
+      "requires_secondary_asset": false,
+      "settings": ["lighting_direction", "mood"]
+    },
+    {
+      "id": "before-after-composite",
+      "label": "Before/After Composite",
+      "category": "brand-production",
+      "mode": "deterministic",
+      "description": "Align two creator-provided images into a clear split-view comparison.",
+      "provider_preference": "none",
+      "campaign_eligible": true,
+      "requires_secondary_asset": true,
+      "settings": ["split_direction", "divider_label"]
+    },
+    {
+      "id": "placement-crop-resize",
+      "label": "Placement Crop & Resize",
+      "category": "brand-production",
+      "mode": "deterministic",
+      "description": "Prepare a source image for Reels, Feed, or Square placement.",
+      "provider_preference": "none",
+      "campaign_eligible": true,
+      "requires_secondary_asset": false,
+      "settings": ["placement", "subject_aware"]
+    },
+    {
+      "id": "authentic-grain",
+      "label": "Authentic Grain",
+      "category": "trend-fun",
+      "mode": "deterministic",
+      "description": "Natural film grain, restrained light leak, and subtle desaturation for an anti-polish look.",
+      "provider_preference": "none",
+      "campaign_eligible": true,
+      "requires_secondary_asset": false,
+      "settings": ["intensity"]
+    },
+    {
+      "id": "original-superhero-suit",
+      "label": "Original Superhero Suit",
+      "category": "trend-fun",
+      "mode": "ai-edit",
+      "description": "An original, non-licensed costume transformation with selectable color, emblem, and mask options.",
+      "provider_preference": "gpt-image",
+      "campaign_eligible": false,
+      "requires_secondary_asset": false,
+      "settings": ["suit_family", "color_scheme", "emblem_family", "mask"]
+    },
+    {
+      "id": "illustrated-portrait",
+      "label": "Illustrated Portrait",
+      "category": "trend-fun",
+      "mode": "ai-edit",
+      "description": "An original editorial illustration transformation without named artist-style imitation.",
+      "provider_preference": "gemini",
+      "campaign_eligible": false,
+      "requires_secondary_asset": false,
+      "settings": ["color_mood", "detail_level"]
+    },
+    {
+      "id": "miniature-collectible",
+      "label": "Miniature Collectible",
+      "category": "trend-fun",
+      "mode": "ai-edit",
+      "description": "Transform a subject into an original miniature collectible with studio product lighting.",
+      "provider_preference": "gemini",
+      "campaign_eligible": false,
+      "requires_secondary_asset": false,
+      "settings": ["material", "display_scene"]
+    }
+  ]
+}

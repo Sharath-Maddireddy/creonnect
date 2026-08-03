@@ -13,12 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.domain.account_models import CreatorIntelligence
-from backend.app.domain.trend_models import (
-    ResolvedAccount,
-    TrendAnalysisResult,
-    TrendingAudioDetail,
-    TrendingTopicDetail,
-)
+from backend.app.domain.trend_models import ResolvedAccount, TrendAnalysisResult, TrendingTopicDetail
 from backend.app.infra.database import get_db
 from backend.app.api.instagram_auth_routes import require_current_account
 from backend.app.infra.models import AccountAnalysisResult, CreatorDiscoveryMeta, CreatorTrendResult
@@ -26,7 +21,6 @@ from backend.app.infra.redis_client import aincr_with_expire
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
 from backend.app.services.creator_trend_service import CreatorTrendService, attach_weekly_opportunity
 from backend.app.services.draft_history_service import DraftHistoryContext, load_draft_history_context
-from backend.app.services.trend_cache import TrendAnalysisCache
 from backend.app.services.trend_queue_helper import get_trend_analysis_job_status
 from backend.app.utils.env import is_production_environment
 from backend.app.utils.logger import logger
@@ -80,8 +74,24 @@ def _normalize_trend_result(payload: TrendAnalysisResult | dict[str, Any]) -> Tr
         return payload
     if isinstance(payload, dict):
         cleaned = {key: value for key, value in payload.items() if key != "_meta"}
+        cleaned["global_trends"] = [
+            trend for trend in cleaned.get("global_trends", [])
+            if not isinstance(trend, dict) or str(trend.get("trend_type") or "").lower() != "audio"
+        ]
         return TrendAnalysisResult.model_validate(cleaned)
     raise HTTPException(status_code=500, detail="Unexpected trend payload")
+
+
+def _without_dismissed_opportunities(result: TrendAnalysisResult, dismissed_ids: list[str] | None) -> TrendAnalysisResult:
+    dismissed = {value for value in dismissed_ids or [] if isinstance(value, str)}
+    if not dismissed:
+        return result
+    payload = result.model_dump(mode="python")
+    payload["content_gaps"] = [
+        gap for gap in payload.get("content_gaps", [])
+        if not isinstance(gap, dict) or gap.get("id") not in dismissed
+    ]
+    return TrendAnalysisResult.model_validate(payload)
 
 
 def _score_from_momentum(momentum: str) -> int:
@@ -143,49 +153,6 @@ def _build_topic_details(result: TrendAnalysisResult) -> list[TrendingTopicDetai
     return topic_rows
 
 
-def _build_audio_details(result: TrendAnalysisResult) -> list[TrendingAudioDetail]:
-    audio_rows: list[TrendingAudioDetail] = []
-    audio_trends = [trend for trend in result.global_trends if trend.trend_type == "audio"]
-    recommendations = result.recommendations or []
-
-    for index, trend in enumerate(audio_trends, start=1):
-        recommendation = next(
-            (
-                rec for rec in recommendations
-                if str(rec.trend_reference or "").strip().lower() == trend.topic_name.strip().lower()
-            ),
-            recommendations[0] if recommendations else None,
-        )
-        match_pct = int(round(
-            trend.audience_match_pct
-            if isinstance(trend.audience_match_pct, (int, float))
-            else min(92, max(52, round((recommendation.opportunity_score if recommendation and recommendation.opportunity_score is not None else 68))))
-        ))
-        fit_reason = (
-            recommendation.rationale
-            if recommendation and recommendation.rationale
-            else "This audio trend matches the creator's content style and current discovery opportunities."
-        )
-        suggested_angle = (
-            recommendation.suggested_title
-            if recommendation and recommendation.suggested_title
-            else f"Use {trend.topic_name} in a quick reel with a strong first-three-second hook."
-        )
-        audio_rows.append(
-            TrendingAudioDetail(
-                id=f"audio_{index}",
-                audio_name=trend.topic_name,
-                momentum=trend.momentum,
-                growth_pct=max(0, _score_from_momentum(trend.momentum) + 9),
-                audience_match_pct=max(0, min(100, match_pct)),
-                fit_reason=fit_reason,
-                suggested_angle=suggested_angle,
-                example_reference=trend.example_reference,
-            )
-        )
-    return audio_rows
-
-
 def _normalize_query_value(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
@@ -215,7 +182,7 @@ def _normalize_int_query_value(value: Any, default: int, *, minimum: int | None 
 
 
 def _sort_items(
-    items: list[TrendingTopicDetail] | list[TrendingAudioDetail],
+    items: list[TrendingTopicDetail],
     *,
     sort_by: str,
     sort_dir: str,
@@ -232,7 +199,7 @@ def _sort_items(
             key=lambda item: competition_order.get(str(getattr(item, target_attr, "")).lower(), 0),
             reverse=reverse,
         )
-    if target_attr in {"topic_name", "audio_name"}:
+    if target_attr == "topic_name":
         return sorted(
             items,
             key=lambda item: str(getattr(item, target_attr, "")).lower(),
@@ -375,55 +342,6 @@ async def get_trend_topics(
     }
 
 
-@router.get("/{account_id}/trends/audio")
-async def get_trend_audio(
-    account_id: str,
-    search: str | None = Query(default=None),
-    momentum: str | None = Query(default=None),
-    sort_by: str = Query(default="growth"),
-    sort_dir: str = Query(default="desc"),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    """Return detailed trending-audio rows derived from the creator trend result."""
-    result = _normalize_trend_result(await _get_trends_inner(account_id, db))
-    audio_tracks = _build_audio_details(result)
-    search_value = _normalize_query_value(search)
-    momentum_value = _normalize_query_value(momentum)
-
-    if search_value:
-        audio_tracks = [
-            track for track in audio_tracks
-            if search_value in track.audio_name.lower()
-            or search_value in track.fit_reason.lower()
-            or search_value in track.suggested_angle.lower()
-            or (track.example_reference and search_value in track.example_reference.lower())
-        ]
-    if momentum_value:
-        audio_tracks = [track for track in audio_tracks if track.momentum.lower() == momentum_value]
-
-    audio_tracks = _sort_items(
-        audio_tracks,
-        sort_by=sort_by,
-        sort_dir=sort_dir,
-        field_map={
-            "name": "audio_name",
-            "growth": "growth_pct",
-            "audience_match": "audience_match_pct",
-            "default": "growth_pct",
-        },
-    )
-    limit_value = _normalize_int_query_value(limit, 50, minimum=1, maximum=200)
-    offset_value = _normalize_int_query_value(offset, 0, minimum=0)
-    total = len(audio_tracks)
-    audio_tracks = audio_tracks[offset_value: offset_value + limit_value]
-    return {
-        "audio_tracks": [track.model_dump(mode="python") for track in audio_tracks],
-        "count": total,
-    }
-
-
 async def _get_trends_inner(account_id: str, db: AsyncSession) -> TrendAnalysisResult | dict:
     try:
         row = await db.get(CreatorTrendResult, account_id)
@@ -445,7 +363,8 @@ async def _get_trends_inner(account_id: str, db: AsyncSession) -> TrendAnalysisR
                 "daily_insights": row.daily_insights_json if isinstance(row.daily_insights_json, dict) else None,
                 "opportunity_bullets": row.opportunity_bullets_json or [],
             }
-            return attach_weekly_opportunity(TrendAnalysisResult.model_validate(payload))
+            result = attach_weekly_opportunity(TrendAnalysisResult.model_validate(payload))
+            return _without_dismissed_opportunities(result, row.dismissed_content_opportunities_json)
         except Exception:
             logger.exception("[TrendRoutes] Failed to deserialize stored trend result for account=%s", account_id)
             raise HTTPException(status_code=500, detail="Failed to parse stored trend result")
@@ -501,16 +420,7 @@ async def refresh_trends(
 
     posts = history_context.historical_posts
 
-    # 3. Check cache first
-    try:
-        cached_result = await TrendAnalysisCache.aget(account_id, posts)
-        if cached_result:
-            logger.info("[TrendRoutes] Returned cached result for account=%s", account_id)
-            return attach_weekly_opportunity(cached_result)
-    except Exception as exc:
-        logger.warning("[TrendRoutes] Cache check failed: %s", exc)
-        # Continue without cache
-
+    # 3. A manual refresh always recalculates; cache is only a background-job optimization.
     # 4. Build real creator intelligence from actual post data + bio
     logger.info("[TrendRoutes] Building creator intelligence for account=%s", account_id)
     try:
@@ -553,14 +463,8 @@ async def refresh_trends(
         logger.exception("[TrendRoutes] Trend service failed for account=%s", account_id)
         raise HTTPException(status_code=500, detail="Failed to compute trends")
 
-    # 5. Cache the result
-    try:
-        await TrendAnalysisCache.aset(account_id, posts, result)
-        logger.debug("[TrendRoutes] Cached result for account=%s", account_id)
-    except Exception as exc:
-        logger.warning("[TrendRoutes] Failed to cache result: %s", exc)
-
-    # 6. Upsert into CreatorTrendResult
+    # 5. Upsert into CreatorTrendResult
+    existing: CreatorTrendResult | None = None
     try:
         existing = await db.get(CreatorTrendResult, account_id)
         niche_payload = result.niche.model_dump(mode="python") if hasattr(result.niche, "model_dump") else {}
@@ -579,6 +483,7 @@ async def refresh_trends(
                 content_gaps_json=content_gaps_payload,
                 daily_insights_json=daily_insights_payload,
                 opportunity_bullets_json=opportunity_bullets_payload,
+                dismissed_content_opportunities_json=[],
             )
             db.add(new_row)
         else:
@@ -605,7 +510,41 @@ async def refresh_trends(
         }
         return payload
 
-    return result
+    return _without_dismissed_opportunities(
+        result,
+        existing.dismissed_content_opportunities_json if existing is not None else [],
+    )
+
+
+@router.post("/{account_id}/trends/opportunities/{opportunity_id}/dismiss")
+async def dismiss_content_opportunity(account_id: str, opportunity_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    row = await db.get(CreatorTrendResult, account_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Trend analysis not found")
+    opportunity_ids = {
+        str(opportunity.get("id")) for opportunity in (row.content_gaps_json or [])
+        if isinstance(opportunity, dict) and isinstance(opportunity.get("id"), str)
+    }
+    if opportunity_id not in opportunity_ids:
+        raise HTTPException(status_code=404, detail="Content opportunity not found")
+    ids = [value for value in (row.dismissed_content_opportunities_json or []) if isinstance(value, str)]
+    if opportunity_id not in ids:
+        ids.append(opportunity_id)
+        row.dismissed_content_opportunities_json = ids
+        await db.commit()
+    return {"dismissed": True, "opportunity_id": opportunity_id}
+
+
+@router.delete("/{account_id}/trends/opportunities/{opportunity_id}/dismiss")
+async def restore_content_opportunity(account_id: str, opportunity_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    row = await db.get(CreatorTrendResult, account_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Trend analysis not found")
+    row.dismissed_content_opportunities_json = [
+        value for value in (row.dismissed_content_opportunities_json or []) if value != opportunity_id
+    ]
+    await db.commit()
+    return {"restored": True, "opportunity_id": opportunity_id}
 
 @router.get("/{account_id}/trends/job/{job_id}")
 async def get_trend_job_status(

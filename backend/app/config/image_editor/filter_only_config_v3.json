@@ -1,0 +1,263 @@
+{
+  "config_key": "global-filter-only",
+  "config_version": "3.0.0-filter-only",
+  "mode": "filter-only",
+  "base_prompt": [
+    "Apply a photographic color filter to the uploaded image without changing its visual content.",
+    "Treat the uploaded image as immutable source geometry and the only source of image content.",
+    "Preserve the exact background and every existing person, face, body, hand, hair strand, expression, pose, garment, accessory, product, object, text, logo, shadow, reflection, and environmental detail.",
+    "Do not add, remove, replace, redraw, reconstruct, move, resize, reshape, beautify, retouch, repair, inpaint, outpaint, or regenerate any image element.",
+    "Only apply global color temperature, tint, exposure, contrast, highlights, shadows, saturation, vibrance, luminance curve, grain, vignette, bloom, and global sharpness adjustments."
+  ],
+  "styles": [
+    {
+      "id": "lofi-dusk",
+      "label": "Lofi Dusk",
+      "description": "Warm natural skin, soft shadows, relaxed evening warmth.",
+      "popular": true,
+      "filter_only_compatible": true,
+      "native_filter_profile": {
+        "temperature": 18,
+        "tint": 3,
+        "exposure": 0,
+        "contrast": -3,
+        "highlights": -12,
+        "shadows": 8,
+        "saturation": 5,
+        "vibrance": 8,
+        "fade": 8,
+        "grain": 14,
+        "vignette": 0,
+        "sharpness": -2,
+        "monochrome": false
+      }
+    },
+    {
+      "id": "clean-studio",
+      "label": "Clean Studio",
+      "description": "Neutral and bright with crisp product clarity.",
+      "popular": true,
+      "filter_only_compatible": true,
+      "native_filter_profile": {
+        "temperature": 2,
+        "tint": 0,
+        "exposure": 0,
+        "contrast": 3,
+        "highlights": -8,
+        "shadows": 6,
+        "saturation": -2,
+        "vibrance": 4,
+        "fade": 0,
+        "grain": 0,
+        "vignette": 0,
+        "sharpness": 6,
+        "monochrome": false
+      }
+    },
+    {
+      "id": "luxury-brand",
+      "label": "Luxury Brand",
+      "description": "Premium contrast with moody upscale tones.",
+      "popular": true,
+      "filter_only_compatible": true,
+      "native_filter_profile": {
+        "temperature": 0,
+        "tint": 0,
+        "exposure": 0,
+        "contrast": 10,
+        "highlights": -10,
+        "shadows": -4,
+        "saturation": -4,
+        "vibrance": 3,
+        "fade": 0,
+        "grain": 0,
+        "vignette": 5,
+        "sharpness": 4,
+        "monochrome": false
+      }
+    },
+    {
+      "id": "viral-instagram",
+      "label": "Viral Instagram",
+      "description": "Loud color and high-energy trend-forward finish.",
+      "popular": true,
+      "filter_only_compatible": true,
+      "native_filter_profile": {
+        "temperature": 0,
+        "tint": 0,
+        "exposure": 2,
+        "contrast": 8,
+        "highlights": -2,
+        "shadows": 4,
+        "saturation": 10,
+        "vibrance": 12,
+        "fade": 0,
+        "grain": 3,
+        "vignette": 2,
+        "sharpness": 4,
+        "monochrome": false
+      }
+    },
+    {
+      "id": "travel-aesthetic",
+      "label": "Travel Aesthetic",
+      "description": "Golden-hour treatment with scenic pop.",
+      "popular": true,
+      "filter_only_compatible": true,
+      "native_filter_profile": {
+        "temperature": 12,
+        "tint": 2,
+        "exposure": 1,
+        "contrast": 5,
+        "highlights": -10,
+        "shadows": 6,
+        "saturation": 4,
+        "vibrance": 9,
+        "fade": 3,
+        "grain": 4,
+        "vignette": 2,
+        "sharpness": 2,
+        "monochrome": false
+      }
+    }
+  ],
+  "edit_intensity": [
+    {
+      "id": "subtle",
+      "label": "Subtle",
+      "value": 25,
+      "scope": "global-filter-strength-only"
+    },
+    {
+      "id": "balanced",
+      "label": "Balanced",
+      "value": 50,
+      "scope": "global-filter-strength-only"
+    },
+    {
+      "id": "strong",
+      "label": "Strong",
+      "value": 75,
+      "scope": "global-filter-strength-only"
+    },
+    {
+      "id": "cinematic",
+      "label": "Cinematic",
+      "value": 90,
+      "scope": "global-filter-strength-only"
+    }
+  ],
+  "quality_presets": [
+    {
+      "id": "draft",
+      "label": "Draft",
+      "quality": "low",
+      "output_format": "jpeg",
+      "output_compression": 82
+    },
+    {
+      "id": "standard",
+      "label": "Standard",
+      "quality": "medium",
+      "output_format": "jpeg",
+      "output_compression": 90
+    },
+    {
+      "id": "final",
+      "label": "Final",
+      "quality": "high",
+      "output_format": "png"
+    }
+  ],
+  "controls": [
+    {
+      "id": "white-balance",
+      "label": "White Balance",
+      "enabled": true,
+      "visible_in_filter_only_mode": true,
+      "filter_only_compatible": true,
+      "operation_type": "global-filter-adjustment"
+    },
+    {
+      "id": "film-grain",
+      "label": "Film Grain",
+      "enabled": true,
+      "visible_in_filter_only_mode": true,
+      "filter_only_compatible": true,
+      "operation_type": "global-filter-adjustment"
+    },
+    {
+      "id": "subtle-vignette",
+      "label": "Subtle Vignette",
+      "enabled": true,
+      "visible_in_filter_only_mode": true,
+      "filter_only_compatible": true,
+      "operation_type": "global-filter-adjustment"
+    }
+  ],
+  "allowed_operations": [
+    "global-color-temperature",
+    "global-tint",
+    "global-exposure",
+    "global-contrast",
+    "global-highlights",
+    "global-shadows",
+    "global-saturation",
+    "global-vibrance",
+    "global-luminance-curve",
+    "uniform-film-grain",
+    "uniform-vignette",
+    "uniform-bloom",
+    "mild-global-sharpening"
+  ],
+  "forbidden_operations": [
+    "background-removal",
+    "background-replacement",
+    "background-blur",
+    "object-removal",
+    "object-addition",
+    "inpainting",
+    "outpainting",
+    "canvas-expansion",
+    "cropping",
+    "reframing",
+    "perspective-change",
+    "camera-angle-change",
+    "depth-of-field-change",
+    "face-retouching",
+    "skin-retouching",
+    "body-reshaping",
+    "local-relighting",
+    "person-addition",
+    "person-removal"
+  ],
+  "generation_policy": {
+    "source_asset_strategy": "immutable-original",
+    "regenerate_from": "original_asset",
+    "deduplicate_identical_requests": true,
+    "backend_only_api_call": true,
+    "strict_filter_only": true,
+    "default_processing_engine": "native-gpu-filter"
+  },
+  "processing_policy": {
+    "strict_pixel_geometry_preservation": true,
+    "default_engine": "native-gpu-filter",
+    "preserve_source_dimensions": true,
+    "preserve_source_aspect_ratio": true,
+    "preserve_source_crop": true,
+    "allow_ai_reconstruction": false
+  },
+  "validation": {
+    "reject_when": [
+      "Any selected control is not filter_only_compatible.",
+      "Any request asks to add, remove, replace, move, reconstruct, repair, blur, or regenerate image content.",
+      "The processing engine is generative while strict filter-only mode is active.",
+      "The output dimensions differ from the source dimensions in strict filter-only mode."
+    ],
+    "post_process_assertions": [
+      "Output width equals source width.",
+      "Output height equals source height.",
+      "Only approved global filter parameters were applied."
+    ]
+  }
+}

@@ -81,7 +81,7 @@ ACCOUNT_ANALYSIS_RATE_TTL_SECONDS = 3600
 ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR = 3
 
 _store = RedisJobStore(ACCOUNT_ANALYSIS_JOB_KEY_PREFIX, ACCOUNT_ANALYSIS_STATUS_TTL_SECONDS)
-_ACCOUNT_EXTRA_STATUS_FIELDS: dict = {"progress": None, "warnings": [], "quality": None}
+_ACCOUNT_EXTRA_STATUS_FIELDS: dict = {"account_id": None, "progress": None, "warnings": [], "quality": None}
 ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS = max(900, DEFAULT_JOB_TIMEOUT_SECONDS + 300)
 ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS = max(1800, DEFAULT_JOB_TIMEOUT_SECONDS * 2)
 
@@ -601,6 +601,9 @@ def _enqueue_account_analysis_job_impl(
             )
         # Write Redis state only after the transport has accepted the job.
         initialize_job_status(job_id)
+        # Persist ownership with the job so polling can be authorized without
+        # trusting a client-supplied account id.
+        _update_status(job_id, account_id=account_id)
         _write_dedupe_job_id(account_id, post_limit, job_id)
         _write_inputhash_job_id(account_id, payload_hash, job_id)
         logger.debug(

@@ -50,7 +50,7 @@ def _require_post_analysis_api_key_if_configured(
 
     expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
     if not expected_api_key:
-        return None
+        raise HTTPException(status_code=503, detail="Post analysis is unavailable until service authentication is configured.")
     return verify_api_key(x_api_key)
 
 
@@ -451,24 +451,11 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
 async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
     """Enqueue single-post analysis as a background job."""
     payload = request.model_dump(mode="python")
-    enqueue_error: Exception | None = None
     try:
         return await enqueue_single_post_analysis_job_async(payload)
     except Exception as exc:
-        enqueue_error = exc
-        logger.exception("[SinglePostJob] Failed to enqueue single-post analysis job; falling back to inline run: %s", exc)
-        try:
-            return await run_single_post_analysis_inline(payload)
-        except Exception as inline_exc:
-            logger.exception("[SinglePostJob] Inline fallback also failed: %s", inline_exc)
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "message": "Failed to start single post analysis.",
-                    "enqueue_error": str(enqueue_error) if enqueue_error is not None else None,
-                    "inline_error": str(inline_exc),
-                },
-            ) from inline_exc
+        logger.exception("[SinglePostJob] Failed to enqueue single-post analysis job: %s", exc)
+        raise HTTPException(status_code=503, detail="Analysis queue is temporarily unavailable. Please try again shortly.") from exc
 
 
 @v1_router.get("/single-post-analysis/{job_id}", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])

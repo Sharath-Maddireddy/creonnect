@@ -58,7 +58,7 @@ class GlobalTrend(BaseModel):
 
     Attributes
     - topic_name: Human-readable name of the trend topic.
-    - trend_type: The axis of the trend (topic, format, audio, hashtag).
+    - trend_type: The axis of the trend (topic, format, hashtag).
     - momentum: Current momentum stage (rising, peaking, falling).
     - description: Brief summary of the trend and why it matters.
     - example_reference: Optional pointer (URL, post id, or short text) illustrating the trend.
@@ -76,7 +76,7 @@ class GlobalTrend(BaseModel):
         ...,
         description=(
             "Type of trend; one of: 'topic' (subject matter), 'format' (video structure), "
-            "'audio' (sound/music), or 'hashtag' (tag-driven trend). This helps determine "
+            "or 'hashtag' (tag-driven trend). This helps determine "
             "how to apply the trend in recommendations."
         ),
     )
@@ -130,7 +130,8 @@ class TrendRecommendation(BaseModel):
     - expected_reach_min: Lower bound of expected reach range.
     - expected_reach_max: Upper bound of expected reach range.
     - best_time: Suggested posting time (e.g., "Thu, 8:30 PM").
-    - difficulty: Content creation difficulty level.
+    - difficulty: Execution effort level retained under its original API field name.
+    - effort_reason: Evidence explaining the execution effort estimate.
     - hook: Suggested opening hook text for the content.
     - content_style: Richer content type label (e.g., "Storytelling", "Educational").
     """
@@ -201,9 +202,14 @@ class TrendRecommendation(BaseModel):
     difficulty: Optional[str] = Field(
         None,
         description=(
-            "Content creation difficulty level: 'Easy', 'Medium', or 'Hard'. "
-            "Derived from trend type and content complexity."
+            "Execution effort level: 'Quick', 'Planned', or 'Production-heavy'. "
+            "The field name is retained for backwards-compatible API responses."
         ),
+    )
+
+    effort_reason: Optional[str] = Field(
+        None,
+        description="Evidence explaining the estimated execution effort for this recommendation.",
     )
 
     hook: Optional[str] = Field(
@@ -255,7 +261,12 @@ class TrendRecommendation(BaseModel):
 
 
 class ContentGap(BaseModel):
-    """A detected gap in the creator's content strategy."""
+    """An evidence-backed content opportunity for the creator."""
+
+    id: Optional[str] = Field(
+        None,
+        description="Stable identifier for dismissing or restoring this opportunity.",
+    )
 
     description: str = Field(
         ...,
@@ -272,6 +283,18 @@ class ContentGap(BaseModel):
         description="Optional suggested action to address this gap.",
     )
 
+    evidence: Optional[str] = Field(
+        None,
+        description="Recent-content evidence supporting this opportunity.",
+    )
+
+    priority_score: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=100.0,
+        description="0-100 estimate of the opportunity's relevance and likely upside.",
+    )
+
 
 class DailyInsights(BaseModel):
     """Today's key insights for the creator."""
@@ -284,12 +307,6 @@ class DailyInsights(BaseModel):
     best_content_type: Optional[str] = Field(
         None,
         description="Best performing content type today (e.g., 'Reels').",
-    )
-
-    trending_audio_count: Optional[int] = Field(
-        None,
-        ge=0,
-        description="Number of trending audio tracks relevant to the creator's niche.",
     )
 
     competition_level: Optional[str] = Field(
@@ -351,7 +368,7 @@ class TrendingTopicDetail(BaseModel):
 
     id: str = Field(..., description="Stable topic row identifier.")
     topic_name: str = Field(..., description="Human-readable topic name.")
-    trend_type: str = Field(..., description="Topic, format, hashtag, or audio-derived classification.")
+    trend_type: str = Field(..., description="Topic, format, or hashtag classification.")
     momentum: str = Field(..., description="Current momentum stage.")
     audience_match_pct: int = Field(..., ge=0, le=100, description="Audience fit percentage for this creator.")
     growth_pct: int = Field(..., description="Derived growth percentage for the topic.")
@@ -359,19 +376,6 @@ class TrendingTopicDetail(BaseModel):
     description: str = Field(..., description="What the trend is and why it matters.")
     why_it_fits: str = Field(..., description="Why this topic fits the current creator.")
     example_reference: str | None = Field(default=None, description="Optional example reference for the topic.")
-
-
-class TrendingAudioDetail(BaseModel):
-    """Detailed audio trend row for sidebar and audio discovery views."""
-
-    id: str = Field(..., description="Stable audio row identifier.")
-    audio_name: str = Field(..., description="Display name of the relevant audio trend.")
-    momentum: str = Field(..., description="Current momentum stage.")
-    growth_pct: int = Field(..., description="Derived usage-growth percentage for the audio trend.")
-    audience_match_pct: int = Field(..., ge=0, le=100, description="Audience fit percentage for this creator.")
-    fit_reason: str = Field(..., description="Why this audio trend fits the creator.")
-    suggested_angle: str = Field(..., description="Suggested content angle using this audio trend.")
-    example_reference: str | None = Field(default=None, description="Optional example reference for the audio trend.")
 
 
 class TrendAnalysisResult(BaseModel):
@@ -422,7 +426,7 @@ class TrendAnalysisResult(BaseModel):
         None,
         description=(
             "Today's key insights for the creator, including active audience window, "
-            "best content type, trending audio count, and competition level."
+            "best content type, and competition level."
         ),
     )
 
@@ -450,6 +454,5 @@ __all__ = [
     "WeeklyOpportunity",
     "ResolvedAccount",
     "TrendingTopicDetail",
-    "TrendingAudioDetail",
     "TrendAnalysisResult",
 ]

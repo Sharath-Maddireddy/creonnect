@@ -12,8 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.infra.database import get_db
 from backend.app.infra.models import IdeaGenerationJob
+from backend.app.api.auth import verify_api_key
 
-router = APIRouter(prefix="/api/v1/monitoring", tags=["monitoring"])
+router = APIRouter(
+    prefix="/api/v1/monitoring",
+    tags=["monitoring"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 @router.get("/trends/health")

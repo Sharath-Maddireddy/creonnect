@@ -16,6 +16,7 @@ load_app_env(override=True)
 
 from backend.app.api.account_analysis_routes import router as account_analysis_router
 from backend.app.api.content_suggestion_routes import router as content_suggestion_router
+from backend.app.api.image_editor_routes import router as image_editor_router
 from backend.app.api.monitoring_routes import router as monitoring_router
 from backend.app.api.advanced_analysis_routes import router as advanced_analysis_router
 from backend.app.api.campaign_routes import router as campaign_router
@@ -109,7 +110,7 @@ async def _app_lifespan(_app: FastAPI):
     _app.state.vision_enabled = vision_enabled
     logger.info("vision_enabled=%s", vision_enabled)
     initialize_database_engines()
-    await init_db()
+    await init_db(strict=is_production_environment())
     await start_grpc_analysis_server()
     yield
     await stop_grpc_analysis_server()
@@ -149,6 +150,7 @@ app.include_router(instagram_auth_router)
 app.include_router(trend_router)
 app.include_router(creo_intelligence_router)
 app.include_router(content_suggestion_router)
+app.include_router(image_editor_router)
 app.include_router(monitoring_router)
 
 # Dev-only: session bypass for testing without Instagram OAuth

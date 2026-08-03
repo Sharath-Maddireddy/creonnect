@@ -10,6 +10,7 @@ recommendation includes a clear rationale explaining why the trend fits the crea
 """
 
 import asyncio
+import hashlib
 from typing import List
 
 from backend.app.ai.llm_client import LLMClient
@@ -69,7 +70,7 @@ def _classify_format_family(
         return "carousel"
     if any(term in content_text for term in ("photo", "static post", "single image", "lookbook", "image post")):
         return "photo"
-    if trend and trend.trend_type in {"format", "audio"}:
+    if trend and trend.trend_type == "format":
         return "reel"
     if any(term in content_text for term in ("reel", "video", "short-form", "grwm", "day in the life", "pov")):
         return "reel"
@@ -133,9 +134,9 @@ def _classify_creator_level(
         if isinstance(part, str) and part.strip()
     ).lower()
 
-    if difficulty_value == "easy":
+    if difficulty_value in {"easy", "quick"}:
         return "beginner"
-    if difficulty_value == "hard":
+    if difficulty_value in {"hard", "production-heavy"}:
         return "advanced"
     if any(term in content_text for term in ("deep dive", "research", "analysis", "framework", "breakdown", "multi-step")):
         return "advanced"
@@ -152,7 +153,6 @@ _MOMENTUM_SCORES: dict[str, float] = {
 
 _TREND_TYPE_SCORES: dict[str, float] = {
     "format": 20.0,
-    "audio": 15.0,
     "topic": 12.0,
     "hashtag": 10.0,
 }
@@ -182,7 +182,7 @@ def _compute_opportunity_score(
     Factors:
     - Trend momentum (0-40): rising=30, peaking=40, falling=10
     - Niche fit (0-30): how well trend matches creator's category
-    - Content type match (0-20): format/audio trends score higher for video creators
+    - Content type match (0-20): format trends score higher for video creators
     - Recency boost (0-10): based on post frequency
     """
     # Momentum component (0-40)
@@ -226,14 +226,14 @@ def _compute_opportunity_score(
 
     # Content type match component (0-20)
     type_score = _TREND_TYPE_SCORES.get(trend.trend_type, 10.0)
-    # Boost format/audio for video-heavy creators
+    # Boost formats for video-heavy creators.
     if posts:
         video_count = sum(
             1 for p in posts
             if (getattr(p, "media_type", "") or "").upper() in ("REEL", "VIDEO")
         )
         if video_count > len(posts) * 0.5:
-            if trend.trend_type in ("format", "audio"):
+            if trend.trend_type == "format":
                 type_score = min(20.0, type_score + 5.0)
 
     # Recency component (0-10)
@@ -303,42 +303,77 @@ def _derive_best_time(heatmap: list[HeatmapData]) -> str | None:
     return f"{day_names[best.day_of_week]}, {display_hour}:00 {period}"
 
 
-def _compute_difficulty(
+def _compute_execution_effort(
     trend: GlobalTrend,
     posts: list[SinglePostInsights] | None = None,
-) -> str:
-    """Compute content creation difficulty based on trend type and complexity."""
-    # Format trends are generally easier (follow a template)
-    if trend.trend_type == "format":
-        return "Easy"
+) -> tuple[str, str]:
+    """Estimate execution effort from the proposed format and production requirements."""
+    description = " ".join((trend.topic_name or "", trend.description or "")).lower()
+    format_family = _classify_format_family(trend, None)
+    media_type_by_family = {"reel": "REEL", "carousel": "CAROUSEL", "photo": "IMAGE"}
+    familiar_count = sum(
+        1
+        for post in posts or []
+        if (getattr(post, "media_type", "") or "").strip().upper()
+        == media_type_by_family[format_family]
+    )
 
-    # Audio trends require production effort
-    if trend.trend_type == "audio":
-        return "Hard"
+    production_terms = (
+        "deep dive", "research", "analysis", "tutorial", "how-to", "interview",
+        "case study", "comparison", "multi-step", "multi step", "b-roll", "b roll",
+    )
+    quick_terms = ("quick", "simple", "casual", "template", "prompt", "short")
+    if format_family == "carousel" or any(term in description for term in production_terms):
+        return (
+            "Production-heavy",
+            "This angle needs structured research, multiple assets, or a slide-by-slide explanation.",
+        )
+    if trend.trend_type == "format" or trend.trend_type == "hashtag" or any(
+        term in description for term in quick_terms
+    ):
+        familiarity = (
+            f" You have used this format in {familiar_count} recent posts."
+            if familiar_count
+            else " It can be created with a simple repeatable format."
+        )
+        return "Quick", f"This is a repeatable {format_family} format that can be produced quickly.{familiarity}"
+    return "Planned", "This needs a clear outline and a focused filming or design pass."
 
-    # Topic trends depend on depth
-    desc = (trend.description or "").lower()
-    if any(word in desc for word in ["deep dive", "research", "analysis", "tutorial", "how-to"]):
-        return "Hard"
-    if any(word in desc for word in ["quick", "simple", "easy", "casual"]):
-        return "Easy"
 
-    # Hashtag trends are moderate
-    if trend.trend_type == "hashtag":
-        return "Medium"
+def _explicit_trend_format_family(trend: GlobalTrend) -> str | None:
+    """Return a format only when the trend explicitly names one; never infer reels by default."""
+    text = f"{trend.topic_name} {trend.description}".lower()
+    if any(term in text for term in ("carousel", "slide", "slides", "swipe")):
+        return "carousel"
+    if any(term in text for term in ("photo", "static post", "single image", "lookbook", "image post")):
+        return "photo"
+    if trend.trend_type == "format" or any(term in text for term in ("reel", "video", "short-form", "pov", "day in the life")):
+        return "reel"
+    return None
 
-    return "Medium"
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    return ordered[midpoint] if len(ordered) % 2 else (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def _opportunity_id(kind: str) -> str:
+    value = kind.encode("utf-8")
+    return f"opportunity_{hashlib.sha256(value).hexdigest()[:16]}"
 
 
 def _detect_content_gaps(
     posts: list[SinglePostInsights],
     trends: list[GlobalTrend],
 ) -> list[ContentGap]:
-    """Detect gaps in the creator's content strategy."""
-    gaps: list[ContentGap] = []
+    """Return ranked, evidence-backed content opportunities from enough recent posts."""
+    if len(posts) < 5:
+        return []
 
-    if not posts:
-        return gaps
+    opportunities: list[ContentGap] = []
 
     # Check content type diversity
     type_counts: dict[str, int] = {}
@@ -348,28 +383,41 @@ def _detect_content_gaps(
             type_counts[mt] = type_counts.get(mt, 0) + 1
 
     total = len(posts)
-    for content_type in ["REEL", "CAROUSEL", "IMAGE"]:
+    trend_format_families = {family for trend in trends if (family := _explicit_trend_format_family(trend))}
+    type_definitions = {
+        "REEL": ("reel", "reel"),
+        "CAROUSEL": ("carousel", "carousel"),
+        "IMAGE": ("photo", "photo"),
+    }
+    for content_type, (label, family) in type_definitions.items():
         count = type_counts.get(content_type, 0)
         pct = (count / total * 100) if total > 0 else 0
-        if pct < 10 and count < 3:
-            gaps.append(ContentGap(
-                description=f"No {content_type.lower()} content posted recently",
-                severity="warning",
-                suggested_action=f"Consider posting {content_type.lower()} content to diversify",
+        if pct < 10 and count < 3 and family in trend_format_families:
+            matching_posts = [post for post in posts if (getattr(post, "media_type", "") or "").upper() == content_type]
+            baseline_posts = [post for post in posts if getattr(post, "derived_metrics", None)]
+            metric_names = ("engagement_rate", "save_rate", "share_rate")
+            baseline = sum(
+                _median([_safe_float(getattr(post.derived_metrics, metric, None)) or 0.0 for post in baseline_posts]) or 0.0
+                for metric in metric_names
+            )
+            format_performance = sum(
+                _median([_safe_float(getattr(post.derived_metrics, metric, None)) or 0.0 for post in matching_posts]) or 0.0
+                for metric in metric_names
+            )
+            momentum = max(({"peaking": 20.0, "rising": 15.0, "falling": 5.0}.get(trend.momentum, 10.0) for trend in trends if _explicit_trend_format_family(trend) == family), default=10.0)
+            performance_upside = 15.0 if not matching_posts else max(0.0, min(15.0, (baseline - format_performance) * 300.0))
+            priority = min(95.0, 45.0 + momentum + (15.0 if count == 0 else 7.0) + performance_upside)
+            evidence = f"Only {count} of your last {total} posts were {label}s ({pct:.0f}%)."
+            if baseline_posts:
+                evidence += " Priority reflects recent engagement, saves, and shares alongside active trend momentum."
+            opportunities.append(ContentGap(
+                id=_opportunity_id(f"format:{family}"),
+                description=f"Test a {label} format this week",
+                severity="opportunity",
+                suggested_action=f"Use a current trend to publish one focused {label} and compare saves and reach.",
+                evidence=evidence,
+                priority_score=priority,
             ))
-
-    # Check for face-to-camera content
-    face_to_camera = sum(
-        1 for p in posts
-        if any("face" in (getattr(s, "description", "") or "").lower()
-               for s in (getattr(p, "vision_analysis", None).signals if getattr(p, "vision_analysis", None) else []))
-    )
-    if face_to_camera == 0 and total >= 5:
-        gaps.append(ContentGap(
-            description="No face-to-camera reels recently",
-            severity="info",
-            suggested_action="Face-to-camera content often builds stronger audience connection",
-        ))
 
     # Check for trending format usage
     trend_types_used = set()
@@ -386,14 +434,25 @@ def _detect_content_gaps(
     for trend in trends:
         trending_types.add(trend.trend_type)
 
-    if "format" in trending_types and not trend_types_used.intersection({"pov", "storytime", "tutorial"}):
-        gaps.append(ContentGap(
-            description="Underutilized trending formats",
+    storytelling_formats = {
+        token
+        for trend in trends if trend.trend_type == "format"
+        for token in ("pov", "storytime", "tutorial")
+        if token in f"{trend.topic_name} {trend.description}".lower()
+    }
+    if storytelling_formats and not trend_types_used.intersection(storytelling_formats):
+        format_label = ", ".join(sorted(storytelling_formats))
+        evidence = f"None of your last {total} captions used POV, storytime, or tutorial framing."
+        opportunities.append(ContentGap(
+            id=_opportunity_id(f"storytelling:{format_label}"),
+            description=f"Try the active {format_label} format",
             severity="opportunity",
-            suggested_action="Try trending format styles this week",
+            suggested_action="Adapt one relevant POV, storytime, or tutorial structure to your niche this week.",
+            evidence=evidence,
+            priority_score=75.0,
         ))
 
-    return gaps
+    return sorted(opportunities, key=lambda opportunity: opportunity.priority_score or 0, reverse=True)
 
 
 def _compute_daily_insights(
@@ -421,9 +480,6 @@ def _compute_daily_insights(
     # Active window from heatmap
     active_window = _derive_best_time(heatmap) if heatmap else None
 
-    # Trending audio count
-    audio_count = sum(1 for t in trends if t.trend_type == "audio")
-
     # Competition level (based on number of rising trends)
     rising_count = sum(1 for t in trends if t.momentum == "rising")
     peaking_count = sum(1 for t in trends if t.momentum == "peaking")
@@ -447,7 +503,6 @@ def _compute_daily_insights(
     return DailyInsights(
         audience_active_window=active_window,
         best_content_type=best_type,
-        trending_audio_count=audio_count,
         competition_level=competition,
         overall_opportunity=overall,
     )
@@ -476,7 +531,6 @@ def _fallback_recommendations(
     for index, trend in enumerate(fallback_trends, start=1):
         title_prefix = {
             "format": "Try the format",
-            "audio": "Adapt the audio",
             "hashtag": "Test the hashtag",
             "topic": "Cover the topic",
         }.get(trend.trend_type, "Test the trend")
@@ -613,8 +667,12 @@ async def generate_trend_recommendations(
             # Best time
             best_time = _derive_best_time(heatmap) if heatmap else None
 
-            # Difficulty
-            difficulty = _compute_difficulty(matching_trend, posts) if matching_trend else "Medium"
+            # Execution effort is evidence-based; the field name remains backwards compatible.
+            difficulty, effort_reason = (
+                _compute_execution_effort(matching_trend, posts)
+                if matching_trend
+                else ("Planned", "This idea needs a short planning and production pass.")
+            )
             format_family = _classify_format_family(matching_trend, rec)
             angle_type = _classify_angle_type(matching_trend, rec)
             creator_level = _classify_creator_level(difficulty, matching_trend, rec)
@@ -632,6 +690,7 @@ async def generate_trend_recommendations(
                 expected_reach_max=reach_max,
                 best_time=best_time,
                 difficulty=difficulty,
+                effort_reason=effort_reason,
                 format_family=format_family,
                 angle_type=angle_type,
                 creator_level=creator_level,

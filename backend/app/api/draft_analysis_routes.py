@@ -25,7 +25,7 @@ def _require_draft_api_key_if_configured(
 
     expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
     if not expected_api_key:
-        return None
+        raise HTTPException(status_code=503, detail="Draft optimization is unavailable until service authentication is configured.")
     return verify_api_key(x_api_key)
 
 

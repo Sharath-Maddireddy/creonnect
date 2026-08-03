@@ -29,7 +29,6 @@ _TREND_TYPE_MAP: dict[str, str] = {
     "topic": "topic", "topical": "topic", "topical meme": "topic",
     "subject": "topic", "content topic": "topic",
     "format": "format", "video format": "format", "content format": "format", "style": "format",
-    "audio": "audio", "sound": "audio", "music": "audio", "trending audio": "audio",
     "hashtag": "hashtag", "challenge": "hashtag", "tag": "hashtag", "trend tag": "hashtag",
 }
 
@@ -78,10 +77,9 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
         "Object Notation, YAML-like indentation, no braces, no quotes). "
         "Use 2-space indentation for nesting and '-' for list items. "
         "Do not include markdown, commentary, or extra keys.\n\n"
-        "IMPORTANT: trend_type MUST be exactly one of: topic, format, audio, hashtag\n"
+        "IMPORTANT: trend_type MUST be exactly one of: topic, format, hashtag\n"
         "  topic   = subject-matter trends (e.g. mental health, AI tools)\n"
         "  format  = video structure trends (e.g. POV, day-in-life, talking head)\n"
-        "  audio   = sound/music trends (e.g. trending audio, voiceover styles)\n"
         "  hashtag = hashtag/challenge-driven trends (e.g. #75hard, #GlowUp)\n\n"
         "OUTPUT EXAMPLE (STRICT TOON ONLY):\n"
         "trends\n"
@@ -126,6 +124,11 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
         # Normalise trend_type and momentum for each parsed item
         results: list[GlobalTrend] = []
         for trend in trends_raw:
+            # Audio discovery is not supported without a verified provider;
+            # never relabel an audio response as a topic.
+            raw_type = str(trend.trend_type or "").lower().strip()
+            if raw_type in {"audio", "sound", "music", "trending audio"}:
+                continue
             trend.trend_type = _normalise_trend_type(trend.trend_type)
             trend.momentum = _normalise_momentum(trend.momentum)
             results.append(trend)

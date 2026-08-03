@@ -39,6 +39,38 @@ a {
   margin-bottom: 2rem;
 }
 
+.dashboard-header-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.dashboard-header-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0.85rem 1.2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(59, 130, 246, 0.18));
+  color: #ecfeff;
+  text-decoration: none;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.dashboard-header-link:hover,
+.dashboard-header-link:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 14px 28px rgba(8, 15, 27, 0.32);
+  outline: none;
+}
+
 .dashboard-header h1 {
   font-size: 2rem;
   font-weight: 700;
@@ -6619,3 +6651,486 @@ a {
     .cs-layout .cs-all-topics .cs-select { min-width: 0; flex: 1 1 140px; }
 }
 
+.image-editor-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(16, 185, 129, 0.16), transparent 30%),
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.18), transparent 34%),
+    linear-gradient(180deg, #090b10 0%, #0d1118 100%);
+}
+
+.image-editor-shell {
+  max-width: 1380px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.image-editor-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-bottom: 1.75rem;
+  padding: 1.75rem;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(140deg, rgba(12, 17, 27, 0.94), rgba(13, 20, 32, 0.98)),
+    radial-gradient(circle at top right, rgba(251, 191, 36, 0.14), transparent 35%);
+  box-shadow: 0 24px 70px rgba(3, 7, 18, 0.36);
+}
+
+.image-editor-kicker {
+  margin-bottom: 0.5rem;
+  color: #7dd3fc;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.image-editor-hero h1 {
+  font-size: clamp(2rem, 4vw, 3.4rem);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  max-width: 10ch;
+}
+
+.image-editor-subtitle {
+  max-width: 62ch;
+  margin-top: 0.95rem;
+  color: #cbd5e1;
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.image-editor-origin-card {
+  margin-top: 1rem;
+  max-width: 38rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.image-editor-origin-card__label {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: #7dd3fc;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.image-editor-origin-card strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 1rem;
+}
+
+.image-editor-origin-card p {
+  margin-top: 0.45rem;
+  color: #cbd5e1;
+  line-height: 1.55;
+}
+
+.image-editor-hero-actions {
+  flex-shrink: 0;
+}
+
+.image-editor-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0.9rem 1.15rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f8fafc;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.image-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 430px) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.image-editor-panel {
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(17, 22, 33, 0.98), rgba(10, 14, 22, 0.98));
+  box-shadow: 0 24px 60px rgba(3, 7, 18, 0.28);
+}
+
+.image-editor-panel--controls {
+  padding: 1.4rem;
+  position: sticky;
+  top: 1rem;
+}
+
+.image-editor-panel--preview {
+  padding: 1.4rem;
+}
+
+.image-editor-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.image-editor-panel__header h2 {
+  font-size: 1.2rem;
+  margin-top: 0.25rem;
+}
+
+.image-editor-panel__eyebrow {
+  color: #94a3b8;
+  font-size: 0.74rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.image-editor-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.image-editor-badge {
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.image-editor-badge--muted {
+  background: rgba(148, 163, 184, 0.13);
+  color: #cbd5e1;
+}
+
+.image-editor-upload,
+.image-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.image-editor-upload span,
+.image-editor-field label {
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.image-editor-upload input,
+.image-editor-field select {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(9, 13, 21, 0.94);
+  color: #f8fafc;
+  padding: 0.95rem 1rem;
+  font-size: 0.95rem;
+}
+
+.image-editor-upload strong {
+  color: #f8fafc;
+  font-size: 0.95rem;
+}
+
+.image-editor-upload small,
+.image-editor-field p {
+  color: #94a3b8;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.image-editor-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.image-editor-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.image-editor-control-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+  font-size: 0.86rem;
+}
+
+.image-editor-control-chip input {
+  accent-color: #10b981;
+}
+
+.image-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin-top: 1.25rem;
+}
+
+.image-editor-mode-tabs {
+    display: flex;
+    gap: 8px;
+    margin: 18px 0;
+    padding: 5px;
+    border: 1px solid rgba(41, 55, 50, 0.15);
+    border-radius: 999px;
+    background: rgba(41, 55, 50, 0.05);
+}
+
+.image-editor-mode-tabs button {
+    flex: 1;
+    border: 0;
+    border-radius: 999px;
+    padding: 10px 14px;
+    color: #52645b;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+}
+
+.image-editor-mode-tabs button.is-active {
+    color: #fffdf7;
+    background: #293732;
+}
+
+.image-editor-ai-box {
+    margin-bottom: 18px;
+    padding: 16px;
+    border: 1px solid rgba(191, 102, 55, 0.35);
+    border-radius: 18px;
+    background: rgba(255, 244, 229, 0.75);
+}
+
+.image-editor-ai-box textarea {
+    width: 100%;
+    resize: vertical;
+    border: 1px solid rgba(41, 55, 50, 0.18);
+    border-radius: 12px;
+    padding: 12px;
+    color: #293732;
+    background: #fffdf7;
+    font: inherit;
+}
+
+.image-editor-ai-description {
+    margin: 0 0 14px;
+    color: #6d4e38;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.image-editor-button {
+  min-height: 46px;
+  padding: 0.95rem 1.15rem;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease, box-shadow 0.18s ease;
+}
+
+.image-editor-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.image-editor-button--primary {
+  background: linear-gradient(135deg, #10b981, #0ea5e9);
+  color: #04111a;
+  box-shadow: 0 18px 34px rgba(14, 165, 233, 0.2);
+}
+
+.image-editor-button--secondary {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f8fafc;
+}
+
+.image-editor-alert {
+  margin-top: 0.75rem;
+  padding: 0.9rem 1rem;
+  border-radius: 16px;
+  font-size: 0.92rem;
+}
+
+.image-editor-alert--error {
+  border: 1px solid rgba(248, 113, 113, 0.24);
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+}
+
+.image-editor-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.image-editor-preview-card,
+.image-editor-meta-card,
+.image-editor-guardrails {
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.image-editor-preview-card {
+  padding: 1rem;
+}
+
+.image-editor-preview-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+  color: #cbd5e1;
+}
+
+.image-editor-preview-card__header strong {
+  color: #f8fafc;
+  font-size: 0.85rem;
+}
+
+.image-editor-preview-frame {
+  min-height: 340px;
+  border-radius: 18px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(2, 6, 23, 0.95)),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 10px, transparent 10px 20px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-editor-preview-frame img {
+  width: 100%;
+  height: 100%;
+  min-height: 340px;
+  object-fit: contain;
+  display: block;
+}
+
+.image-editor-preview-empty {
+  padding: 2rem;
+  color: #94a3b8;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.image-editor-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin-top: 1rem;
+}
+
+.image-editor-meta-card {
+  padding: 1rem;
+}
+
+.image-editor-meta-card span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.image-editor-meta-card strong {
+  display: block;
+  margin-top: 0.55rem;
+  color: #f8fafc;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.image-editor-guardrails {
+  margin-top: 1rem;
+  padding: 1.15rem 1.2rem;
+}
+
+.image-editor-guardrails h3 {
+  margin-bottom: 0.8rem;
+  font-size: 1rem;
+}
+
+.image-editor-guardrails ul {
+  padding-left: 1.1rem;
+  color: #cbd5e1;
+  line-height: 1.7;
+}
+
+@media (max-width: 1080px) {
+  .image-editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .image-editor-panel--controls {
+    position: static;
+  }
+
+  .image-editor-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .dashboard,
+  .image-editor-shell {
+    padding: 1rem;
+  }
+
+  .image-editor-hero {
+    padding: 1.15rem;
+  }
+
+  .image-editor-preview-grid,
+  .image-editor-field-grid,
+  .image-editor-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .image-editor-preview-frame,
+  .image-editor-preview-frame img {
+    min-height: 260px;
+  }
+}
+
+/* Route chunks load independently; keep the transition readable on slower connections. */
+.app-page-loader {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background: #f8f9fd;
+  color: #1d2755;
+  font-weight: 600;
+}

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Literal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.domain.account_models import AccountHealthScore
@@ -16,9 +16,14 @@ from backend.app.services.account_analysis_jobs import (
     enqueue_account_analysis_job_async,
     get_account_analysis_job_status,
 )
+from backend.app.api.instagram_auth_routes import AuthenticatedInstagramUser, get_current_instagram_user
 
 
-router = APIRouter(prefix="/api", tags=["Account Analysis"])
+router = APIRouter(
+    prefix="/api",
+    tags=["Account Analysis"],
+    dependencies=[Depends(get_current_instagram_user)],
+)
 
 
 class AccountAnalysisRequest(BaseModel):
@@ -115,9 +120,15 @@ class AccountAnalysisStatusResponse(BaseModel):
 
 
 @router.post("/account-analysis", response_model=AccountAnalysisEnqueueResponse)
-async def enqueue_account_analysis(request: AccountAnalysisRequest) -> AccountAnalysisEnqueueResponse:
+async def enqueue_account_analysis(
+    request: AccountAnalysisRequest,
+    current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user),
+) -> AccountAnalysisEnqueueResponse:
     """Enqueue account analysis background job and return job_id."""
     payload = request.model_dump(mode="python")
+    if payload.get("account_id") and str(payload["account_id"]) != current_user.id:
+        raise HTTPException(status_code=403, detail="You are not allowed to analyze this account.")
+    payload["account_id"] = current_user.id
     try:
         response = await enqueue_account_analysis_job_async(payload)
         return AccountAnalysisEnqueueResponse.model_validate(response)
@@ -134,11 +145,18 @@ async def enqueue_account_analysis(request: AccountAnalysisRequest) -> AccountAn
 
 
 @router.get("/account-analysis/{job_id}", response_model=AccountAnalysisStatusResponse)
-def get_account_analysis_status(job_id: str) -> AccountAnalysisStatusResponse:
+def get_account_analysis_status(
+    job_id: str,
+    current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user),
+) -> AccountAnalysisStatusResponse:
     """Poll account analysis job status/result from Redis."""
     status = get_account_analysis_job_status(job_id)
     if status is None:
         raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
-    return AccountAnalysisStatusResponse.model_validate(status)
+    if str(status.get("account_id") or "") != current_user.id:
+        raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
+    response_payload = dict(status)
+    response_payload.pop("account_id", None)
+    return AccountAnalysisStatusResponse.model_validate(response_payload)
 
 AccountAnalysisStatusResponse.model_rebuild()

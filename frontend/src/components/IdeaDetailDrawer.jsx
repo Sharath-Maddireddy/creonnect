@@ -255,8 +255,11 @@ export default function IdeaDetailDrawer({ idea, accountUrl, onClose, onCopy, on
                         >
                             Generate Caption
                         </button>
-                        <button className="cs-btn cs-btn--ghost">
-                            Generate Thumbnail
+                        <button
+                            className="cs-btn cs-btn--ghost"
+                            onClick={() => onGenerate ? onGenerate('thumbnail', detail) : null}
+                        >
+                            Open Image Editor
                         </button>
                         <button
                             className="cs-btn cs-btn--icon"

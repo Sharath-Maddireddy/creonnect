@@ -27,7 +27,7 @@ def _require_reel_analysis_api_key_if_configured(
 
     expected_api_key = (os.getenv("BRAND_API_KEY") or "").strip()
     if not expected_api_key:
-        return None
+        raise HTTPException(status_code=503, detail="Reel analysis is unavailable until service authentication is configured.")
     return verify_api_key(x_api_key)
 
 
@@ -56,8 +56,8 @@ def enqueue_reel_analysis(request: ReelEnqueueRequest) -> dict[str, Any]:
         return enqueue_reel_analysis_job(request.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to enqueue: {exc}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to enqueue reel analysis.")
 
 
 @router.get("/jobs/{job_id}", dependencies=[Depends(_require_reel_analysis_api_key_if_configured)])

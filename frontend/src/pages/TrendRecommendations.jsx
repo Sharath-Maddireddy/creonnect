@@ -10,7 +10,6 @@ import SaveIdeaModal from '../components/SaveIdeaModal'
 import MoreOptionsMenu from '../components/MoreOptionsMenu'
 import IdeaDetailDrawer from '../components/IdeaDetailDrawer'
 import AllTrendingTopics from '../components/AllTrendingTopics'
-import AllTrendingAudio from '../components/AllTrendingAudio'
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 // All calls go through Vite proxy (/api → http://localhost:8000)
@@ -156,7 +155,6 @@ const MOMENTUM = {
 const TREND_TYPE = {
     topic:   { label: 'Topic',   icon: '💡', cls: 'topic'   },
     format:  { label: 'Format',  icon: '🎬', cls: 'format'  },
-    audio:   { label: 'Audio',   icon: '🎵', cls: 'audio'   },
     hashtag: { label: 'Hashtag', icon: '#️⃣',  cls: 'hashtag' },
 }
 const NAV_SECTIONS = [
@@ -360,7 +358,15 @@ function SuggestionCard({ trend, rec, index, onSaveIdea, onGenerate, onMoreOptio
     const m = MOMENTUM[trend?.momentum] || MOMENTUM.rising
     const t = TREND_TYPE[trend?.trend_type] || TREND_TYPE.topic
     const scoreVal = typeof rec?.opportunity_score === 'number' ? Math.round(rec.opportunity_score) : null
-    const difficultyMap = { Easy: { label: 'Easy', cls: 'easy' }, Medium: { label: 'Medium', cls: 'medium' }, Hard: { label: 'Hard', cls: 'hard' } }
+    const difficultyMap = {
+        Quick: { label: 'Quick', cls: 'easy' },
+        Planned: { label: 'Planned', cls: 'medium' },
+        'Production-heavy': { label: 'Production-heavy', cls: 'hard' },
+        // Saved results generated before the execution-effort update remain readable.
+        Easy: { label: 'Quick', cls: 'easy' },
+        Medium: { label: 'Planned', cls: 'medium' },
+        Hard: { label: 'Production-heavy', cls: 'hard' },
+    }
     const diff = difficultyMap[rec?.difficulty] || null
     const contentStyle = rec?.content_style || t.label
     return (
@@ -440,8 +446,9 @@ function SuggestionCard({ trend, rec, index, onSaveIdea, onGenerate, onMoreOptio
                 )}
                 {diff && (
                     <div className="cs-stat">
-                        <span className="cs-stat__label">Difficulty</span>
-                        <span className={`cs-stat__band cs-stat__band--${diff.cls}`}>{diff.label}</span>
+                        <span className="cs-stat__label">Execution Effort</span>
+                        <span className={`cs-stat__band cs-stat__band--${diff.cls}`} title={rec?.effort_reason || undefined}>{diff.label}</span>
+                        {rec?.effort_reason && <span className="cs-stat__impact">{rec.effort_reason}</span>}
                     </div>
                 )}
                 <div className="cs-stat">
@@ -473,9 +480,8 @@ function SuggestionCard({ trend, rec, index, onSaveIdea, onGenerate, onMoreOptio
 }
 
 // ─── Right Panel ──────────────────────────────────────────────────────────────
-function RightPanel({ niche, trends, data, trendingTopics, trendingAudio, onShowAllTrends, onShowAllAudio, onShowContentGaps, assistantPrompt, setAssistantPrompt, assistantReply, onAskAI }) {
+function RightPanel({ niche, trends, data, trendingTopics, contentGaps, onShowAllTrends, onShowContentGaps, onExploreOpportunity, onDismissOpportunity, assistantPrompt, setAssistantPrompt, assistantReply, onAskAI }) {
     const dailyInsights = data?.daily_insights
-    const contentGaps = data?.content_gaps || []
 
     return (
         <aside className="cs-right">
@@ -502,14 +508,6 @@ function RightPanel({ niche, trends, data, trendingTopics, trendingAudio, onShow
                             <div className="cs-insight-item">
                                 <span className="cs-insight-label">Best Content Type</span>
                                 <span className="cs-insight-value">{dailyInsights.best_content_type}</span>
-                            </div>
-                        )}
-                        {dailyInsights.trending_audio_count != null && (
-                            <div className="cs-insight-item">
-                                <span className="cs-insight-label">Trending Audio</span>
-                                <span className="cs-insight-value">
-                                    <span className="cs-insight-audio-icon">♪</span> {dailyInsights.trending_audio_count}
-                                </span>
                             </div>
                         )}
                     </div>
@@ -580,29 +578,6 @@ function RightPanel({ niche, trends, data, trendingTopics, trendingAudio, onShow
                 </div>
             )}
 
-            {/* Trending Audio */ }
-            {trendingAudio.length > 0 && (
-                <div className="cs-right-card">
-                    <div className="cs-right-card__header">
-                        <span className="cs-right-card__title">Trending Audio</span>
-                        <button className="cs-right-card__link" onClick={onShowAllAudio}>View All</button>
-                    </div>
-                    <div className="cs-gaps">
-                        {trendingAudio.slice(0, 3).map((audio, i) => (
-                            <div key={audio.id || `${audio.audio_name}-${i}`} className="cs-gap">
-                                <span className="cs-gap__icon cs-gap__icon--opportunity">♪</span>
-                                <div>
-                                    <div style={{ fontWeight: 600 }}>{audio.audio_name}</div>
-                                    <div className="cs-trending-item__match">
-                                        {audio.audience_match_pct}% match · {audio.momentum}
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
             {/* Trending Topics */}
             {trendingTopics.length > 0 && (
                 <div className="cs-right-card">
@@ -638,11 +613,11 @@ function RightPanel({ niche, trends, data, trendingTopics, trendingAudio, onShow
                 </div>
             )}
 
-            {/* Content Gaps — now from backend */}
+            {/* Evidence-backed opportunities from the recent content sample. */}
             {contentGaps.length > 0 && (
                 <div className="cs-right-card">
                     <div className="cs-right-card__header">
-                        <span className="cs-right-card__title">Content Gaps</span>
+                        <span className="cs-right-card__title">Content Opportunities</span>
                         <button className="cs-right-card__link" onClick={onShowContentGaps}>View All</button>
                     </div>
                     <div className="cs-gaps">
@@ -651,7 +626,14 @@ function RightPanel({ niche, trends, data, trendingTopics, trendingAudio, onShow
                                 <span className={`cs-gap__icon cs-gap__icon--${gap.severity || 'info'}`}>
                                     {gap.severity === 'warning' ? '⚠️' : gap.severity === 'opportunity' ? '💡' : 'ℹ️'}
                                 </span>
-                                <span>{gap.description}</span>
+                                <div>
+                                    <span>{gap.description}</span>
+                                    {gap.evidence && <div className="cs-trending-item__match">{gap.evidence}</div>}
+                                    <div>
+                                        <button className="cs-right-card__link" onClick={() => onExploreOpportunity(gap)}>Explore</button>
+                                        <button className="cs-right-card__link" onClick={() => onDismissOpportunity(gap)}>Not now</button>
+                                    </div>
+                                </div>
                             </div>
                         ))}
                     </div>
@@ -718,15 +700,14 @@ export default function TrendRecommendations() {
     const [assistantPrompt, setAssistantPrompt] = useState('')
     const [assistantReply, setAssistantReply] = useState('')
     const [showContentGaps, setShowContentGaps] = useState(false)
+    const [dismissedOpportunityKeys, setDismissedOpportunityKeys] = useState(() => new Set())
 
     // New modal states
     const [showGenerateModal, setShowGenerateModal] = useState(false)
     const [generationJob, setGenerationJob] = useState(null)
     const [generatedIdeas, setGeneratedIdeas] = useState([])
     const [trendTopics, setTrendTopics] = useState([])
-    const [trendAudio, setTrendAudio] = useState([])
     const [showAllTopics, setShowAllTopics] = useState(false)
-    const [showAllAudio, setShowAllAudio] = useState(false)
     const [seedTopic, setSeedTopic] = useState('')
     const [showScriptGen, setShowScriptGen] = useState(null) // { ideaId, title, hook }
     const [showCaptionGen, setShowCaptionGen] = useState(null) // { ideaId, title }
@@ -747,6 +728,10 @@ export default function TrendRecommendations() {
                         fetchExisting(storedUserId)
         }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => {
+        setDismissedOpportunityKeys(new Set())
+    }, [accountId])
 
     // triggerRefresh defined FIRST to avoid stale closure in fetchExisting
     const triggerRefresh = useCallback(async (id) => {
@@ -814,20 +799,18 @@ export default function TrendRecommendations() {
     useEffect(() => {
         if (!accountId || !data) {
             setTrendTopics([])
-            setTrendAudio([])
             return
         }
 
         let cancelled = false
         ;(async () => {
             try {
-                const [topicsRes, audioRes] = await Promise.all([
-                    fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/topics`, { credentials: 'include' }),
-                    fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/trends/audio`, { credentials: 'include' }),
-                ])
+                const topicsRes = await fetch(
+                    `/api/v1/accounts/${encodeURIComponent(accountId)}/trends/topics`,
+                    { credentials: 'include' }
+                )
 
                 const topicsJson = topicsRes.ok ? await topicsRes.json() : { topics: [] }
-                const audioJson = audioRes.ok ? await audioRes.json() : { audio_tracks: [] }
 
                 if (!cancelled) {
                     const topics = Array.isArray(topicsJson?.topics) ? topicsJson.topics : []
@@ -835,12 +818,10 @@ export default function TrendRecommendations() {
                         ...topic,
                         topic_name: topicDisplayName(topic, index),
                     })))
-                    setTrendAudio(Array.isArray(audioJson?.audio_tracks) ? audioJson.audio_tracks.slice(0, 3) : [])
                 }
             } catch (_) {
                 if (!cancelled) {
                     setTrendTopics([])
-                    setTrendAudio([])
                 }
             }
         })()
@@ -1088,6 +1069,19 @@ export default function TrendRecommendations() {
                     title: persistedIdea.title,
                     hook: persistedIdea.hook || idea?.hook || null,
                 })
+            } else if (kind === 'thumbnail') {
+                navigate('/image-editor', {
+                    state: {
+                        fromPath: '/trends',
+                        originLabel: 'Content Suggestions',
+                        sourceIdea: {
+                            id: persistedIdea.id,
+                            title: persistedIdea.title,
+                            hook: persistedIdea.hook || idea?.hook || null,
+                            contentType: persistedIdea.content_type || idea?.content_type || null,
+                        },
+                    },
+                })
             }
         } catch (e) {
             setError(e.message)
@@ -1113,6 +1107,30 @@ export default function TrendRecommendations() {
             setAssistantReply('The assistant is unavailable right now. Please try again shortly.')
             setError(e.message)
         }
+    }
+
+    function opportunityKey(gap) {
+        return gap?.id || `${gap?.description || ''}|${gap?.evidence || ''}`
+    }
+
+    async function handleDismissOpportunity(gap) {
+        const key = opportunityKey(gap)
+        if (!key || !accountId) return
+        try {
+            const response = await fetch(
+                `/api/v1/accounts/${encodeURIComponent(accountId)}/trends/opportunities/${encodeURIComponent(key)}/dismiss`,
+                { method: 'POST', credentials: 'include' }
+            )
+            if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || 'Could not dismiss opportunity')
+            setDismissedOpportunityKeys(current => new Set(current).add(key))
+        } catch (e) {
+            setError(e.message)
+        }
+    }
+
+    function handleExploreOpportunity(gap) {
+        setShowContentGaps(false)
+        handleAskAI(`Develop a concrete content idea for this opportunity: ${gap.description}. Evidence: ${gap.evidence || 'Based on recent content patterns.'} Suggested action: ${gap.suggested_action || 'Recommend the best next step.'}`)
     }
 
     // ── New handlers for content suggestion features ──
@@ -1157,13 +1175,6 @@ export default function TrendRecommendations() {
         const topicName = topic?.topic_name || topic?.name || ''
         setSeedTopic(topicName)
         setShowAllTopics(false)
-        setShowGenerateModal(true)
-    }
-
-    function handleUseAudio(audio) {
-        const audioName = audio?.audio_name || ''
-        setSeedTopic(audioName)
-        setShowAllAudio(false)
         setShowGenerateModal(true)
     }
 
@@ -1317,6 +1328,10 @@ export default function TrendRecommendations() {
         }
     }
 
+    const visibleContentGaps = (data?.content_gaps || []).filter(
+        gap => !dismissedOpportunityKeys.has(opportunityKey(gap))
+    )
+
     return (
         <>
             <div className="cs-layout">
@@ -1328,12 +1343,6 @@ export default function TrendRecommendations() {
                             accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
                             onClose={() => setShowAllTopics(false)}
                             onUseTopic={handleUseTopic}
-                        />
-                    ) : showAllAudio ? (
-                        <AllTrendingAudio
-                            accountUrl={`/api/v1/accounts/${encodeURIComponent(accountId)}`}
-                            onClose={() => setShowAllAudio(false)}
-                            onUseAudio={handleUseAudio}
                         />
                     ) : (
                         <>
@@ -1503,8 +1512,8 @@ export default function TrendRecommendations() {
                                         )}
                                         {idea.difficulty && (
                                             <div className="cs-stat">
-                                                <span className="cs-stat__label">Difficulty</span>
-                                                <span className="cs-stat__val">{idea.difficulty}</span>
+                                                <span className="cs-stat__label">Execution Effort</span>
+                                                <span className="cs-stat__val">{{ Easy: 'Quick', Medium: 'Planned', Hard: 'Production-heavy' }[idea.difficulty] || idea.difficulty}</span>
                                             </div>
                                         )}
                                     </div>
@@ -1572,14 +1581,13 @@ export default function TrendRecommendations() {
                                 trends={trends}
                                 data={data}
                                 trendingTopics={trendTopics}
-                                trendingAudio={trendAudio}
+                                contentGaps={visibleContentGaps}
                                 onShowAllTrends={() => {
                                     setShowAllTopics(true)
                                 }}
-                                onShowAllAudio={() => {
-                                    setShowAllAudio(true)
-                                }}
                                 onShowContentGaps={() => setShowContentGaps(true)}
+                                onExploreOpportunity={handleExploreOpportunity}
+                                onDismissOpportunity={handleDismissOpportunity}
                                 assistantPrompt={assistantPrompt}
                                 setAssistantPrompt={setAssistantPrompt}
                                 assistantReply={assistantReply}
@@ -1608,24 +1616,27 @@ export default function TrendRecommendations() {
                 <div className="cs-modal-backdrop" onClick={() => setShowContentGaps(false)}>
                     <div className="cs-modal" onClick={event => event.stopPropagation()}>
                         <div className="cs-modal__header">
-                            <h3>Content Gaps</h3>
+                            <h3>Content Opportunities</h3>
                             <button onClick={() => setShowContentGaps(false)}>×</button>
                         </div>
                         <div className="cs-modal__body text">
-                            {(data?.content_gaps || []).length > 0 ? (
-                                data.content_gaps.map((gap, i) => (
+                            {visibleContentGaps.length > 0 ? (
+                                visibleContentGaps.map((gap, i) => (
                                     <div key={i} className="cs-gap-detail">
                                         <span className={`cs-gap__icon cs-gap__icon--${gap.severity || 'info'}`}>
                                             {gap.severity === 'warning' ? '⚠️' : gap.severity === 'opportunity' ? '💡' : 'ℹ️'}
                                         </span>
                                         <div>
                                             <p><strong>{gap.description}</strong></p>
+                                            {gap.evidence && <p className="cs-gap-action">{gap.evidence}</p>}
                                             {gap.suggested_action && <p className="cs-gap-action">{gap.suggested_action}</p>}
+                                            <button className="cs-right-card__link" onClick={() => handleExploreOpportunity(gap)}>Explore with Assistant</button>
+                                            <button className="cs-right-card__link" onClick={() => handleDismissOpportunity(gap)}>Not now</button>
                                         </div>
                                     </div>
                                 ))
                             ) : (
-                                <p>No content gaps detected. Your content strategy looks well-balanced!</p>
+                                <p>There are no active content opportunities to show right now. Refresh the analysis after you publish more content.</p>
                             )}
                         </div>
                     </div>

@@ -106,6 +106,10 @@ def serialize_job_state(row: BackgroundJob) -> dict[str, Any]:
     return {
         "job_id": row.job_id,
         "status": row.status,
+        "queue_name": row.queue_name,
+        "job_name": row.job_name,
+        "account_id": row.account_id,
+        "source_ref": row.source_ref,
         "created_at": row.created_at.astimezone(timezone.utc).isoformat() if row.created_at else None,
         "started_at": row.started_at.astimezone(timezone.utc).isoformat() if row.started_at else None,
         "finished_at": row.finished_at.astimezone(timezone.utc).isoformat() if row.finished_at else None,

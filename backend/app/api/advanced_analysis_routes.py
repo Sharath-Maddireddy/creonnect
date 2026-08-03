@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.domain.account_models import (
@@ -16,9 +16,22 @@ from backend.app.domain.account_models import (
     RiskAssessment,
 )
 from backend.app.utils.logger import logger
+from backend.app.api.instagram_auth_routes import get_current_instagram_user
+from backend.app.api.rate_limiter import InMemoryRateLimiter
 
 
-router = APIRouter(prefix="/api/account-analysis", tags=["Advanced Analysis"])
+router = APIRouter(
+    prefix="/api/account-analysis",
+    tags=["Advanced Analysis"],
+    dependencies=[Depends(get_current_instagram_user)],
+)
+_rate_limiter = InMemoryRateLimiter(max_requests=20, window_seconds=60, redis_prefix="advanced_analysis")
+
+
+def _rate_limit_advanced_analysis(user=Depends(get_current_instagram_user)):
+    if _rate_limiter.check(user.id):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+    return user
 
 
 # ── Request/Response Models ───────────────────────────────────────────────────
@@ -59,7 +72,7 @@ class BrandReadinessRequest(BaseModel):
 
 
 @router.post("/revenue", response_model=RateRecommendation)
-async def calculate_revenue(request: RateCalculationRequest) -> RateRecommendation:
+async def calculate_revenue(request: RateCalculationRequest, _user=Depends(_rate_limit_advanced_analysis)) -> RateRecommendation:
     """Calculate rate recommendation based on performance metrics.
 
     Provides dynamic rate pricing with optimization tips and revenue projections.
@@ -90,7 +103,7 @@ async def calculate_revenue(request: RateCalculationRequest) -> RateRecommendati
 
 
 @router.post("/risks", response_model=RiskAssessment)
-async def assess_risks(request: RiskAssessmentRequest) -> RiskAssessment:
+async def assess_risks(request: RiskAssessmentRequest, _user=Depends(_rate_limit_advanced_analysis)) -> RiskAssessment:
     """Perform comprehensive risk assessment for an account.
 
     Identifies engagement declines, brand safety issues, and growth risks.
@@ -125,7 +138,7 @@ async def assess_risks(request: RiskAssessmentRequest) -> RiskAssessment:
 
 
 @router.post("/brand-readiness", response_model=BrandReadinessBreakdown)
-async def calculate_brand_readiness(request: BrandReadinessRequest) -> BrandReadinessBreakdown:
+async def calculate_brand_readiness(request: BrandReadinessRequest, _user=Depends(_rate_limit_advanced_analysis)) -> BrandReadinessBreakdown:
     """Calculate detailed brand readiness score with component breakdown.
 
     Provides scores for content quality, brand safety, engagement, consistency,
