@@ -91,6 +91,16 @@ function formatScoreOutOfHundred(value) {
     return `${value.toFixed(1)}/100`
 }
 
+function formatHealthBand(value) {
+    const labels = {
+        EXCEPTIONAL: 'Exceptional',
+        STRONG: 'Strong',
+        AVERAGE: 'Growing',
+        NEEDS_WORK: 'High Growth Potential'
+    }
+    return labels[value] || (typeof value === 'string' && value ? value : 'Unrated')
+}
+
 function formatBarScore(value, scale = 10) {
     if (typeof value !== 'number' || Number.isNaN(value)) {
         return '—'
@@ -310,7 +320,7 @@ function Dashboard() {
             label: formatPillarName(key),
             color: PILLAR_COLORS[key] || 'var(--accent-blue)',
             score: pillar?.score ?? 0,
-            band: pillar?.band || 'UNKNOWN',
+            band: formatHealthBand(pillar?.band),
             notes: Array.isArray(pillar?.notes) ? pillar.notes : []
         }))
     }, [accountHealth?.pillars])

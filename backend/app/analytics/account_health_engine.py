@@ -804,8 +804,15 @@ def _build_ai_summary(
         "AVERAGE": "Moderate",
         "NEEDS_WORK": "High Growth Potential",
     }
+    tier_map = {
+        "EXCEPTIONAL": "exceptional",
+        "STRONG": "strong",
+        "AVERAGE": "developing",
+        "NEEDS_WORK": "high-growth-potential",
+    }
+    tier_label = tier_map.get(ahs_band, "developing")
     text_summary = (
-        f"This account is in the '{ahs_band.lower().replace('_', ' ')}' tier — a strong signal that there's significant upside. "
+        f"This account is in the '{tier_label}' tier, with clear opportunities to build momentum. "
         f"Top content pillar is '{top_pillar}'. Best performing format is {top_content_type}. "
         f"Prioritise posting consistency, refine your hashtag mix, and double down on your top-performing content type to accelerate growth."
     )
@@ -973,7 +980,7 @@ def _derive_growth_stage(ahs_band: str) -> str:
         return "Growing"
     if ahs_band == "AVERAGE":
         return "Developing"
-    return "Needs Attention"
+    return "High Growth Potential"
 
 
 def _build_niche_benchmark(
