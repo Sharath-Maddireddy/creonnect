@@ -54,7 +54,7 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 
 def _score_to_band(score: float) -> str:
     if score < 40.0:
-        return "NEEDS_WORK"
+        return "BUILDING_MOMENTUM"
     if score < 60.0:
         return "AVERAGE"
     if score < 80.0:
@@ -802,13 +802,13 @@ def _build_ai_summary(
         "EXCEPTIONAL": "Very High",
         "STRONG": "High",
         "AVERAGE": "Moderate",
-        "NEEDS_WORK": "High Growth Potential",
+        "BUILDING_MOMENTUM": "High Growth Potential",
     }
     tier_map = {
         "EXCEPTIONAL": "exceptional",
         "STRONG": "strong",
         "AVERAGE": "developing",
-        "NEEDS_WORK": "high-growth-potential",
+        "BUILDING_MOMENTUM": "high-growth-potential",
     }
     tier_label = tier_map.get(ahs_band, "developing")
     text_summary = (

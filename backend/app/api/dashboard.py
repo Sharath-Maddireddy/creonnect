@@ -8,16 +8,31 @@ All computations are done server-side - frontend only plots.
 import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy import select
 
 from backend.app.api.auth import verify_api_key
 from backend.app.utils.env import is_production_environment
 from backend.app.infra.token_store import get_token
+from backend.app.infra.database import get_sync_sessionmaker
+from backend.app.infra.models import AccountAnalysisResult
 from backend.app.services.dashboard_service import build_creator_analytics_async, build_creator_dashboard_async
 from backend.app.services.script_service import generate_creator_script_service
 from backend.app.services.snapshot_service import build_creator_snapshot_service
 
 
 router = APIRouter(prefix="/api", tags=["Dashboard"])
+
+
+def _latest_account_analysis_quality(account_id: str) -> dict:
+    """Expose execution-quality metadata without returning a prior analysis result."""
+    with get_sync_sessionmaker()() as session:
+        row = session.execute(
+            select(AccountAnalysisResult)
+            .where(AccountAnalysisResult.account_id == account_id)
+            .order_by(AccountAnalysisResult.updated_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    return row.quality_json if row and isinstance(row.quality_json, dict) else {}
 
 
 def _require_dashboard_api_key_if_configured(
@@ -68,7 +83,9 @@ async def creator_analytics(user_id: str | None = None):
             token = get_token(user_id)
             if not token or not token.get("access_token"):
                 raise HTTPException(status_code=401, detail="Not authenticated")
-            return await build_creator_analytics_async("demo", access_token=token["access_token"])
+            payload = await build_creator_analytics_async("demo", access_token=token["access_token"])
+            payload["quality"] = _latest_account_analysis_quality(user_id)
+            return payload
         return await build_creator_analytics_async("demo")
     except ValueError:
         raise HTTPException(status_code=404, detail="Creator not found")

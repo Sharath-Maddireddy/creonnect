@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from backend.app.ai.cringe_analysis import build_cringe_section_for_brand_safety
 from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.api.auth import verify_api_key
+from backend.app.api.instagram_auth_routes import AuthenticatedInstagramUser, get_current_instagram_user
 from backend.app.utils.env import is_production_environment
 from backend.app.domain.post_models import SinglePostInsights, VisionAnalysis
 from backend.app.infra.redis_client import get_json, set_json
@@ -52,6 +53,13 @@ def _require_post_analysis_api_key_if_configured(
     if not expected_api_key:
         raise HTTPException(status_code=503, detail="Post analysis is unavailable until service authentication is configured.")
     return verify_api_key(x_api_key)
+
+
+def _request_for_current_user(request: "PostAnalysisRequest", current_user: AuthenticatedInstagramUser) -> "PostAnalysisRequest":
+    requested_account = request.account_id or request.creator_id
+    if requested_account and requested_account != current_user.id:
+        raise HTTPException(status_code=403, detail="You are not allowed to analyze another account.")
+    return request.model_copy(update={"account_id": current_user.id, "creator_id": current_user.id})
 
 
 class PostAnalysisRequest(BaseModel):
@@ -377,6 +385,7 @@ async def _analyze_single_post_inline(request: PostAnalysisRequest) -> dict[str,
     vision_payload = _vision_payload(post, ai_analysis)
     cringe_summary = _cringe_summary_from_vision(vision_payload)
     cringe_summary["vision_status"] = vision_payload.get("status", "error")
+    cringe_summary["account_id"] = request.account_id or request.creator_id
     _write_cringe_summary(str(post_payload["post_id"]), cringe_summary)
 
     score_analysis = ai_analysis.get("score_analysis")
@@ -399,13 +408,16 @@ async def _analyze_single_post_inline(request: PostAnalysisRequest) -> dict[str,
 
 @v1_router.post("/post-analysis", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 @legacy_router.post("/post-analysis", include_in_schema=False, dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
-async def post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
+async def post_analysis(
+    request: PostAnalysisRequest,
+    current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user),
+) -> dict[str, Any]:
     """Run single-post analysis and return deterministic normalized API payload."""
-    return await _analyze_single_post_inline(request)
+    return await _analyze_single_post_inline(_request_for_current_user(request, current_user))
 
 
 @v1_router.get("/posts/{post_id}/cringe-summary", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
-def post_cringe_summary(post_id: str) -> dict[str, Any]:
+def post_cringe_summary(post_id: str, current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user)) -> dict[str, Any]:
     """Return concise cringe summary for a previously analyzed post."""
     normalized_post_id = post_id.strip()
     if not normalized_post_id:
@@ -418,11 +430,13 @@ def post_cringe_summary(post_id: str) -> dict[str, Any]:
             status_code=404,
             detail="Cringe summary not found for post_id. Run /api/v1/post-analysis for this post first.",
         )
+    if payload.get("account_id") != current_user.id:
+        raise HTTPException(status_code=404, detail="Cringe summary not found for post_id.")
     return payload
 
 
 @v1_router.get("/posts/{post_id}/insights", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
-def get_post_insights(post_id: str) -> dict[str, Any]:
+def get_post_insights(post_id: str, current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user)) -> dict[str, Any]:
     """Return cached SinglePostInsights + ai_analysis payload for a previously analyzed post."""
     normalized_post_id = post_id.strip()
     if not normalized_post_id:
@@ -438,6 +452,8 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
     raw_post = payload.get("post")
     if not isinstance(raw_post, dict):
         raise HTTPException(status_code=500, detail="Cached post insights payload is invalid.")
+    if raw_post.get("account_id") != current_user.id:
+        raise HTTPException(status_code=404, detail="Post insights not found for post_id.")
 
     return {
         "status": "succeeded",
@@ -448,9 +464,12 @@ def get_post_insights(post_id: str) -> dict[str, Any]:
 
 @v1_router.post("/single-post-analysis", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 @legacy_router.post("/single-post-analysis", include_in_schema=False, dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
-async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str, Any]:
+async def enqueue_single_post_analysis(
+    request: PostAnalysisRequest,
+    current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user),
+) -> dict[str, Any]:
     """Enqueue single-post analysis as a background job."""
-    payload = request.model_dump(mode="python")
+    payload = _request_for_current_user(request, current_user).model_dump(mode="python")
     try:
         return await enqueue_single_post_analysis_job_async(payload)
     except Exception as exc:
@@ -460,10 +479,12 @@ async def enqueue_single_post_analysis(request: PostAnalysisRequest) -> dict[str
 
 @v1_router.get("/single-post-analysis/{job_id}", dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
 @legacy_router.get("/single-post-analysis/{job_id}", include_in_schema=False, dependencies=[Depends(_require_post_analysis_api_key_if_configured)])
-def get_single_post_analysis_status(job_id: str) -> dict[str, Any]:
+def get_single_post_analysis_status(job_id: str, current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user)) -> dict[str, Any]:
     """Poll single-post analysis background job status."""
     status = get_single_post_analysis_job_status(job_id)
     if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
+    if status.get("account_id") != current_user.id:
         raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
     return status
 

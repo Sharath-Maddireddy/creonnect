@@ -96,6 +96,7 @@ function formatHealthBand(value) {
         EXCEPTIONAL: 'Exceptional',
         STRONG: 'Strong',
         AVERAGE: 'Growing',
+        BUILDING_MOMENTUM: 'Building Momentum',
         NEEDS_WORK: 'High Growth Potential'
     }
     return labels[value] || (typeof value === 'string' && value ? value : 'Unrated')
@@ -216,7 +217,7 @@ function AccountHealthGauge({ score, band }) {
                 </div>
             </div>
             <p className="ai-gauge-band">{
-                ({ EXCEPTIONAL: '🏆 Exceptional', STRONG: '💪 Strong', AVERAGE: '📈 Growing', NEEDS_WORK: '🚀 High Potential' })[band] || (typeof band === 'string' && band ? band : 'Unrated')
+                ({ EXCEPTIONAL: '🏆 Exceptional', STRONG: '💪 Strong', AVERAGE: '📈 Growing', BUILDING_MOMENTUM: '🚀 Building Momentum', NEEDS_WORK: '🚀 High Potential' })[band] || (typeof band === 'string' && band ? band : 'Unrated')
             }</p>
         </div>
     )
@@ -293,6 +294,8 @@ function Dashboard() {
     const contentQualityBreakdown = data?.content_quality_breakdown || {}
     const creatorIntelligence = data?.creator_intelligence || {}
     const contentTypeBreakdown = data?.content_type_breakdown || {}
+    const analysisQuality = data?.quality || data?.account_health?.quality || {}
+    const hasLimitedAnalysis = Number(analysisQuality.vision_error_count || 0) > 0 || Number(analysisQuality.ai_fallback_count || 0) > 0
     const actionPlanItems = useMemo(() => ActionPlanItems(data?.action_plan), [data?.action_plan])
 
     // Color for growth score
@@ -458,7 +461,7 @@ function Dashboard() {
                 },
                 body: JSON.stringify({
                     post_id: post.post_id,
-                    creator_id: summary?.username || '',
+                    account_id: userId,
                     platform: 'instagram',
                     post_type: post.post_type || 'IMAGE',
                     media_url: post.media_url,
@@ -572,6 +575,11 @@ function Dashboard() {
                     <div>
                         <h3>Account Health Score</h3>
                         <p className="posts-feed-subtitle">Deterministic account-level read across quality, engagement, fit, consistency, and safety.</p>
+                        {hasLimitedAnalysis && (
+                            <p className="posts-feed-subtitle" style={{ color: '#a16207', marginTop: '0.4rem' }}>
+                                Limited analysis: some visual or AI signals were unavailable, so treat related insights as directional.
+                            </p>
+                        )}
                     </div>
                 </div>
 

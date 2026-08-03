@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-Band = Literal["NEEDS_WORK", "AVERAGE", "STRONG", "EXCEPTIONAL"]
+Band = Literal["BUILDING_MOMENTUM", "AVERAGE", "STRONG", "EXCEPTIONAL"]
 
 
 class DeterministicDriver(BaseModel):
@@ -64,7 +64,7 @@ class PillarScore(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     score: float = Field(default=0.0, ge=0.0, le=100.0)
-    band: Band = Field(default="NEEDS_WORK")
+    band: Band = Field(default="BUILDING_MOMENTUM")
     notes: list[str] = Field(default_factory=list)
 
     @field_validator("score", mode="before")
@@ -347,7 +347,7 @@ class AccountHealthScore(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ahs_score: float = Field(default=0.0, ge=0.0, le=100.0)
-    ahs_band: Band = Field(default="NEEDS_WORK")
+    ahs_band: Band = Field(default="BUILDING_MOMENTUM")
     pillars: dict[str, PillarScore] = Field(default_factory=dict)
     drivers: list[DeterministicDriver] = Field(default_factory=list)
     recommendations: list[DeterministicRecommendation] = Field(default_factory=list)

@@ -15,13 +15,13 @@ from backend.app.domain.post_models import SinglePostInsights
 from backend.app.domain.account_models import CreatorIntelligence
 from backend.app.domain.trend_models import ResolvedAccount, TrendAnalysisResult, TrendingTopicDetail
 from backend.app.infra.database import get_db
-from backend.app.api.instagram_auth_routes import require_current_account
+from backend.app.api.instagram_auth_routes import AuthenticatedInstagramUser, require_current_account
 from backend.app.infra.models import AccountAnalysisResult, CreatorDiscoveryMeta, CreatorTrendResult
 from backend.app.infra.redis_client import aincr_with_expire
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
 from backend.app.services.creator_trend_service import CreatorTrendService, attach_weekly_opportunity
 from backend.app.services.draft_history_service import DraftHistoryContext, load_draft_history_context
-from backend.app.services.trend_queue_helper import get_trend_analysis_job_status
+from backend.app.services.trend_queue_helper import enqueue_trend_analysis_job, get_trend_analysis_job_status
 from backend.app.utils.env import is_production_environment
 from backend.app.utils.logger import logger
 from backend.app.utils.telemetry import emit_counter, emit_histogram, timed
@@ -216,14 +216,17 @@ def _sort_items(
 async def resolve_account_query(
     query: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
+    current_user: AuthenticatedInstagramUser = Depends(require_current_account),
 ) -> ResolvedAccount:
-    """Resolve a user-entered account search query to a canonical account record."""
+    """Resolve only the authenticated creator's own account identifier."""
     raw_query = (query or "").strip()
     normalized_query = raw_query.lstrip("@").strip()
     lowered_query = normalized_query.lower()
 
     if not normalized_query:
         return ResolvedAccount(query=raw_query, resolved=False, reason="empty_query")
+    if normalized_query.lower() not in {current_user.id.lower(), (current_user.username or "").lower()}:
+        return ResolvedAccount(query=raw_query, resolved=False, reason="account_not_available")
 
     creator_stmt = (
         select(CreatorDiscoveryMeta)
@@ -397,14 +400,13 @@ async def refresh_trends(
         rate_count = 1
 
     if rate_count > refresh_limit:
-        logger.warning(
-            "[TrendRoutes] Rate limit exceeded for account=%s — returning 429",
-            account_id,
-        )
-        raise HTTPException(
-            status_code=429,
-            detail="Too many refresh requests. Please try again in 30 minutes.",
-        )
+        logger.info("[TrendRoutes] Queueing refresh for account=%s after rate limit", account_id)
+        try:
+            job = await asyncio.to_thread(enqueue_trend_analysis_job, account_id)
+        except Exception as exc:
+            logger.exception("[TrendRoutes] Could not queue refresh for account=%s", account_id)
+            raise HTTPException(status_code=503, detail="Trend refresh is temporarily unavailable.") from exc
+        return {"status": "queued", "job_id": job.id}
 
     # 2. Load draft/history context
     try:
@@ -559,5 +561,13 @@ async def get_trend_job_status(
     - {"status": "completed", "job_id": "...", "result": {...}}
     - {"status": "failed", "job_id": "...", "error": "..."}
     """
+    if not job_id.startswith(f"trend-analysis:{account_id}:"):
+        raise HTTPException(status_code=404, detail="Unknown job_id")
     status_info = get_trend_analysis_job_status(job_id)
+    if status_info.get("status") == "unknown":
+        raise HTTPException(status_code=404, detail="Unknown job_id")
+    # The RQ worker returns a wrapper; polling clients need the trend result itself.
+    result = status_info.get("result")
+    if isinstance(result, dict) and isinstance(result.get("result"), dict):
+        status_info["result"] = result["result"]
     return status_info
