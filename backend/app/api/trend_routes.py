@@ -19,12 +19,15 @@ from backend.app.api.instagram_auth_routes import AuthenticatedInstagramUser, re
 from backend.app.infra.models import AccountAnalysisResult, CreatorDiscoveryMeta, CreatorTrendResult
 from backend.app.infra.redis_client import aincr_with_expire
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
-from backend.app.services.creator_trend_service import CreatorTrendService, attach_weekly_opportunity
+from backend.app.services.creator_trend_service import CreatorTrendService, TrendDataUnavailableError, attach_weekly_opportunity
 from backend.app.services.draft_history_service import DraftHistoryContext, load_draft_history_context
+from backend.app.services.trend_cache import TrendAnalysisCache
 from backend.app.services.trend_queue_helper import enqueue_trend_analysis_job, get_trend_analysis_job_status
+from backend.app.services.trend_result_store import upsert_trend_result_async
 from backend.app.utils.env import is_production_environment
 from backend.app.utils.logger import logger
 from backend.app.utils.telemetry import emit_counter, emit_histogram, timed
+from backend.app.analytics.trend_recommendation_engine import momentum_score
 
 
 router = APIRouter(
@@ -35,6 +38,7 @@ router = APIRouter(
 
 _DEFAULT_TRENDS_REFRESH_LIMIT = 3
 _HIGH_TEST_REFRESH_LIMIT = 100
+_DEFAULT_TRENDS_REFRESH_WINDOW_SECONDS = 1800
 
 
 def _get_trends_refresh_limit() -> int:
@@ -56,6 +60,18 @@ def _get_trends_refresh_limit() -> int:
     if allow_high_limit and not is_production_environment():
         return _HIGH_TEST_REFRESH_LIMIT
     return _DEFAULT_TRENDS_REFRESH_LIMIT
+
+
+def _get_trends_refresh_window_seconds() -> int:
+    configured = (os.getenv("TREND_REFRESH_WINDOW_SECONDS") or "").strip()
+    if configured:
+        try:
+            parsed = int(configured)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            logger.warning("[TrendRoutes] Invalid TREND_REFRESH_WINDOW_SECONDS=%r; using default.", configured)
+    return _DEFAULT_TRENDS_REFRESH_WINDOW_SECONDS
 
 
 def _fallback_history_context(account_id: str) -> DraftHistoryContext:
@@ -95,7 +111,7 @@ def _without_dismissed_opportunities(result: TrendAnalysisResult, dismissed_ids:
 
 
 def _score_from_momentum(momentum: str) -> int:
-    return {"rising": 148, "peaking": 121, "falling": 42}.get(str(momentum or "").lower(), 64)
+    return int(round(momentum_score(momentum)))
 
 
 def _competition_from_match_and_momentum(match_pct: int, momentum: str) -> str:
@@ -127,10 +143,6 @@ def _build_topic_details(result: TrendAnalysisResult) -> list[TrendingTopicDetai
             else min(95, max(58, round((recommendation.opportunity_score if recommendation and recommendation.opportunity_score is not None else 72))))
         ))
         growth_pct = _score_from_momentum(trend.momentum)
-        if trend.trend_type == "format":
-            growth_pct += 12
-        elif trend.trend_type == "hashtag":
-            growth_pct -= 8
         why_it_fits = (
             recommendation.rationale
             if recommendation and recommendation.rationale
@@ -365,6 +377,11 @@ async def _get_trends_inner(account_id: str, db: AsyncSession) -> TrendAnalysisR
                 "content_gaps": row.content_gaps_json or [],
                 "daily_insights": row.daily_insights_json if isinstance(row.daily_insights_json, dict) else None,
                 "opportunity_bullets": row.opportunity_bullets_json or [],
+                "weekly_opportunity": (
+                    row.weekly_opportunity_json
+                    if isinstance(getattr(row, "weekly_opportunity_json", None), dict)
+                    else None
+                ),
             }
             result = attach_weekly_opportunity(TrendAnalysisResult.model_validate(payload))
             return _without_dismissed_opportunities(result, row.dismissed_content_opportunities_json)
@@ -389,7 +406,10 @@ async def refresh_trends(
     # 1. Rate limit
     refresh_limit = _get_trends_refresh_limit()
     try:
-        rate_count = await aincr_with_expire(f"rate_limit:trends_refresh:{account_id}", 1800)
+        rate_count = await aincr_with_expire(
+            f"rate_limit:trends_refresh:{account_id}",
+            _get_trends_refresh_window_seconds(),
+        )
     except Exception:
         logger.warning(
             "[TrendRoutes] Redis rate check failed for account=%s; continuing without rate limit",
@@ -422,8 +442,33 @@ async def refresh_trends(
 
     posts = history_context.historical_posts
 
-    # 3. A manual refresh always recalculates; cache is only a background-job optimization.
-    # 4. Build real creator intelligence from actual post data + bio
+    try:
+        cached_result = await TrendAnalysisCache.aget(account_id, posts)
+    except Exception:
+        logger.warning(
+            "[TrendRoutes] Trend cache lookup failed for account=%s; continuing without cache",
+            account_id,
+            exc_info=True,
+        )
+        cached_result = None
+        degraded_reasons.append("trend_cache_unavailable")
+    if cached_result is not None:
+        cached_result = attach_weekly_opportunity(cached_result)
+        existing: CreatorTrendResult | None = None
+        try:
+            existing = await upsert_trend_result_async(db, account_id, cached_result)
+        except Exception:
+            logger.warning(
+                "[TrendRoutes] Failed to persist cached trend result for account=%s",
+                account_id,
+                exc_info=True,
+            )
+        return _without_dismissed_opportunities(
+            cached_result,
+            existing.dismissed_content_opportunities_json if existing is not None else [],
+        )
+
+    # 3. Build real creator intelligence from actual post data + bio
     logger.info("[TrendRoutes] Building creator intelligence for account=%s", account_id)
     try:
         creator_intelligence = await generate_creator_intelligence(
@@ -461,42 +506,27 @@ async def refresh_trends(
             recommendation_count=int(count) if isinstance(count, (int, float, str)) else 5,
         )
         result = attach_weekly_opportunity(result)
+    except TrendDataUnavailableError as exc:
+        logger.warning("[TrendRoutes] Trend data unavailable for account=%s", account_id, exc_info=True)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception:
         logger.exception("[TrendRoutes] Trend service failed for account=%s", account_id)
         raise HTTPException(status_code=500, detail="Failed to compute trends")
 
-    # 5. Upsert into CreatorTrendResult
+    try:
+        await TrendAnalysisCache.aset(account_id, posts, result)
+    except Exception:
+        logger.warning(
+            "[TrendRoutes] Failed to populate trend cache for account=%s",
+            account_id,
+            exc_info=True,
+        )
+        degraded_reasons.append("trend_cache_write_failed")
+
+    # 4. Upsert into CreatorTrendResult
     existing: CreatorTrendResult | None = None
     try:
-        existing = await db.get(CreatorTrendResult, account_id)
-        niche_payload = result.niche.model_dump(mode="python") if hasattr(result.niche, "model_dump") else {}
-        global_trends_payload = [t.model_dump(mode="python") for t in result.global_trends]
-        recommendations_payload = [r.model_dump(mode="python") for r in result.recommendations]
-        content_gaps_payload = [g.model_dump(mode="python") for g in result.content_gaps] if result.content_gaps else []
-        daily_insights_payload = result.daily_insights.model_dump(mode="python") if result.daily_insights and hasattr(result.daily_insights, "model_dump") else None
-        opportunity_bullets_payload = result.opportunity_bullets if result.opportunity_bullets else []
-
-        if existing is None:
-            new_row = CreatorTrendResult(
-                account_id=account_id,
-                niche_json=niche_payload,
-                global_trends_json=global_trends_payload,
-                recommendations_json=recommendations_payload,
-                content_gaps_json=content_gaps_payload,
-                daily_insights_json=daily_insights_payload,
-                opportunity_bullets_json=opportunity_bullets_payload,
-                dismissed_content_opportunities_json=[],
-            )
-            db.add(new_row)
-        else:
-            existing.niche_json = niche_payload
-            existing.global_trends_json = global_trends_payload
-            existing.recommendations_json = recommendations_payload
-            existing.content_gaps_json = content_gaps_payload
-            existing.daily_insights_json = daily_insights_payload
-            existing.opportunity_bullets_json = opportunity_bullets_payload
-            db.add(existing)
-        await db.commit()
+        existing = await upsert_trend_result_async(db, account_id, result)
     except Exception:
         logger.warning(
             "[TrendRoutes] Failed to upsert trend result for account=%s; returning transient result",
