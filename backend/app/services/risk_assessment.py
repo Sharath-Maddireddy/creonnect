@@ -6,7 +6,7 @@ and growth risks before they impact partnerships.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from backend.app.domain.account_models import (
     Risk,
@@ -29,6 +29,23 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _published_sort_key(post: SinglePostInsights) -> float:
+    """Return a comparable timestamp for date and datetime publish values."""
+    published_at = post.published_at
+    if isinstance(published_at, datetime):
+        return published_at.timestamp()
+    if isinstance(published_at, date):
+        return datetime.combine(published_at, time.min).timestamp()
+    return float("-inf")
+
+
+def _published_date(post: SinglePostInsights) -> date | None:
+    published_at = post.published_at
+    if isinstance(published_at, datetime):
+        return published_at.date()
+    return published_at if isinstance(published_at, date) else None
+
+
 def _assess_engagement_risks(
     posts: list[SinglePostInsights],
 ) -> list[Risk]:
@@ -41,7 +58,7 @@ def _assess_engagement_risks(
     # Split posts into recent (last 15) and older (before that)
     sorted_posts = sorted(
         posts,
-        key=lambda p: p.published_at or datetime.min,
+        key=_published_sort_key,
         reverse=True,
     )
 
@@ -96,7 +113,7 @@ def _assess_engagement_risks(
     if len(recent_ers) >= 5:
         import statistics
         try:
-            std_dev = statistics.stdev(recent_ers)
+            std_dev = statistics.pstdev(recent_ers)
             mean = statistics.mean(recent_ers)
             cv = std_dev / mean if mean > 0 else 0  # Coefficient of variation
 
@@ -136,10 +153,10 @@ def _assess_save_rate_risks(
     # Calculate save rates
     save_rates = []
     for post in posts:
-        likes = _safe_float(getattr(post.core_metrics, "likes", None))
+        reach = _safe_float(getattr(post.core_metrics, "reach", None))
         saves = _safe_float(getattr(post.core_metrics, "saves", None))
-        if likes > 0:
-            save_rates.append(saves / likes)
+        if reach > 0:
+            save_rates.append(saves / reach)
 
     if len(save_rates) < 5:
         return risks
@@ -248,12 +265,14 @@ def _assess_growth_risks(
     # Calculate posts per week
     sorted_posts = sorted(
         posts,
-        key=lambda p: p.published_at or datetime.min,
+        key=_published_sort_key,
         reverse=True,
     )
 
-    if sorted_posts and sorted_posts[0].published_at and sorted_posts[-1].published_at:
-        date_range = (sorted_posts[0].published_at - sorted_posts[-1].published_at).days
+    newest_date = _published_date(sorted_posts[0]) if sorted_posts else None
+    oldest_date = _published_date(sorted_posts[-1]) if sorted_posts else None
+    if newest_date and oldest_date:
+        date_range = (newest_date - oldest_date).days
         if date_range > 0:
             posts_per_week = (len(posts) / date_range) * 7
 

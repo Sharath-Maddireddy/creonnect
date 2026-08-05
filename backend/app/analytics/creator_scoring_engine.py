@@ -92,11 +92,31 @@ def _classify_story_reach(rate: float, valid: bool) -> Literal["Healthy", "Weak"
 
 
 def _score_three_band(flags: list[str], good_label: str, weak_label: str) -> float:
-    if flags and all(flag == good_label for flag in flags):
-        return 100.0
-    if flags and all(flag == weak_label for flag in flags):
-        return 0.0
-    return 50.0
+    """Return a gradient score for good, neutral, and weak metric flags."""
+    if not flags:
+        return 50.0
+    points = {good_label: 100.0, weak_label: 0.0}
+    return sum(points.get(flag, 50.0) for flag in flags) / len(flags)
+
+
+def _calculate_brand_suitability_score(posts: list[SinglePostInsights]) -> float:
+    """Score brand suitability from observed safety and visual-quality signals.
+
+    This is deliberately not a campaign-specific brand-match score: no brand
+    profile is available when generating an account-level creator score.
+    """
+    scores: list[float] = []
+    for post in posts:
+        components: list[float] = []
+        safety = _safe_float(getattr(getattr(post, "brand_safety_score", None), "total_0_50", None))
+        visual = _safe_float(getattr(getattr(post, "visual_quality_score", None), "total", None))
+        if safety > 0:
+            components.append(min(100.0, safety * 2.0))
+        if visual > 0:
+            components.append(min(100.0, visual * 2.0))
+        if components:
+            scores.append(_avg(components))
+    return _avg(scores) if scores else 50.0
 
 
 def _extract_first_numeric(account_data: dict[str, Any], *keys: str) -> float | None:
@@ -443,7 +463,10 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
     ai_predictions = generate_ai_feature_predictions_sync(posts, account_data)
     avg_reach = _avg(avg_reach_values)
     fake_follower_signals = FakeFollowerSignals(
-        poor_audience_quality=(followers_from_account >= 1_000_000 and avg_reach <= 8_000),
+        poor_audience_quality=(
+            followers_from_account >= 100_000
+            and avg_reach <= followers_from_account * 0.02
+        ),
         weak_audience_interest=(save_rate_avg < 1.0 and share_rate_avg < 1.0),
         bot_activity=(ai_predictions.spam_detected_count > 0),
         possible_bought_followers=(growth_metrics.follower_growth_flag == "Huge Spikes"),
@@ -494,7 +517,7 @@ def generate_creator_score(posts: list[SinglePostInsights], account_data: dict[s
         )
     )
     authenticity_sub_score = max(0.0, 100.0 - (25.0 * true_fake_signals))
-    brand_fit_sub_score = 50.0
+    brand_fit_sub_score = _calculate_brand_suitability_score(posts)
 
     final_score = (
         (0.25 * engagement_sub_score)

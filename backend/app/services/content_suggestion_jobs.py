@@ -25,10 +25,7 @@ from backend.app.utils.logger import logger
 
 # Step labels for progress tracking
 IDEA_GENERATION_STEPS = [
-    "Analysing your recent content",
-    "Researching trending topics",
-    "Analysing your audience",
-    "Checking competitors",
+    "Preparing generation context",
     "Generating high-potential ideas",
 ]
 
@@ -102,7 +99,7 @@ def enqueue_idea_generation(account_id: str, request: GenerateIdeasRequest) -> s
             account_id=account_id,
             status="queued",
             current_step=0,
-            total_steps=5,
+            total_steps=len(IDEA_GENERATION_STEPS),
             step_label="Queued",
             percent_complete=0.0,
             optimization_goals=request.optimization_goals,
@@ -231,20 +228,8 @@ def run_idea_generation(account_id: str, job_id: str) -> None:
         db.commit()
 
         try:
-            # Step 1: Analyse recent content
-            _update_progress(db, job, 0, "Analysing your recent content")
-
-            # Step 2: Research trending topics
-            _update_progress(db, job, 1, "Researching trending topics")
-
-            # Step 3: Analyse audience
-            _update_progress(db, job, 2, "Analysing your audience")
-
-            # Step 4: Check competitors
-            _update_progress(db, job, 3, "Checking competitors")
-
-            # Step 5: Generate ideas via LLM
-            _update_progress(db, job, 4, "Generating high-potential ideas")
+            _update_progress(db, job, 0, IDEA_GENERATION_STEPS[0])
+            _update_progress(db, job, 1, IDEA_GENERATION_STEPS[1])
             ideas = _generate_ideas_with_llm(db, job)
 
             # Store generated ideas
@@ -265,7 +250,7 @@ def run_idea_generation(account_id: str, job_id: str) -> None:
                     generation_job_id=job_id,
                     generation_metadata={
                         "job_id": job_id,
-                        "model": "gpt-4o",
+                        "model": idea_data.get("_model"),
                         "prompt_version": "v1.0",
                     },
                     status="generated",
@@ -297,8 +282,6 @@ def _update_progress(db, job: IdeaGenerationJob, step: int, label: str) -> None:
 
 def _generate_ideas_with_llm(db, job: IdeaGenerationJob) -> list[dict[str, Any]]:
     """Generate ideas using LLM."""
-    import asyncio
-
     from backend.app.ai.llm_client import LLMClient
 
     count = job.result_count or 5
@@ -317,6 +300,11 @@ Topic: {job.topic or 'Trending in my niche'}
 Audience: {job.audience or 'everyone'}
 Tone: {tones}
 Optimization goals: {goals}
+
+Non-negotiable specificity rules:
+- Every title, hook, and description must name a concrete game, franchise, event, platform, deal, or trend from the Topic.
+- Do not use vague phrases such as "biggest niche trend", "this week's trend", or "what actually works" without naming the concrete subject.
+- Set trend_reference to the supplied Topic exactly. Do not leave it empty.
 
 For each idea, provide:
 - title: Compelling title (5-10 words)
@@ -361,6 +349,14 @@ Return JSON shape:
 
         # Parse TOON response
         ideas = _parse_json_ideas(raw)
+        for idea in ideas:
+            if isinstance(idea, dict):
+                idea["_model"] = llm.model_name
+        if job.topic:
+            for idea in ideas:
+                if isinstance(idea, dict):
+                    # Keep generated ideas auditable against the exact trend selected for the job.
+                    idea["trend_reference"] = job.topic
 
         # Ensure we have the requested count (pad with fallbacks if needed)
         while len(ideas) < count:
@@ -369,11 +365,12 @@ Return JSON shape:
                 "title": f"Content Idea {idx}: {job.topic or 'Trending Topic'}",
                 "hook": f"Discover the secret to {job.topic or 'great content'}",
                 "description": f"A {job.content_type or 'reel'} about {job.topic or 'trending content'} for {job.audience or 'everyone'}",
-                "opportunity_score": 70.0 + (idx * 3),
+                "opportunity_score": None,
                 "difficulty": "medium",
                 "duration_seconds": 30,
                 "tags": [job.content_type or "reel", "trending"],
-                "trend_reference": "",
+                "trend_reference": job.topic or "Trending in my niche",
+                "_model": llm.model_name,
             })
 
         return ideas[:count]
@@ -386,11 +383,12 @@ Return JSON shape:
                 "title": f"Idea {i+1}: {job.topic or 'Trending Topic'}",
                 "hook": f"Hook for idea {i+1}",
                 "description": f"Description for idea {i+1} about {job.topic or 'general content'}",
-                "opportunity_score": 75.0 + i * 2,
+                "opportunity_score": None,
                 "difficulty": "medium",
                 "duration_seconds": 30,
                 "tags": [job.content_type or "reel"],
-                "trend_reference": "",
+                "trend_reference": job.topic or "Trending in my niche",
+                "_model": None,
             }
             for i in range(count)
         ]
@@ -408,9 +406,11 @@ def _strip_markdown_fences(text: str) -> str:
 
 def _parse_json_object(raw: str) -> dict[str, Any]:
     stripped = _strip_markdown_fences(raw)
-    if "{" in stripped and "}" in stripped:
-        stripped = stripped[stripped.find("{"):stripped.rfind("}") + 1]
-    payload = json.loads(stripped)
+    start = stripped.find("{")
+    if start >= 0:
+        payload, _ = json.JSONDecoder().raw_decode(stripped[start:])
+    else:
+        payload = json.loads(stripped)
     if not isinstance(payload, dict):
         raise ValueError("LLM response must be a JSON object")
     return payload
@@ -427,8 +427,6 @@ def _parse_json_ideas(raw: str) -> list[dict[str, Any]]:
 
 def run_idea_improve(account_id: str, idea_id: str, feedback: str, aspect: str, job_id: str) -> None:
     """Worker function to improve an idea based on feedback."""
-    import asyncio
-
     from backend.app.ai.llm_client import LLMClient
 
     logger.info("[ContentSuggestionJob] Running improve for idea_id=%s aspect=%s", idea_id, aspect)
@@ -501,8 +499,6 @@ def _parse_json_improvement(raw: str) -> dict[str, str]:
 
 def run_idea_variations(account_id: str, idea_id: str, count: int, job_id: str) -> None:
     """Worker function to generate variations of an idea."""
-    import asyncio
-
     from backend.app.ai.llm_client import LLMClient
 
     logger.info("[ContentSuggestionJob] Running variations for idea_id=%s count=%d", idea_id, count)
@@ -574,8 +570,6 @@ def _parse_json_variations(raw: str) -> list[dict[str, str]]:
 
 def run_idea_regenerate(account_id: str, idea_id: str, job_id: str) -> None:
     """Worker function to regenerate an idea from scratch."""
-    import asyncio
-
     from backend.app.ai.llm_client import LLMClient
 
     logger.info("[ContentSuggestionJob] Running regenerate for idea_id=%s", idea_id)
@@ -690,9 +684,3 @@ def get_idea_generation_status(job_id: str) -> dict[str, Any]:
             result["error"] = job.error_message
 
         return result
-
-
-def get_idea_status(idea_id: str) -> dict[str, Any] | None:
-    """Get status of a single idea improvement/variations/regeneration job."""
-    # For now, return None - can be extended with BackgroundJob tracking
-    return None

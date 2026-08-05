@@ -29,6 +29,7 @@ _MAX_TOOL_ITERATIONS = 6  # guard against infinite tool-call loops
 _STREAMING_MODEL = None
 _STREAMING_TEMPERATURE = 0.3
 _STREAMING_MAX_TOKENS = 1500
+_MAX_TOOL_MESSAGE_CHARS = 12_000
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 
@@ -269,7 +270,7 @@ def _run_tool_loop(
                 {
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": json.dumps(tool_payload, ensure_ascii=True, default=str),
+                    "content": _serialize_tool_payload_for_llm(tool_payload),
                 }
             )
 
@@ -308,7 +309,12 @@ async def _stream_final_response(
 
     stream = await asyncio.to_thread(_open_stream)
 
-    for chunk in stream:
+    sentinel = object()
+    iterator = iter(stream)
+    while True:
+        chunk = await asyncio.to_thread(next, iterator, sentinel)
+        if chunk is sentinel:
+            break
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta is None:
             continue
@@ -328,6 +334,24 @@ def _safe_json_loads(value: Any) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return value if isinstance(value, dict) else {}
+
+
+def _serialize_tool_payload_for_llm(payload: dict[str, Any]) -> str:
+    """Bound tool results before adding them to the model conversation context."""
+    serialized = json.dumps(payload, ensure_ascii=True, default=str)
+    if len(serialized) <= _MAX_TOOL_MESSAGE_CHARS:
+        return serialized
+
+    data_preview = json.dumps(payload.get("data"), ensure_ascii=True, default=str)
+    compact_payload = {
+        "success": payload.get("success"),
+        "tool": payload.get("tool"),
+        "message": payload.get("message"),
+        "meta": payload.get("meta"),
+        "data_preview": data_preview[:8_000],
+        "truncated": True,
+    }
+    return json.dumps(compact_payload, ensure_ascii=True, default=str)
 
 
 def _extract_latency(meta: Any) -> float:

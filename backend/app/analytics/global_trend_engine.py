@@ -21,6 +21,7 @@ from backend.app.ai.llm_client import LLMClient
 from backend.app.ai.toon_helpers import toon_parse_list
 from backend.app.domain.trend_models import CreatorNiche, GlobalTrend
 from backend.app.utils.logger import logger
+from backend.app.utils.telemetry import emit_counter
 
 
 # ── Normalisation helpers ─────────────────────────────────────────────────────
@@ -95,18 +96,18 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
         primary_category=niche.primary_category,
         sub_niches=niche.sub_niches,
     )
-    live_signals_text = (
-        "\n".join(f"- {signal}" for signal in live_signals)
-        if live_signals
-        else "none available"
-    )
+    if not live_signals:
+        logger.warning("[GlobalTrends] No live signals available for niche=%s", niche.primary_category)
+        emit_counter("trend_global_fetch_unavailable", tags={"reason": "no_live_signals"})
+        return []
+
+    live_signals_text = "\n".join(f"- {signal}" for signal in live_signals)
     user_payload = (
         f"primary_category: {niche.primary_category}\n"
         f"sub_niches:\n{sub_niches_text if sub_niches_text else '[]'}\n"
         f"live_trend_signals:\n{live_signals_text}\n"
-        "instruction: Using the live_trend_signals as your primary evidence, "
-        "identify 3-5 rising trends tailored to the above niche. If "
-        "live_trend_signals is empty, use your best knowledge of the niche."
+        "instruction: Use only the live_trend_signals as evidence to identify 3-5 "
+        "rising trends tailored to the above niche."
     )
 
     prompt = {"system": system_prompt, "user": user_payload}
@@ -140,4 +141,5 @@ async def fetch_global_trends(niche: CreatorNiche) -> List[GlobalTrend]:
 
     except Exception as e:
         logger.exception("fetch_global_trends failed: %s", e)
+        emit_counter("trend_global_fetch_failed", tags={"reason": type(e).__name__})
         return []

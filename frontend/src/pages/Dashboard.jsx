@@ -216,9 +216,7 @@ function AccountHealthGauge({ score, band }) {
                     <span>/ 100</span>
                 </div>
             </div>
-            <p className="ai-gauge-band">{
-                ({ EXCEPTIONAL: '🏆 Exceptional', STRONG: '💪 Strong', AVERAGE: '📈 Growing', BUILDING_MOMENTUM: '🚀 Building Momentum', NEEDS_WORK: '🚀 High Potential' })[band] || (typeof band === 'string' && band ? band : 'Unrated')
-            }</p>
+            <p className="ai-gauge-band">{formatHealthBand(band)}</p>
         </div>
     )
 }
@@ -240,12 +238,11 @@ function Dashboard() {
             const url = currentUserId ? `/api/creator/analytics?user_id=${encodeURIComponent(currentUserId)}` : `/api/creator/analytics`
             const res = await fetch(url)
             if (res.status === 401) {
-                // If token expired or not found, just fallback to demo mode
-                const demoRes = await fetch(`/api/creator/analytics`)
-                if (!demoRes.ok) throw new Error('Failed to fetch demo dashboard data')
-                const json = await demoRes.json()
-                setData(json)
-                return
+                if (currentUserId) {
+                    setData(null)
+                    throw new Error('Your session has expired. Please sign in again to view your analytics.')
+                }
+                throw new Error('Authentication is required to view creator analytics.')
             }
             if (!res.ok) throw new Error('Failed to fetch dashboard data')
             const json = await res.json()
@@ -450,6 +447,10 @@ function Dashboard() {
         if (!post?.post_id || !post?.media_url || analyzingPostId) {
             return
         }
+        if (post.media_url.includes('placehold.co/')) {
+            setError('Demo placeholder posts cannot be analyzed. Connect an Instagram account to analyze real media.')
+            return
+        }
 
         setAnalyzingPostId(post.post_id)
         setError(null)
@@ -500,6 +501,9 @@ function Dashboard() {
                     </div>
                     <Link className="dashboard-header-link" to="/image-editor">
                         Open Image Editor
+                    </Link>
+                    <Link className="dashboard-header-link" to="/creator-intelligence">
+                        Creator Intelligence
                     </Link>
                 </div>
             </div>
@@ -696,9 +700,6 @@ function Dashboard() {
                             <div key={metric.key} className="metric-tile">
                                 <span className="metric-label">{metric.label}</span>
                                 <strong className="metric-value">{formatPercentPreciseFromRatio(metric.value)}</strong>
-                                <span className="metric-benchmark metric-benchmark-neutral">
-                                    {formatPercentFromRatio(metric.value)}
-                                </span>
                             </div>
                         ))}
                     </div>

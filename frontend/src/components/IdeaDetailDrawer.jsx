@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import ScriptGenerator from './ScriptGenerator'
 import CaptionGenerator from './CaptionGenerator'
+import { formatCompactNumber } from '../utils/format'
 
 export default function IdeaDetailDrawer({ idea, accountUrl, onClose, onCopy, onGenerate }) {
     const [detail, setDetail] = useState(idea || null)
@@ -202,7 +203,7 @@ export default function IdeaDetailDrawer({ idea, accountUrl, onClose, onCopy, on
                             <div className="cs-stats-grid">
                                 <div className="cs-stat">
                                     <span className="cs-stat__label">Expected Reach</span>
-                                    <span className="cs-stat__value">{reachMin ? `${(reachMin/1000).toFixed(0)}K – ${(reachMax/1000).toFixed(0)}K` : '—'}</span>
+                                    <span className="cs-stat__value">{reachMin ? `${formatCompactNumber(reachMin)} – ${formatCompactNumber(reachMax)}` : '—'}</span>
                                 </div>
                                 <div className="cs-stat">
                                     <span className="cs-stat__label">Difficulty</span>

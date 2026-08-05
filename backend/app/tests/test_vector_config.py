@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from backend.app.ai.llm_client import LLMClient
+import pytest
+
+from backend.app.ai.llm_client import LLMClient, LLMClientError
 from backend.app.infra.models import CREATOR_EMBEDDING_MODEL_NAME, EMBEDDING_DIMENSION
 from backend.app.services.creator_pool_service import _get_hnsw_ef_search
 
@@ -30,7 +32,22 @@ def test_embed_rejects_dimension_mismatch() -> None:
 
     client._client = SimpleNamespace(embeddings=_EmbeddingsAPI())
 
-    assert client.embed("creator profile text") is None
+    with pytest.raises(LLMClientError, match="Embedding dimension mismatch"):
+        client.embed("creator profile text")
+
+
+def test_embed_raises_client_error_on_provider_failure() -> None:
+    client = LLMClient()
+
+    class _EmbeddingsAPI:
+        @staticmethod
+        def create(*, input: str, model: str):  # noqa: ARG004
+            raise TimeoutError("embedding timeout")
+
+    client._client = SimpleNamespace(embeddings=_EmbeddingsAPI())
+
+    with pytest.raises(LLMClientError, match="embedding timeout"):
+        client.embed("creator profile text")
 
 
 def test_embed_accepts_expected_dimension() -> None:

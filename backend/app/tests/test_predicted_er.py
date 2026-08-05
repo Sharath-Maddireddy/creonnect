@@ -53,6 +53,32 @@ def test_missing_inputs() -> None:
     assert "missing s5_total" in notes_missing_s5
 
 
+def test_external_ai_disabled_uses_deterministic_fallback(monkeypatch) -> None:
+    ai_analysis_service._ANALYSIS_CACHE.clear()
+    monkeypatch.setenv("AI_EXTERNAL_CALLS_ENABLED", "0")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+
+    async def _unexpected_call(*_args, **_kwargs):
+        raise AssertionError("external AI call should not run when disabled")
+
+    monkeypatch.setattr(ai_analysis_service, "run_vision_analysis", _unexpected_call)
+    monkeypatch.setattr(ai_analysis_service, "_call_llm_async", _unexpected_call)
+    monkeypatch.setattr(ai_analysis_service, "analyze_content_clarity_via_llm", _unexpected_call)
+    monkeypatch.setattr(ai_analysis_service, "analyze_audience_relevance_via_llm", _unexpected_call)
+
+    post = _build_post("external_ai_disabled")
+    result = asyncio.run(ai_analysis_service.analyze_single_post_ai(post))
+
+    assert result["vision_status"] == "disabled"
+    assert result["fallback_used"] is True
+    assert result["summary"].startswith("Post scored")
+    assert any(
+        warning.get("message") == "External AI calls are disabled by AI_EXTERNAL_CALLS_ENABLED."
+        for warning in result["warnings"]
+    )
+
+
 def test_clamp_s5_total() -> None:
     predicted_high, _ = compute_predicted_engagement_rate(tier_avg_er=0.08, s5_total=80.0)
     predicted_low, _ = compute_predicted_engagement_rate(tier_avg_er=0.08, s5_total=-10.0)

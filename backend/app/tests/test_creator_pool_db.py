@@ -61,7 +61,10 @@ def db_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _DummyQueue:
     Base.metadata.create_all(bind=get_sync_engine())
 
     queue = _DummyQueue()
-    monkeypatch.setattr(embedding_worker, "get_queue", lambda name="embedding-ingestion": queue)
+    def enqueue_creator_embedding(*, func, payload, **kwargs):  # noqa: ANN001
+        queue.calls.append((func, (payload,), kwargs))
+
+    monkeypatch.setattr(embedding_worker, "enqueue_callable", enqueue_creator_embedding)
 
     yield queue
 

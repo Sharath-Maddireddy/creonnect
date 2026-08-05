@@ -24,7 +24,7 @@ CATEGORY_GROUPS: dict[str, str] = {
     "skincare": "beauty_makeup",
     "travel": "travel_lifestyle",
     "lifestyle": "travel_lifestyle",
-    "fashion": "travel_lifestyle",
+    "fashion": "fashion_beauty",
     "technology": "tech_gadgets",
     "tech": "tech_gadgets",
     "gadgets": "tech_gadgets",
@@ -35,9 +35,6 @@ CATEGORY_GROUPS: dict[str, str] = {
     "education": "education_learning",
     "learning": "education_learning",
 }
-
-_LLM_CLIENT = LLMClient()
-
 
 def _normalize_category(value: str | None) -> str | None:
     if not isinstance(value, str):
@@ -78,7 +75,8 @@ async def analyze_audience_relevance_via_llm(
     }
 
     try:
-        raw_text = await asyncio.to_thread(_LLM_CLIENT.generate, prompt)
+        llm = LLMClient()
+        raw_text = await asyncio.to_thread(llm.generate, prompt)
         if not isinstance(raw_text, str) or not raw_text.strip():
             raise LLMClientError("LLM returned empty response.")
         payload = toon_loads(raw_text)

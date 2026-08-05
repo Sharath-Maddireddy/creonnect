@@ -19,6 +19,12 @@ def test_adjacent_match_is_75() -> None:
     assert score.total_0_50 == 37.5
 
 
+def test_fashion_is_not_adjacent_to_travel() -> None:
+    score = compute_s4_audience_relevance("fashion", "travel")
+
+    assert score.affinity_band == "UNRELATED"
+
+
 def test_unrelated_is_15() -> None:
     score = compute_s4_audience_relevance("fitness", "technology")
     assert score.affinity_band == "UNRELATED"

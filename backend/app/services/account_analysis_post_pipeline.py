@@ -159,6 +159,9 @@ def build_post_summary(
             "S5": safe_float(post.engagement_potential_score.total if post.engagement_potential_score is not None else None),
             "S6": safe_float(post.brand_safety_score.total_0_50 if post.brand_safety_score is not None else None),
             "P": safe_float(post.weighted_post_score.score if post.weighted_post_score is not None else None),
+            "engagement_rate": safe_float(
+                post.derived_metrics.engagement_rate if post.derived_metrics is not None else None
+            ),
             "predicted_er": safe_float(post.predicted_engagement_rate),
         },
         "notes": {

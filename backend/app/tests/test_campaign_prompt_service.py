@@ -29,6 +29,15 @@ def test_fallback_keyword_extraction_no_niche() -> None:
     assert parsed["min_followers"] == 100000
 
 
+def test_fallback_keyword_extraction_preserves_range_and_engagement_rate() -> None:
+    parsed = _fallback_keyword_extraction("Find beauty creators with 50k-1M followers and ER above 3.5%")
+
+    assert parsed["min_followers"] == 50_000
+    assert parsed["max_followers"] == 1_000_000
+    assert parsed["min_engagement_rate"] == 0.035
+    assert parsed["parse_source"] == "fallback"
+
+
 def test_build_brand_profile_from_parsed_valid() -> None:
     parsed = {
         "brand_name": "Test Brand",
@@ -86,6 +95,7 @@ def test_parse_campaign_prompt_success(monkeypatch) -> None:
     assert parsed["niche"] == "fitness"
     assert parsed["min_followers"] == 10000
     assert parsed["min_engagement_rate"] == 0.03
+    assert parsed["parse_source"] == "llm"
 
 
 def test_parse_campaign_prompt_falls_back_when_toon_returns_non_dict(monkeypatch) -> None:

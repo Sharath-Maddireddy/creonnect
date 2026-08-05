@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react'
 
 const STEPS = [
-    'Analysing your recent content',
-    'Researching trending topics',
-    'Analysing your audience',
-    'Checking competitors',
+    'Preparing generation context',
     'Generating high-potential ideas',
 ]
 
@@ -12,7 +9,7 @@ export default function GenerationProgress({ jobId, accountUrl, onComplete, onEr
     const [progress, setProgress] = useState({
         status: 'processing',
         current_step: 0,
-        total_steps: 5,
+        total_steps: 2,
         step_label: 'Starting...',
         percent_complete: 0,
     })
@@ -28,7 +25,7 @@ export default function GenerationProgress({ jobId, accountUrl, onComplete, onEr
         const poll = async () => {
             if (cancelled) return
 
-            // Timeout guard — stop polling after 2 minutes
+            // Timeout guard — stop polling after 6 minutes.
             if (Date.now() - startTime > MAX_POLL_MS) {
                 if (!cancelled) onError('Generation timed out. Please try again.')
                 return
@@ -76,7 +73,7 @@ export default function GenerationProgress({ jobId, accountUrl, onComplete, onEr
             <div className="cs-modal cs-modal--progress">
                 <div className="cs-modal__header">
                     <h3>Generating Ideas...</h3>
-                    <p className="cs-modal__subtitle">This may take 1–3 minutes with our advanced AI model</p>
+                    <p className="cs-modal__subtitle">This can take up to 6 minutes with our advanced AI model</p>
                 </div>
 
                 <div className="cs-modal__body">
@@ -92,7 +89,7 @@ export default function GenerationProgress({ jobId, accountUrl, onComplete, onEr
                     <div className="cs-progress-steps">
                         {STEPS.map((step, i) => (
                             <div
-                                key={i}
+                                key={step}
                                 className={`cs-progress-step ${
                                     i < progress.current_step ? 'cs-progress-step--done' :
                                     i === progress.current_step ? 'cs-progress-step--active' :
@@ -111,8 +108,8 @@ export default function GenerationProgress({ jobId, accountUrl, onComplete, onEr
                     {progress.status === 'failed' && (
                         <div className="cs-progress-error">
                             <p>Generation failed: {progress.error}</p>
-                            <button className="cs-btn cs-btn--secondary" onClick={onError}>
-                                Try Again
+                            <button className="cs-btn cs-btn--secondary" onClick={() => onError('Generation failed. Please submit the request again.')}>
+                                Close
                             </button>
                         </div>
                     )}

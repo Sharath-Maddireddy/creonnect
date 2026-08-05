@@ -69,6 +69,37 @@ router = APIRouter(
 )
 
 
+async def _with_default_trend_topic(
+    account_id: str,
+    request: GenerateIdeasRequest,
+    db: AsyncSession,
+) -> GenerateIdeasRequest:
+    """Seed untargeted idea generation with the account's best available trend."""
+    if isinstance(request.topic, str) and request.topic.strip():
+        return request
+
+    trend_result = await db.get(CreatorTrendResult, account_id)
+    if trend_result is None:
+        return request
+
+    recommendations = trend_result.recommendations_json
+    if isinstance(recommendations, list):
+        for recommendation in recommendations:
+            if not isinstance(recommendation, dict):
+                continue
+            topic = recommendation.get("trend_reference") or recommendation.get("suggested_title")
+            if isinstance(topic, str) and topic.strip():
+                return request.model_copy(update={"topic": topic.strip()})
+
+    trends = trend_result.global_trends_json
+    if isinstance(trends, list):
+        for trend in trends:
+            if isinstance(trend, dict) and isinstance(trend.get("topic_name"), str) and trend["topic_name"].strip():
+                return request.model_copy(update={"topic": trend["topic_name"].strip()})
+
+    return request
+
+
 def _clamp_int(value: float | int | None, default: int) -> int:
     if not isinstance(value, (int, float)):
         return default
@@ -231,6 +262,7 @@ async def start_idea_generation(
     """Start idea generation job."""
     if not is_feature_enabled("TREND_RECOMMENDATIONS_V2"):
         raise HTTPException(status_code=503, detail="Trend Recommendations V2 is not yet available. Check back soon.")
+    request = await _with_default_trend_topic(account_id, request, db)
     logger.info("[ContentSuggestionRoutes] Starting idea generation for account=%s", account_id)
     emit_event("trend_generate_clicked", account_id=account_id, properties={"count": request.count, "content_type": request.content_type})
     emit_counter("trends_generation_started", account_id=account_id)

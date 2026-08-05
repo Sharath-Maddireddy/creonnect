@@ -289,3 +289,13 @@ def test_source_materialization_wraps_failures(monkeypatch) -> None:
         assert str(exc) == "Failed to materialize account source payload: creonnect-bd unavailable"
     else:
         raise AssertionError("Expected ValueError when source materialization fails")
+
+
+def test_precomputed_scores_require_every_post_to_have_a_real_weighted_score() -> None:
+    empty = SinglePostInsights()
+    scored = SinglePostInsights()
+    scored.weighted_post_score.score = 50.0
+
+    assert account_analysis_jobs._posts_payload_has_precomputed_scores({"posts": [empty]}) is False
+    assert account_analysis_jobs._posts_payload_has_precomputed_scores({"posts": [scored, empty]}) is False
+    assert account_analysis_jobs._posts_payload_has_precomputed_scores({"posts": [scored]}) is True

@@ -11,6 +11,7 @@ from typing import Any
 
 from backend.app.ai import toon
 from backend.app.ai.llm_client import LLMClient
+from backend.app.analytics.audience_quality import calculate_authenticity_score
 from backend.app.domain.account_models import AIFeaturePredictions
 from backend.app.domain.post_models import SinglePostInsights
 from backend.app.utils.logger import logger
@@ -18,9 +19,8 @@ from backend.app.utils.number_utils import safe_float_or as _safe_float
 
 
 _AI_FEATURES_SYSTEM_PROMPT = """
-You are an expert Instagram growth strategist and AI post optimizer.
-The user is providing a draft caption for an upcoming post, along with their account's historical performance data.
-Your goal is to optimize their draft caption (focusing on hooks and CTAs), predict its potential reach, suggest optimal posting times, and flag any safety risks.
+You are an expert Instagram growth strategist.
+Analyze the creator account's historical performance and, when a draft caption is provided, optimize that draft for hooks and CTAs. Predict reach, suggest posting times, and flag safety risks.
 DO NOT generate or suggest hashtags.
 
 Return plain TOON only.
@@ -43,7 +43,7 @@ tone_alignment_warning <str>
 
 Constraints:
 - You must analyze the 'historical_posts' provided to base your 'predicted_reach_band' and 'optimal_posting_times' on actual past performance.
-- 'optimized_caption_options' should preserve the creator's core message but make it more engaging.
+- When a draft caption is provided, 'optimized_caption_options' should preserve its core message while making it more engaging. Otherwise return an empty list.
 - 'predicted_reach_band' must be exactly one of: High, Average, Low.
 - 'optimal_posting_times' should be specific, containing the exact day of the week and an hourly time range based on high-performing historical posts (e.g., 'Tuesdays 4:00 PM - 6:00 PM').
 - Never output hashtags in your caption options.
@@ -157,6 +157,32 @@ def _prediction_cache_key(payload: dict[str, Any], *, model_name: str) -> str:
     ).hexdigest()
 
 
+def _evict_expired_predictions(now: float) -> None:
+    for key, (expires_at, _) in list(_PREDICTION_CACHE.items()):
+        if expires_at <= now:
+            del _PREDICTION_CACHE[key]
+
+
+def _audience_authenticity_from_signals(posts: list[SinglePostInsights], account_data: dict[str, Any]) -> float:
+    follower_count = _safe_int(account_data.get("follower_count") or account_data.get("followers"), 0)
+    if follower_count <= 0 and posts:
+        follower_count = _safe_int(posts[0].follower_count, 0)
+    if follower_count <= 0:
+        return 50.0
+
+    views = [_safe_float(getattr(getattr(post, "core_metrics", None), "reach", None), 0.0) for post in posts]
+    likes = [_safe_float(getattr(getattr(post, "core_metrics", None), "likes", None), 0.0) for post in posts]
+    comments = [_safe_float(getattr(getattr(post, "core_metrics", None), "comments", None), 0.0) for post in posts]
+    if not any(views) and not any(likes) and not any(comments):
+        return 50.0
+    return calculate_authenticity_score(
+        follower_count=follower_count,
+        avg_views=int(sum(views) / len(views)) if views else 0,
+        avg_likes=int(sum(likes) / len(likes)) if likes else 0,
+        avg_comments=int(sum(comments) / len(comments)) if comments else 0,
+    )
+
+
 async def generate_ai_feature_predictions(posts: list[SinglePostInsights], account_data: dict[str, Any]) -> AIFeaturePredictions:
     """LLM-backed AI feature prediction engine with safe fallback behavior."""
     payload = _build_prompt_payload(posts, account_data)
@@ -213,11 +239,9 @@ async def generate_ai_feature_predictions(posts: list[SinglePostInsights], accou
             content_format_recommendation=content_format_recommendation,
             tone_alignment_warning=tone_alignment_warning,
             viral_probability=_clamp(_safe_float(parsed.get("viral_probability"), 0.05), 0.0, 1.0),
-            campaign_roi_prediction=predicted_reach_band,
+            campaign_roi_prediction="Unknown",
             best_posting_time=optimal_posting_times,
-            audience_authenticity_score=_clamp(
-                _safe_float(parsed.get("audience_authenticity_score"), 50.0), 0.0, 100.0
-            ),
+            audience_authenticity_score=_audience_authenticity_from_signals(posts, account_data),
             spam_detected_count=sum(
                 1 for flag in safety_flags if "spam" in flag.lower() or "bot" in flag.lower()
             ),
@@ -239,6 +263,7 @@ def generate_ai_feature_predictions_sync(posts: list[SinglePostInsights], accoun
     )
     now = time.time()
     with _PREDICTION_CACHE_LOCK:
+        _evict_expired_predictions(now)
         cached = _PREDICTION_CACHE.get(cache_key)
         if cached is not None and cached[0] > now:
             return cached[1]
@@ -248,6 +273,7 @@ def generate_ai_feature_predictions_sync(posts: list[SinglePostInsights], accoun
     except RuntimeError:
         result = asyncio.run(generate_ai_feature_predictions(posts, account_data))
         with _PREDICTION_CACHE_LOCK:
+            _evict_expired_predictions(time.time())
             _PREDICTION_CACHE[cache_key] = (now + _CACHE_TTL_SECONDS, result)
         return result
 
@@ -262,8 +288,18 @@ def generate_ai_feature_predictions_sync(posts: list[SinglePostInsights], accoun
 
     worker = Thread(target=_runner, name="ai-features-sync-wrapper", daemon=True)
     worker.start()
-    result = future.result()
+    try:
+        result = future.result(timeout=300)
+    except TimeoutError:
+        logger.warning("[AIFeaturesEngine] Timed out waiting for prediction worker.")
+        result = AIFeaturePredictions(
+            campaign_roi_prediction="Unknown",
+            audience_authenticity_score=_audience_authenticity_from_signals(posts, account_data),
+            prediction_status="degraded",
+            degraded_reason="prediction_timeout",
+        )
     with _PREDICTION_CACHE_LOCK:
+        _evict_expired_predictions(time.time())
         _PREDICTION_CACHE[cache_key] = (now + _CACHE_TTL_SECONDS, result)
     return result
 

@@ -17,6 +17,7 @@ function formatBand(value) {
         EXCEPTIONAL:  '🏆 Exceptional',
         STRONG:       '💪 Strong',
         AVERAGE:      '📈 Growing',
+        BUILDING_MOMENTUM: '🚀 Building Momentum',
         NEEDS_WORK:   '🚀 High Potential',
     }
     return map[value] || value || 'Unknown'

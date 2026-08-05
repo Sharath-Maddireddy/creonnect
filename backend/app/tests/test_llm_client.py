@@ -18,6 +18,8 @@ def _build_llm_client_with_create_mock(create_mock: Mock, max_retries: int = 0) 
     client.max_tokens = 256
     client.timeout = 30
     client.max_retries = max_retries
+    client.retry_base_delay_seconds = 0.5
+    client.retry_max_delay_seconds = 8.0
     client._client = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(create=create_mock),
@@ -87,6 +89,25 @@ def test_generate_fails_fast_for_missing_prompt_key_without_retry() -> None:
 
     assert "Missing required prompt key: 'user'" in str(exc_info.value)
     assert create_mock.call_count == 0
+
+
+def test_generate_uses_exponential_backoff_between_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    create_mock = Mock(
+        side_effect=[
+            TimeoutError("first timeout"),
+            TimeoutError("second timeout"),
+            _mock_response("hello"),
+        ]
+    )
+    llm = _build_llm_client_with_create_mock(create_mock=create_mock, max_retries=2)
+    sleep_mock = Mock()
+    monkeypatch.setattr("backend.app.ai.llm_client.time.sleep", sleep_mock)
+
+    output = llm.generate({"system": "sys", "user": "usr"})
+
+    assert output == "hello"
+    assert create_mock.call_count == 3
+    assert [call.args[0] for call in sleep_mock.call_args_list] == [0.5, 1.0]
 
 
 def test_generate_does_not_log_finetune_dataset_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

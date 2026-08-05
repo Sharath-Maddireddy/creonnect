@@ -5,6 +5,7 @@ from __future__ import annotations
 from backend.app.analytics.brand_match_engine import (
     _audience_size_fit,
     _engagement_quality,
+    _niche_fit,
     _semantic_fit,
     score_creator_against_brand,
 )
@@ -23,6 +24,12 @@ def test_exact_niche_match_scores_20() -> None:
 def test_no_niche_match_scores_3() -> None:
     result = score_creator_against_brand("c1", _brand(), creator_dominant_category="cooking")
     assert result.niche_fit == 3.0
+
+
+def test_partial_niche_match_requires_category_tokens() -> None:
+    score, _ = _niche_fit("fitness", "fit")
+
+    assert score == 3.0
 
 
 def test_unknown_niche_scores_neutral() -> None:
@@ -87,9 +94,35 @@ def test_unknown_adult_content_is_not_auto_disqualifying() -> None:
         creator_dominant_category="fitness",
         adult_content_detected=None,
         visual_quality_score_total=40.0,
+        brand_safety_score_total_0_50=45.0,
     )
     assert result.disqualified is False
     assert "Adult content status unknown; defaulting to non-disqualifying treatment." in result.notes
+
+
+def test_missing_engagement_rate_disqualifies_when_campaign_requires_one() -> None:
+    result = score_creator_against_brand(
+        "c1",
+        _brand(min_engagement_rate=0.03),
+        creator_dominant_category="fitness",
+        visual_quality_score_total=40.0,
+        brand_safety_score_total_0_50=45.0,
+    )
+
+    assert result.disqualified is True
+    assert "Predicted engagement rate is unavailable" in result.disqualify_reasons[0]
+
+
+def test_missing_brand_safety_disqualifies_creator() -> None:
+    result = score_creator_against_brand(
+        "c1",
+        _brand(),
+        creator_dominant_category="fitness",
+        visual_quality_score_total=40.0,
+    )
+
+    assert result.disqualified is True
+    assert any("Brand safety analysis is unavailable" in reason for reason in result.disqualify_reasons)
 
 
 def test_low_brand_safety_disqualifies() -> None:

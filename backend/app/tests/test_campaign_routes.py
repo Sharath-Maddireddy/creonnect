@@ -5,8 +5,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app.api.campaign_routes import rate_limiter
-from backend.app.services.creator_pool_service import LookalikeEmbeddingError
+from backend.app.api.campaign_routes import _process_pool_matching, rate_limiter
+from backend.app.domain.brand_models import BrandProfile
+from backend.app.services.creator_pool_service import CreatorPoolUnavailable, LookalikeEmbeddingError
 from backend.main import app
 
 
@@ -211,4 +212,49 @@ def test_campaign_rate_limiter_returns_429_after_limit(client: TestClient, valid
 
     assert limited_response.status_code == 429
     assert limited_response.json()["detail"] == "Rate limit exceeded. Try again later."
+
+
+def test_manual_campaign_match_returns_503_when_creator_pool_is_unavailable(
+    client: TestClient,
+    valid_api_key: str,
+) -> None:
+    with patch(
+        "backend.app.api.campaign_routes.query_creator_pool",
+        side_effect=CreatorPoolUnavailable("database unavailable"),
+    ):
+        response = client.post(
+            "/api/brand/campaign/match",
+            headers={"X-API-Key": valid_api_key},
+            json={"brand_profile": {"brand_name": "Test Brand", "niche": "fitness"}},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Creator search is temporarily unavailable."
+
+
+def test_shortlist_excludes_disqualified_creators() -> None:
+    brand = BrandProfile(brand_name="Test Brand", niche="fitness", content_quality_min=30.0)
+    matches, evaluated, disqualified_count = _process_pool_matching(
+        brand,
+        [
+            {
+                "account_id": "eligible",
+                "creator_dominant_category": "fitness",
+                "avg_visual_quality_score": 40.0,
+                "avg_brand_safety_score": 45.0,
+                "adult_content_detected": False,
+            },
+            {
+                "account_id": "disqualified",
+                "creator_dominant_category": "fitness",
+                "avg_visual_quality_score": 40.0,
+                "avg_brand_safety_score": 10.0,
+                "adult_content_detected": False,
+            },
+        ],
+    )
+
+    assert evaluated == 2
+    assert disqualified_count == 1
+    assert [match.account_id for match in matches] == ["eligible"]
 

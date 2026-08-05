@@ -164,9 +164,9 @@ def compute_s6_brand_safety(
     - competitor brand mention: -20 (when explicit flag or competitor list match exists)
     - alcohol/tobacco content in visual objects: -35
 
-    Optional upstream flags (currently note-only, no penalty):
-    - controversial_topic
-    - misinformation_flag
+    Optional upstream flags:
+    - controversial_topic: -15
+    - misinformation_flag: -30
     """
 
     notes: list[str] = []
@@ -309,9 +309,19 @@ def compute_s6_brand_safety(
         logger.info("[Cringe] Applied S6 penalty key=low_production")
 
     if controversial_topic:
-        notes.append("Upstream flag set: controversial_topic.")
+        raw_score -= 15.0
+        penalties.append(BrandSafetyPenalty(
+            key="controversial_topic", penalty=15,
+            reason="Upstream flag identified a controversial topic.",
+        ))
+        notes.append("Controversial-topic signal reduced brand safety.")
     if misinformation_flag:
-        notes.append("Upstream flag set: misinformation_flag.")
+        raw_score -= 30.0
+        penalties.append(BrandSafetyPenalty(
+            key="misinformation", penalty=30,
+            reason="Upstream flag identified potential misinformation.",
+        ))
+        notes.append("Misinformation signal reduced brand safety.")
 
     raw_score = _clamp(raw_score, 0.0, 100.0)
     total_0_50 = round(raw_score / 2.0, 1)

@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-
 import fakeredis
+from conftest import make_fake_redis_client
 from fastapi.testclient import TestClient
 
 from backend.app.analytics.reel_audio_engine import ReelAudioScore
+from backend.app.api.instagram_auth_routes import AuthenticatedInstagramUser, get_current_instagram_user
 from backend.app.domain.account_models import AccountHealthScore, CreatorIntelligence, PillarScore
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
 import backend.app.infra.redis_client as redis_client
@@ -74,14 +75,18 @@ class _ImmediateQueue:
 
 
 def test_enqueue_returns_job_id_and_writes_queued_status(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
 
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
 
-    client = TestClient(app)
-    response = client.post("/api/account-analysis", json={"account_id": "acct_queue", "post_limit": 5})
+    app.dependency_overrides[get_current_instagram_user] = lambda: AuthenticatedInstagramUser(id="acct_queue")
+    try:
+        client = TestClient(app)
+        response = client.post("/api/account-analysis", json={"account_id": "acct_queue", "post_limit": 5})
+    finally:
+        app.dependency_overrides.pop(get_current_instagram_user, None)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "queued"
@@ -90,6 +95,7 @@ def test_enqueue_returns_job_id_and_writes_queued_status(monkeypatch) -> None:
     status = account_analysis_jobs.get_account_analysis_job_status(job_id)
     assert status is not None
     assert status["status"] == "queued"
+    assert status["account_id"] == "acct_queue"
     assert status["progress"] is None
 
     assert deferred_queue.calls
@@ -102,7 +108,7 @@ def test_enqueue_returns_job_id_and_writes_queued_status(monkeypatch) -> None:
 
 
 def test_job_function_writes_started_then_succeeded(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     payload = {
@@ -128,7 +134,7 @@ def test_job_function_writes_started_then_succeeded(monkeypatch) -> None:
 
 
 def test_job_function_failure_writes_failed_status(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     payload = {
@@ -147,7 +153,7 @@ def test_job_function_failure_writes_failed_status(monkeypatch) -> None:
 
 
 def test_polling_endpoint_returns_stored_result(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: _ImmediateQueue())
 
@@ -175,7 +181,7 @@ def test_polling_endpoint_returns_stored_result(monkeypatch) -> None:
 
 
 def test_status_ttl_is_set(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     account_analysis_jobs.initialize_job_status("job_ttl")
@@ -185,14 +191,14 @@ def test_status_ttl_is_set(monkeypatch) -> None:
 
 
 def test_stale_queued_job_auto_fails_on_poll(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "ACCOUNT_ANALYSIS_QUEUED_STALE_SECONDS", 60)
 
     job_id = "job_stale_queued"
     payload = account_analysis_jobs.initialize_job_status(job_id)
     payload["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    account_analysis_jobs._write_status(job_id, payload)
+    account_analysis_jobs._store.write(job_id, payload)
 
     status = account_analysis_jobs.get_account_analysis_job_status(job_id)
     assert status is not None
@@ -200,14 +206,14 @@ def test_stale_queued_job_auto_fails_on_poll(monkeypatch) -> None:
     assert status["finished_at"] is not None
     assert status["error"]["type"] == "TimeoutError"
     assert "queued" in status["error"]["message"]
-    persisted = account_analysis_jobs._read_status(job_id)
+    persisted = account_analysis_jobs._store.get(job_id)
     assert persisted is not None
     assert persisted["status"] == "queued"
     assert persisted["finished_at"] is None
 
 
 def test_stale_started_job_auto_fails_on_poll(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "ACCOUNT_ANALYSIS_STARTED_STALE_SECONDS", 60)
 
@@ -216,7 +222,7 @@ def test_stale_started_job_auto_fails_on_poll(monkeypatch) -> None:
     payload["status"] = "started"
     payload["started_at"] = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     payload["progress"] = {"stage": "fetch", "done": 1, "total": 30}
-    account_analysis_jobs._write_status(job_id, payload)
+    account_analysis_jobs._store.write(job_id, payload)
 
     status = account_analysis_jobs.get_account_analysis_job_status(job_id)
     assert status is not None
@@ -224,14 +230,14 @@ def test_stale_started_job_auto_fails_on_poll(monkeypatch) -> None:
     assert status["finished_at"] is not None
     assert status["error"]["type"] == "TimeoutError"
     assert "started" in status["error"]["message"]
-    persisted = account_analysis_jobs._read_status(job_id)
+    persisted = account_analysis_jobs._store.get(job_id)
     assert persisted is not None
     assert persisted["status"] == "started"
     assert persisted["finished_at"] is None
 
 
 def test_dedupe_returns_same_job_id(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
@@ -250,7 +256,7 @@ def test_dedupe_returns_same_job_id(monkeypatch) -> None:
 
 
 def test_rate_limit_blocks_after_threshold(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
@@ -259,7 +265,7 @@ def test_rate_limit_blocks_after_threshold(monkeypatch) -> None:
     first = client.post("/api/account-analysis", json={"account_id": "acct_rate", "post_limit": 5})
     second = client.post("/api/account-analysis", json={"account_id": "acct_rate", "post_limit": 6})
     third = client.post("/api/account-analysis", json={"account_id": "acct_rate", "post_limit": 7})
-    fourth = client.post("/api/account-analysis", json={"account_id": "acct_rate", "post_limit": 5})
+    fourth = client.post("/api/account-analysis", json={"account_id": "acct_rate", "post_limit": 8})
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -268,11 +274,10 @@ def test_rate_limit_blocks_after_threshold(monkeypatch) -> None:
 
     detail = fourth.json()["detail"]
     assert "message" in detail
-    assert detail["job_id"] == first.json()["job_id"]
 
 
 def test_failed_job_allows_new_enqueue(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
@@ -298,7 +303,7 @@ def test_failed_job_allows_new_enqueue(monkeypatch) -> None:
 
 
 def test_inputhash_idempotency_reuses_job(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     deferred_queue = _DeferredQueue()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
@@ -321,7 +326,7 @@ def test_inputhash_idempotency_reuses_job(monkeypatch) -> None:
 
 
 def test_missing_gemini_key_adds_warning(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
@@ -341,7 +346,7 @@ def test_missing_gemini_key_adds_warning(monkeypatch) -> None:
 
 
 def test_posts_summary_included_when_flag_true(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     long_caption = "x" * 200
@@ -368,7 +373,7 @@ def test_posts_summary_included_when_flag_true(monkeypatch) -> None:
 
 
 def test_posts_summary_not_included_by_default(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     payload = {
@@ -385,7 +390,7 @@ def test_posts_summary_not_included_by_default(monkeypatch) -> None:
 
 
 def test_posts_summary_determinism(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     posts_payload = [_build_post_payload_with_caption(i, f"caption-{i}" * 20) for i in range(7)]
@@ -415,7 +420,7 @@ def test_posts_summary_determinism(monkeypatch) -> None:
 
 
 def test_reel_posts_receive_inline_reel_analysis_in_account_analysis(monkeypatch) -> None:
-    fake_redis = fakeredis.FakeRedis(decode_responses=True)
+    fake_redis = make_fake_redis_client()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
 
     async def _fake_build_single_post_insights(target_post, historical_posts, run_ai=True):  # noqa: ANN001

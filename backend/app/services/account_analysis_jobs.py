@@ -8,7 +8,7 @@ import json
 import os
 import re
 from collections.abc import Callable
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any
 from uuid import uuid4
 
@@ -23,6 +23,14 @@ from backend.app.analytics.account_health_engine import (
     compute_content_type_performance,
 )
 from backend.app.analytics.creator_scoring_engine import calculate_creator_score
+from backend.app.services.creator_intelligence_report_service import build_creator_intelligence_report
+from backend.app.services.creator_intelligence_report_store import (
+    get_peer_cohort,
+    get_follower_snapshots,
+    persist_creator_intelligence_report,
+    record_follower_snapshot,
+)
+from backend.app.utils.env import is_feature_enabled
 from backend.app.analytics.peer_ranking_engine import build_creator_rankings
 from backend.app.analytics.reel_analysis_service import compute_reel_analysis
 from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
@@ -408,6 +416,7 @@ def _enforce_rate_limit(account_id: str, running_job_id: str | None) -> None:
     rate_value = int(rate_value)
     if rate_value <= ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR:
         return
+    _restore_rate_limit_counter(account_id)
     raise AccountAnalysisRateLimitError(
         message=(
             f"Rate limit exceeded for account_id='{account_id}'. "
@@ -450,15 +459,14 @@ def _get_async_bridge_loop() -> asyncio.AbstractEventLoop:
         if _ASYNC_BRIDGE_LOOP is not None and _ASYNC_BRIDGE_LOOP.is_running():
             return _ASYNC_BRIDGE_LOOP
 
-        ready = Lock()
-        ready.acquire()
+        ready = Event()
 
         def _runner() -> None:
             global _ASYNC_BRIDGE_LOOP
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             _ASYNC_BRIDGE_LOOP = loop
-            ready.release()
+            loop.call_soon(ready.set)
             loop.run_forever()
 
         _ASYNC_BRIDGE_THREAD = Thread(
@@ -467,8 +475,7 @@ def _get_async_bridge_loop() -> asyncio.AbstractEventLoop:
             daemon=True,
         )
         _ASYNC_BRIDGE_THREAD.start()
-        ready.acquire()
-        ready.release()
+        ready.wait()
         if _ASYNC_BRIDGE_LOOP is None:
             raise RuntimeError("Failed to initialize async bridge loop.")
         return _ASYNC_BRIDGE_LOOP
@@ -540,8 +547,6 @@ def _enqueue_account_analysis_job_impl(
         )
         return {"job_id": reusable_job_id, "status": reusable_status}
 
-    _enforce_rate_limit(account_id, running_job_id=None)
-
     raw_job_id = _normalize_job_id(sanitized_payload.get("job_id"))
     job_id = raw_job_id or str(uuid4())
     full_payload = dict(sanitized_payload)
@@ -558,7 +563,10 @@ def _enqueue_account_analysis_job_impl(
         post_limit,
         sanitized_payload.get("source"),
     )
+    rate_limit_reserved = False
     try:
+        _enforce_rate_limit(account_id, running_job_id=None)
+        rate_limit_reserved = True
         queue = get_queue()
         if hasattr(queue, "enqueue"):
             retry = Retry(max=2, interval=[10, 30])
@@ -614,7 +622,8 @@ def _enqueue_account_analysis_job_impl(
     except Exception:
         _delete_dedupe_job_id(account_id, post_limit, job_id)
         _delete_inputhash_job_id(account_id, payload_hash, job_id)
-        _restore_rate_limit_counter(account_id)
+        if rate_limit_reserved:
+            _restore_rate_limit_counter(account_id)
         raise
     return {"job_id": job_id, "status": "queued"}
 
@@ -698,13 +707,15 @@ def _posts_payload_has_precomputed_scores(payload: dict[str, Any]) -> bool:
 
     for item in raw_posts:
         if isinstance(item, SinglePostInsights):
-            return True
+            weighted_score = getattr(item.weighted_post_score, "score", None)
+            if weighted_score is None or weighted_score <= 0:
+                return False
         if isinstance(item, dict):
             has_all_keys = all(key in item for key in required_keys)
             has_no_none = all(item.get(key) is not None for key in required_keys)
-            if has_all_keys and has_no_none:
-                return True
-    return False
+            if not (has_all_keys and has_no_none):
+                return False
+    return True
 
 
 def _build_warning(
@@ -824,7 +835,7 @@ def _build_post_summary(
         ai_summary = ai_summary.strip() or None
     summary = {
         "post_id": post.media_id,
-        "shortcode": None,
+        "shortcode": getattr(post, "shortcode", None),
         "post_type": _normalize_summary_post_type(post.media_type),
         "media_url": _bounded_media_url(post.media_url),
         "caption_preview": _caption_preview(post.caption_text, max_len=120),
@@ -1263,19 +1274,75 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             except Exception:
                 creator_rankings = None
 
+        follower_snapshots = []
+        follower_count = payload.get("follower_count")
+        if isinstance(follower_count, int) and follower_count >= 0:
+            _try_nonfatal(
+                "follower snapshot",
+                lambda: record_follower_snapshot(
+                    account_id=account_id,
+                    follower_count=follower_count,
+                    source=str(payload.get("source") or "account_analysis"),
+                ),
+                account_id,
+            )
+            follower_snapshots = _try_nonfatal(
+                "follower snapshot history",
+                lambda: get_follower_snapshots(account_id),
+                account_id,
+                fallback=[],
+            )
+
+        creator_intelligence_report = None
+        peer_cohort = _try_nonfatal(
+            "creator peer cohort",
+            lambda: get_peer_cohort(
+                account_id=account_id,
+                creator_dominant_category=payload.get("creator_dominant_category"),
+                follower_count=follower_count if isinstance(follower_count, int) else None,
+            ),
+            account_id,
+            fallback=[],
+        )
+
         def _attach_signals() -> None:
+            nonlocal creator_intelligence_report
             result.creator_intelligence = creator_intelligence
             result.vision_summary = vision_summary
             result.engagement_signals = engagement_signals
             result.content_type_performance = content_type_performance
             result.creator_rankings = creator_rankings
+            report_enabled = is_feature_enabled("CREATOR_INTELLIGENCE_REPORT_V1")
+            shadow_mode_enabled = is_feature_enabled("CREATOR_INTELLIGENCE_REPORT_V1_SHADOW_MODE")
+            if report_enabled or shadow_mode_enabled:
+                creator_intelligence_report = build_creator_intelligence_report(
+                    result,
+                    follower_snapshots=follower_snapshots,
+                    posts=processed_posts,
+                    peer_cohort=peer_cohort,
+                )
+                if report_enabled:
+                    result.creator_intelligence_report = creator_intelligence_report
         _try_nonfatal("attaching account signals", _attach_signals, account_id)
 
-        result_payload = result.model_dump(mode="python")
+        result_payload = result.model_dump(mode="json")
         if creator_score is not None:
             result_payload["creator_score"] = creator_score.model_dump(mode="python")
         persisted_result_payload = dict(result_payload)
+        if creator_intelligence_report is not None and result.creator_intelligence_report is None:
+            persisted_result_payload["creator_intelligence_report"] = creator_intelligence_report.model_dump(mode="json")
         persisted_result_payload["draft_optimizer_history"] = _draft_optimizer_history(processed_posts)
+
+        if creator_intelligence_report is not None:
+            _try_nonfatal(
+                "creator intelligence report persistence",
+                lambda: persist_creator_intelligence_report(
+                    analysis_job_id=job_id,
+                    account_id=account_id,
+                    report=creator_intelligence_report,
+                ),
+                account_id,
+            )
 
         predicted_engagement_rates = sorted(
             rate

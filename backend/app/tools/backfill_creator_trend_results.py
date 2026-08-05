@@ -14,45 +14,13 @@ import asyncio
 import logging
 
 from backend.app.infra.database import get_sync_sessionmaker
-from backend.app.infra.models import CreatorDiscoveryMeta, CreatorTrendResult
+from backend.app.infra.models import CreatorDiscoveryMeta
 from backend.app.services.creator_trend_service import CreatorTrendService
 from backend.app.services.draft_history_service import load_draft_history_context
 from backend.app.domain.account_models import CreatorIntelligence
+from backend.app.services.trend_result_store import upsert_trend_result_sync
 
 logger = logging.getLogger("backfill")
-
-
-def upsert_trend_result_sync(account_id: str, result) -> None:
-    Session = get_sync_sessionmaker()
-    with Session() as session:
-        existing = session.get(CreatorTrendResult, account_id)
-        niche_payload = result.niche.model_dump(mode="python") if hasattr(result.niche, "model_dump") else {}
-        global_trends_payload = [t.model_dump(mode="python") for t in result.global_trends]
-        recommendations_payload = [r.model_dump(mode="python") for r in result.recommendations]
-        content_gaps_payload = [g.model_dump(mode="python") for g in result.content_gaps] if result.content_gaps else []
-        daily_insights_payload = result.daily_insights.model_dump(mode="python") if result.daily_insights and hasattr(result.daily_insights, "model_dump") else None
-        opportunity_bullets_payload = result.opportunity_bullets if result.opportunity_bullets else []
-
-        if existing is None:
-            new_row = CreatorTrendResult(
-                account_id=account_id,
-                niche_json=niche_payload,
-                global_trends_json=global_trends_payload,
-                recommendations_json=recommendations_payload,
-                content_gaps_json=content_gaps_payload,
-                daily_insights_json=daily_insights_payload,
-                opportunity_bullets_json=opportunity_bullets_payload,
-            )
-            session.add(new_row)
-        else:
-            existing.niche_json = niche_payload
-            existing.global_trends_json = global_trends_payload
-            existing.recommendations_json = recommendations_payload
-            existing.content_gaps_json = content_gaps_payload
-            existing.daily_insights_json = daily_insights_payload
-            existing.opportunity_bullets_json = opportunity_bullets_payload
-            session.add(existing)
-        session.commit()
 
 
 async def compute_for_account(account_id: str) -> None:

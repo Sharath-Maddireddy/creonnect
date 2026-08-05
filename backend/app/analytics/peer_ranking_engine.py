@@ -122,8 +122,9 @@ def _extract_post_metrics(
             derived_er = getattr(post, "derived_metrics", None)
             if derived_er is not None and getattr(derived_er, "engagement_rate", None) is not None:
                 er_val = float(derived_er.engagement_rate)
-                # derived_metrics.engagement_rate is typically 0-1, convert to %
-                er_vals.append(er_val * 100.0 if er_val < 1 else er_val)
+                # Stored rates are decimal ratios; values >= 0.5 are already
+                # percentage-like outliers and should not be scaled again.
+                er_vals.append(er_val * 100.0 if er_val < 0.5 else er_val)
             else:
                 engagement = likes + comments + shares + saves
                 er_vals.append((engagement / reach) * 100.0 if engagement else 0.0)
@@ -155,13 +156,20 @@ def _build_deterministic_rankings(
     Uses a log-transformed percentile approach to handle skewed distributions
     better than a naive linear formula.
     """
-    # Approximate tier averages for Indian Instagram (conservative estimates)
+    # Approximate tier averages for Indian Instagram. Reach and impressions
+    # scale with audience size; engagement and quality metrics remain comparable.
+    band = _follower_band_label(follower_count)
+    tier_averages_by_band: dict[str, dict[str, float]] = {
+        "0-10k": {"avg_reach": 2_500.0, "avg_impressions": 3_200.0},
+        "10k-100k": {"avg_reach": 8_000.0, "avg_impressions": 10_000.0},
+        "100k-1M": {"avg_reach": 35_000.0, "avg_impressions": 45_000.0},
+        "1M+": {"avg_reach": 100_000.0, "avg_impressions": 130_000.0},
+    }
     tier_averages: dict[str, float] = {
-        "avg_reach": 2_500.0,
         "avg_er": 3.5,
-        "avg_impressions": 3_200.0,
         "avg_save_rate": 1.2,
         "avg_s4": 50.0,
+        **tier_averages_by_band.get(band, tier_averages_by_band["0-10k"]),
     }
     tier_labels: dict[str, str] = {
         "avg_reach": "Reach",
@@ -227,16 +235,14 @@ def _build_deterministic_rankings(
             "thresholds": thresholds,
         })
 
-    # Audience score — s4 is on a 0-50 scale, normalize to 0-100 percentile
-        raw_s4 = metrics.get("avg_s4", 25.0)
+    # Audience score — s4 is on a 0-50 scale, normalize to 0-100 percentile.
+    raw_s4 = metrics.get("avg_s4", 25.0)
     audience_score_pct = min((raw_s4 / 50.0) * 100.0, 99.9)
     audience_tier = (
         "Top 5%" if audience_score_pct >= 95 else "Top 10%" if audience_score_pct >= 90 else "Top 20%" if audience_score_pct >= 80 else "Bottom 80%"
     )
 
     best_stat_key = max(metric_keys, key=lambda k: metrics.get(k, 0.0)).replace("avg_", "")
-    band = _follower_band_label(follower_count)
-
     return {
         "rankings": rankings,
         "audience_score": {

@@ -65,7 +65,7 @@ def map_instagram_profile(api_profile: Dict, api_media: List[Dict]) -> CreatorPr
         likes.append(_safe_int(m.get("like_count", 0)))
         comments.append(_safe_int(m.get("comments_count", 0)))
 
-        v = m.get("video_view_count")
+        v = m.get("views") if m.get("views") is not None else m.get("video_view_count")
         if v is not None:
             views.append(_safe_int(v))
 
@@ -153,8 +153,9 @@ def map_instagram_posts(api_media: List[Dict]) -> List[CreatorPostAIInput]:
 
         # Get views (only for videos)
         views = None
-        if m.get("video_view_count") is not None:
-            views = _safe_int(m.get("video_view_count"))
+        raw_views = m.get("views") if m.get("views") is not None else m.get("video_view_count")
+        if raw_views is not None:
+            views = _safe_int(raw_views)
 
         posts.append(
             CreatorPostAIInput(

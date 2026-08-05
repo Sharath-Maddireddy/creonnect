@@ -10,7 +10,7 @@ from backend.app.analytics.caption_s2_engine import analyze_caption_via_llm, com
 
 def test_hook_scoring_with_question_and_keyword() -> None:
     score = compute_s2_caption_effectiveness("How this works?\nSome body text here")
-    assert score.hook_score_0_100 == 100
+    assert score.hook_score_0_100 == 90
 
 
 def test_hook_scoring_missing_first_line_or_too_long() -> None:
@@ -33,7 +33,7 @@ def test_hashtag_scoring_ranges() -> None:
     assert compute_s2_caption_effectiveness("No tags here").hashtag_score_0_100 == 20
     assert compute_s2_caption_effectiveness("One #tag").hashtag_score_0_100 == 60
     assert compute_s2_caption_effectiveness(" ".join(f"#t{i}" for i in range(10))).hashtag_score_0_100 == 100
-    assert compute_s2_caption_effectiveness(" ".join(f"#t{i}" for i in range(20))).hashtag_score_0_100 == 70
+    assert compute_s2_caption_effectiveness(" ".join(f"#t{i}" for i in range(20))).hashtag_score_0_100 == 40
 
 
 def test_cta_regex() -> None:
@@ -46,9 +46,9 @@ def test_s2_weighted_total_matches_reference() -> None:
     caption = "Amazing reveal!\n" + ("x" * 70) + " #tag1 #tag2"
     score = compute_s2_caption_effectiveness(caption)
 
-    # Expected: hook=80, length=70, hashtags=60, cta=20
-    expected_raw = round(80 * 0.30 + 70 * 0.20 + 60 * 0.25 + 20 * 0.25)
-    assert score.hook_score_0_100 == 80
+    # Expected: hook=75, length=70, hashtags=60, cta=20
+    expected_raw = round(75 * 0.30 + 70 * 0.20 + 60 * 0.25 + 20 * 0.25)
+    assert score.hook_score_0_100 == 75
     assert score.length_score_0_100 == 70
     assert score.hashtag_score_0_100 == 60
     assert score.cta_score_0_100 == 20

@@ -7,6 +7,7 @@ from typing import Any
 from backend.app.account_sources.base import AccountSource
 from backend.app.account_sources.creonnect_bd_source import CreonnectBDAccountSource
 from backend.app.account_sources.fixture_source import FixtureAccountSource
+from backend.app.account_sources.instagram_oauth_source import InstagramOAuthAccountSource
 from backend.app.account_sources.models import AccountSourceRequest, AccountSourceType
 
 
@@ -44,6 +45,8 @@ def get_account_source(source_type: AccountSourceType) -> AccountSource:
         return FixtureAccountSource()
     if source_type == AccountSourceType.CREONNECT_BD:
         return CreonnectBDAccountSource()
+    if source_type == AccountSourceType.INSTAGRAM_OAUTH:
+        return InstagramOAuthAccountSource()
     raise ValueError(f"Unsupported account source '{source_type.value}'.")
 
 

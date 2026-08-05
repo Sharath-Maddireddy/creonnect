@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.app.domain.creator_intelligence_report_models import CreatorIntelligenceReport
+
 
 Band = Literal["BUILDING_MOMENTUM", "AVERAGE", "STRONG", "EXCEPTIONAL"]
 
@@ -269,6 +271,7 @@ class AudienceInsights(BaseModel):
     comment_sentiment_neutral_pct: float | None = Field(default=None, ge=0.0, le=100.0)
     comment_sentiment_negative_pct: float | None = Field(default=None, ge=0.0, le=100.0)
     is_estimated: bool = Field(default=False, description="True when values are synthetic estimates, not real API data.")
+    data_unavailable_reason: str | None = Field(default=None, description="Why audience metrics are unavailable.")
 
 
 class NicheBenchmark(BaseModel):
@@ -279,6 +282,7 @@ class NicheBenchmark(BaseModel):
     engagement_rate_vs_niche: float | None = Field(default=None, description="Ratio vs niche engagement rate.")
     reach_vs_niche: float | None = Field(default=None, description="Ratio vs niche reach.")
     growth_vs_niche: float | None = Field(default=None, description="Ratio vs niche growth rate.")
+    data_unavailable_reason: str | None = Field(default=None, description="Why one or more niche comparisons are unavailable.")
 
 
 class AudienceDemographics(BaseModel):
@@ -357,6 +361,7 @@ class AccountHealthScore(BaseModel):
     engagement_signals: AccountEngagementSignals | None = None
     content_type_performance: ContentTypePerformance | None = None
     creator_rankings: CreatorPeerRankings | None = None
+    creator_intelligence_report: CreatorIntelligenceReport | None = None
 
     # --- New dashboard-facing fields (all optional for backward compatibility) ---
     growth_stage: str | None = Field(default=None, description="Human-readable growth stage label derived from AHS band.")

@@ -233,7 +233,7 @@ class ToolOrchestrator:
 
         return ToolResponse.ok(
             tool="get_creator_analysis",
-            data=row.result_json,
+            data=self._summarize_analysis_for_prompt(row.result_json),
             message="Retrieved creator analysis profile.",
             ui={"layout": "profile_detail"},
             meta=ToolResponseMeta(latency_ms=0.0, result_count=1),

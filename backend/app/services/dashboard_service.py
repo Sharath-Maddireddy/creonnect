@@ -5,7 +5,6 @@ Orchestrates creator dashboard data assembly.
 """
 
 import asyncio
-from datetime import date, timedelta
 
 from backend.app.ai.schemas import CreatorPostAIInput
 from backend.app.analytics.audience_quality import calculate_authenticity_score
@@ -31,6 +30,7 @@ from backend.core.momentum import calculate_momentum
 from backend.core.best_time import get_best_posting_hours
 from backend.app.domain.post_models import DerivedMetrics
 from backend.app.services.post_insights_service import _coerce_single_post_insights
+from backend.app.utils.logger import logger
 
 
 def _placeholder_media_url(post_id: str | None, size: int = 800) -> str:
@@ -127,20 +127,14 @@ async def build_creator_dashboard_async(creator_id: str, access_token: str | Non
             "published_at": p.posted_at.isoformat() if p.posted_at else None,
         })
 
-    # Generate simulated snapshot history for momentum calculation
-    # In production, this would come from a database
-    today = date.today()
-    simulated_snapshots = []
-    base_followers = profile.followers_count - 500  # Simulate growth
-    for i in range(7):
-        day = today - timedelta(days=6 - i)
-        simulated_snapshots.append({
-            "date": day.isoformat(),
-            "followers": base_followers + (i * 80)  # ~80 followers/day growth
-        })
-
-    # Calculate momentum
-    momentum = calculate_momentum(simulated_snapshots)
+    # The Instagram profile API is a point-in-time source. Do not infer a
+    # growth rate until persisted historical follower snapshots are available.
+    momentum = {
+        "available": False,
+        "momentum_value": None,
+        "momentum_label": "unavailable",
+        "note": "Follower history is required to calculate momentum.",
+    }
 
     # Calculate best posting times
     posts_for_time_analysis = [
@@ -320,7 +314,8 @@ async def build_creator_analytics_async(creator_id: str, access_token: str | Non
                 creator_dominant_category=niche.get("primary_niche"),
                 follower_count=followers_count,
             )
-    except Exception:
+    except Exception as exc:
+        logger.warning("[Dashboard] Creator intelligence generation failed: %s", exc)
         from backend.app.domain.account_models import CreatorIntelligence
         creator_intelligence = CreatorIntelligence()
 

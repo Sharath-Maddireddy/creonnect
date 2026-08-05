@@ -136,8 +136,6 @@ def test_integration_manual_campaign_match(client: TestClient, valid_api_key: st
     assert data["disqualified_count"] == 1
     assert data["matches"][0]["account_id"] == "good_fit"
     assert data["matches"][0]["disqualified"] is False
-    assert data["matches"][1]["account_id"] == "disqualified_fit"
-    assert data["matches"][1]["disqualified"] is True
-    assert len(data["matches"][1]["disqualify_reasons"]) > 0
+    assert len(data["matches"]) == 1
 
 

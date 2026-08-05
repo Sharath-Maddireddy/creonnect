@@ -57,7 +57,8 @@ CREONNECT_BD_ACCESS_TOKEN=your_creonnect_bd_access_token_here
 
 Use `CORS_ALLOWED_ORIGINS` as a comma-separated list for your frontend origins in non-local environments.
 Use `CREONNECT_BD_ACCESS_TOKEN` when loading data from the `creonnect_bd` upstream source so the backend sends `Authorization: Bearer <token>` on those outbound API requests automatically.
-Use `QUEUE_BACKEND=rq` for the current Redis/RQ flow or `QUEUE_BACKEND=sqs` to send jobs through AWS SQS.
+Use `QUEUE_BACKEND` to select queue transport (`sqs` or `rq`).
+Current default is `QUEUE_BACKEND=sqs` unless overridden.
 When using SQS, configure:
 
 ```bash

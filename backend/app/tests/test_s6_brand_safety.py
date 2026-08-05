@@ -66,6 +66,19 @@ def test_missing_inputs_safe() -> None:
     assert score.penalties == []
 
 
+def test_upstream_controversy_and_misinformation_reduce_safety() -> None:
+    score = compute_s6_brand_safety(
+        caption_text="Clean caption",
+        vision=None,
+        s1_total_0_50=30.0,
+        extracted_brand_mentions=None,
+        extra_flags={"controversial_topic": True, "misinformation_flag": True},
+    )
+
+    assert score.s6_raw_0_100 == 55
+    assert {penalty.key for penalty in score.penalties} == {"controversial_topic", "misinformation"}
+
+
 def test_determinism() -> None:
     payload = {
         "caption_text": "damn",

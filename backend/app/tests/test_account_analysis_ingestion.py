@@ -31,7 +31,7 @@ def test_run_account_analysis_job_triggers_upsert_creator(
     # Setup mocks
     mock_fetch_posts.return_value = []
     
-    mock_asyncio_run.return_value = {
+    async_result = {
         "posts": [],
         "notes_by_post_id": {},
         "warnings": [],
@@ -39,6 +39,15 @@ def test_run_account_analysis_job_triggers_upsert_creator(
         "vision_error_count": 0,
         "ai_fallback_count": 0,
     }
+
+    def discard_coroutine(coroutine):  # noqa: ANN001
+        coroutine_name = coroutine.cr_code.co_name
+        coroutine.close()
+        if coroutine_name == "generate_creator_intelligence":
+            return None
+        return async_result
+
+    mock_asyncio_run.side_effect = discard_coroutine
 
     mock_analyze_health.return_value = AccountHealthScore(
         ahs_score=85.0,
@@ -74,5 +83,5 @@ def test_run_account_analysis_job_triggers_upsert_creator(
     assert called_args["niche_tags"] == ["coding"]
     assert called_args["ahs_score"] == 85.0
     assert called_args["avg_visual_quality_score"] == 80.0
-    assert called_args["predicted_engagement_rate"] == 90.0
+    assert called_args["predicted_engagement_rate"] is None
     assert called_args["avg_brand_safety_score"] == 100.0

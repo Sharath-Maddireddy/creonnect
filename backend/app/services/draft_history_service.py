@@ -37,7 +37,8 @@ def _coerce_history_post(item: Any, *, account_id: str, follower_count: int | No
         follower_count=follower_count,
         core_metrics=CoreMetrics(reach=None, impressions=None, likes=None, comments=None, saves=None, shares=None),
         derived_metrics=DerivedMetrics(
-            engagement_rate=_safe_float(scores.get("predicted_er")),
+            # Predicted ER is a forward-looking estimate, not observed performance.
+            engagement_rate=_safe_float(scores.get("engagement_rate")),
         ),
         benchmark_metrics=BenchmarkMetrics(),
     )

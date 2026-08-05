@@ -146,8 +146,7 @@ def _infer_persona(
     if tags:
         return f"Creator focused on {', '.join(tags[:2])}."
     if username and follower_count:
-        scale = "emerging" if follower_count < 100_000 else "established"
-        return f"{scale.title()} creator profile for @{username}."
+        return f"Creator profile for @{username}; add category or niche data for a more specific persona."
     return None
 
 

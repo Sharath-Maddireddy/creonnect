@@ -1,0 +1,375 @@
+# PRD: Trend Recommendations System — Production Upgrade
+
+**Author:** Engineering Team
+**Status:** Draft
+**Last Updated:** 2026-07-27
+**Target:** Production
+
+---
+
+## 1. Overview
+
+The Trend Recommendations system provides creators with AI-powered content suggestions personalized to their niche, audience, and current platform trends. This PRD covers upgrading the system from its current MVP (basic trend cards with hardcoded metadata) to a production-ready feature matching the full UI design — including opportunity scoring, reach estimation, timing recommendations, difficulty levels, content gap analysis, and daily insights.
+
+### 1.1 Current State
+
+- Backend returns `TrendRecommendation` with only 4 fields: `suggested_title`, `rationale`, `expected_impact`, `trend_reference`
+- Frontend fakes opportunity scores from momentum (peaking→92, rising→78, falling→55)
+- No reach estimation, no best time, no difficulty, no hook text
+- Content gaps are hardcoded strings
+- "Ask AI Assistant" is keyword matching, not real AI
+- "Today's Insights" section does not exist
+
+### 1.2 Target State
+
+Every recommendation card shows: title, hook, expected reach range, opportunity score, best posting time, difficulty level, content type style, rationale, and action buttons. Right sidebar shows real daily insights, dynamic content gaps, and audience-match-scored trending topics.
+
+---
+
+## 2. Goals and Objectives
+
+| Goal | Success Metric | Target |
+|---|---|---|
+| Rich recommendation cards | Every card has score, reach, time, difficulty, hook | 100% of cards |
+| Accurate opportunity scoring | Score correlates with actual engagement potential | Positive correlation with post performance |
+| Dynamic content gaps | Gaps derived from actual content analysis, not hardcoded | 0 hardcoded strings |
+| Daily insights | Today's Insights populated with real data | Always present |
+| Backward compatibility | Existing API consumers unbroken | All new fields optional |
+| Safe rollout | No production regressions during staged launch | 0 Sev-1 incidents |
+
+---
+
+## 2.1 Performance and SLO Targets
+
+- `GET /api/v1/accounts/{account_id}/trends`
+  - p50: <= 800ms (cache hit)
+  - p95: <= 2500ms (cache miss, no LLM retry)
+- `POST /api/v1/accounts/{account_id}/trends/generate-ideas`
+  - enqueue latency p95: <= 500ms
+  - job completion p95: <= 20s
+- Idea generation success rate: >= 97% (excluding invalid user input)
+- TOON parse failure rate: < 2%
+
+## 2.2 Deterministic Scoring Contract
+
+Opportunity score formula (0-100, deterministic for same inputs):
+
+`score = clamp(0, 100, momentum_component + niche_fit_component + content_type_component + recency_component)`
+
+- `momentum_component` in `[10, 40]`
+- `niche_fit_component` in `[0, 30]`
+- `content_type_component` in `[0, 20]`
+- `recency_component` in `[0, 10]`
+
+Rounding rule: round to 1 decimal place before response serialization.
+
+## 3. Functional Requirements
+
+### 3.0 API Contracts (Canonical)
+
+#### 3.0.1 Start idea generation
+`POST /api/v1/accounts/{account_id}/trends/generate-ideas`
+
+Request body example:
+```json
+{
+  "optimization_goals": ["maximum_reach", "engagement"],
+  "content_type": "reel",
+  "topic": "fitness transformation",
+  "audience": "25-34",
+  "tone_of_voice": ["educational"],
+  "count": 5
+}
+```
+
+Response example:
+```json
+{
+  "job_id": "a8d4e5a2-7d08-4e51-b6ce-5a5e7ec0110f",
+  "status": "processing",
+  "estimated_seconds": 15
+}
+```
+
+#### 3.0.2 Poll generation status
+`GET /api/v1/accounts/{account_id}/trends/generate-ideas/{job_id}/status`
+
+Response examples:
+```json
+{"status":"processing","current_step":2,"total_steps":5,"percent_complete":0.4}
+```
+
+```json
+{"status":"completed","ideas":[{"id":"...","title":"..."}]}
+```
+
+```json
+{"status":"failed","error":"LLM timeout"}
+```
+
+#### 3.0.3 Trends payload contract
+`GET /api/v1/accounts/{account_id}/trends`
+
+- Must include legacy fields unchanged.
+- New fields are optional and nullable.
+- When degraded computation occurs, include:
+```json
+"_meta": {
+  "degraded": true,
+  "degraded_reasons": ["rate_limit_unavailable", "history_context_fallback"]
+}
+```
+
+### 3.1 Backend Model Changes
+
+#### 3.1.1 `TrendRecommendation` — New Fields
+
+| Field | Type | Description | Source |
+|---|---|---|---|
+| `opportunity_score` | `float \| None` | 0-100 score combining trend momentum, niche fit, and engagement potential | Computed from trend signals + creator niche |
+| `expected_reach_min` | `int \| None` | Lower bound of expected reach range | Derived from historical post reach + trend multiplier |
+| `expected_reach_max` | `int \| None` | Upper bound of expected reach range | Derived from historical post reach + trend multiplier |
+| `best_time` | `str \| None` | Suggested posting time (e.g., "Thu, 8:30 PM") | Derived from creator's engagement heatmap |
+| `difficulty` | `Literal["Easy", "Medium", "Hard"] \| None` | Content creation difficulty | Derived from trend_type + content complexity |
+| `hook` | `str \| None` | Suggested opening hook text | Generated by LLM alongside recommendation |
+| `content_style` | `str \| None` | Richer content type label (e.g., "Storytelling", "Educational", "POV/Lifestyle") | Generated by LLM or derived from trend_type + niche |
+
+#### 3.1.2 `GlobalTrend` — New Fields
+
+| Field | Type | Description | Source |
+|---|---|---|---|
+| `audience_match_pct` | `float \| None` | 0-100 percentage match against creator's audience | Computed from trend relevance + audience overlap |
+
+#### 3.1.3 `TrendAnalysisResult` — New Fields
+
+| Field | Type | Description | Source |
+|---|---|---|---|
+| `content_gaps` | `list[ContentGap] \| None` | Dynamic content gaps derived from analysis | Computed from creator's content mix vs trending formats |
+| `daily_insights` | `DailyInsights \| None` | Today's insights (active times, best content type, competition) | Computed from engagement data + trend signals |
+| `opportunity_bullets` | `list[str] \| None` | AI-generated insight bullets for the weekly opportunity banner | Generated by LLM from trend + niche analysis |
+
+#### 3.1.4 New Models
+
+```python
+class ContentGap(BaseModel):
+    """A detected gap in the creator's content strategy."""
+    description: str          # e.g., "No educational content in 19 days"
+    severity: Literal["warning", "info", "opportunity"]
+    suggested_action: str | None = None
+
+class DailyInsights(BaseModel):
+    """Today's key insights for the creator."""
+    audience_active_window: str | None = None   # e.g., "8:30 PM – 11:30 PM"
+    best_content_type: str | None = None        # e.g., "Reels"
+    trending_audio_count: int | None = None
+    competition_level: Literal["Low", "Medium", "High"] | None = None
+    overall_opportunity: Literal["Very High", "High", "Medium", "Low"] | None = None
+```
+
+### 3.2 Backend Engine Changes
+
+#### 3.2.1 Opportunity Score Computation
+**File:** `backend/app/analytics/trend_recommendation_engine.py`
+
+New helper:
+```python
+def _compute_opportunity_score(
+    trend: GlobalTrend,
+    creator_intelligence: CreatorIntelligence,
+    engagement_heatmap: list[HeatmapData] | None = None,
+) -> float:
+```
+
+Factors:
+- Trend momentum: rising=30, peaking=40, falling=10 (max 40)
+- Niche fit: how well trend matches creator's category (0-30)
+- Content type match: format/audio trends score higher for video creators (0-20)
+- Recency: newer trends score higher (0-10)
+
+#### 3.2.2 Reach Estimation
+**File:** `backend/app/analytics/trend_recommendation_engine.py`
+
+New helper:
+```python
+def _estimate_reach_range(
+    posts: list[SinglePostInsights],
+    trend_momentum: str,
+) -> tuple[int | None, int | None]:
+```
+
+Uses median post reach × momentum multiplier (rising=1.2, peaking=1.5, falling=0.8) with ±20% range.
+
+#### 3.2.3 Best Time Derivation
+**File:** `backend/app/analytics/trend_recommendation_engine.py`
+
+New helper:
+```python
+def _derive_best_time(heatmap: list[HeatmapData]) -> str | None:
+```
+
+Extracts the top-intensity day/hour slot from the engagement heatmap.
+
+#### 3.2.4 Difficulty Computation
+**File:** `backend/app/analytics/trend_recommendation_engine.py`
+
+Logic:
+- `format` + simple structure → "Easy"
+- `topic` with research needed → "Medium"
+- `audio` requiring production → "Hard"
+- Default: "Medium"
+
+#### 3.2.5 Content Gap Analysis
+**File:** `backend/app/analytics/trend_recommendation_engine.py`
+
+New helper:
+```python
+def _detect_content_gaps(
+    posts: list[SinglePostInsights],
+    trends: list[GlobalTrend],
+) -> list[ContentGap]:
+```
+
+Detects:
+- Content types not posted recently (e.g., "No educational content in 19 days")
+- Missing face-to-camera reels
+- Underutilized trending formats
+- Low-performing content types vs trend opportunities
+
+#### 3.2.6 Daily Insights
+**File:** `backend/app/analytics/trend_recommendation_engine.py`
+
+New helper:
+```python
+def _compute_daily_insights(
+    posts: list[SinglePostInsights],
+    heatmap: list[HeatmapData],
+    trends: list[GlobalTrend],
+) -> DailyInsights:
+```
+
+Computes from engagement data: active window, best content type, trending audio count, competition level, overall opportunity.
+
+#### 3.2.7 Opportunity Bullets
+Generated by the LLM alongside recommendations. Extend the system prompt to produce 3-4 insight bullets for the weekly opportunity banner.
+
+### 3.3 Frontend Changes
+
+#### 3.3.1 SuggestionCard Enhancements
+**File:** `frontend/src/pages/TrendRecommendations.jsx`
+
+- Replace faked `scoreVal` with `rec.opportunity_score`
+- Add "Expected Reach" display using `rec.expected_reach_min`/`max`
+- Add "Best Time" display using `rec.best_time`
+- Add "Difficulty" badge using `rec.difficulty`
+- Add "Content Type" label using `rec.content_style`
+- Add "Hook" text display using `rec.hook`
+- Add thumbnail image display using trend reference or placeholder
+
+#### 3.3.2 Filter Tabs Expansion
+Replace current filters with: All, Reels, Carousel, Photo, Trending, Educational, Personal Story, Brand Friendly, Beginner, Advanced
+
+#### 3.3.3 Today's Insights Sidebar
+New component rendering `daily_insights` fields.
+
+#### 3.3.4 Trending Topics Audience Match
+Use `trend.audience_match_pct` instead of faked `98 - i * 8`.
+
+#### 3.3.5 Content Gaps
+Render `data.content_gaps` instead of hardcoded strings.
+
+#### 3.3.6 Sort Dropdown
+Proper dropdown with: Opportunity, Reach, Difficulty, Trending.
+
+#### 3.3.7 Grid/List View Toggle
+Add toggle between grid and list layouts.
+
+---
+
+## 3.4 Degraded Mode and Failure Handling
+
+- If LLM fails: return fallback recommendations and set degraded metadata.
+- If heatmap missing: set `best_time=None`, continue normal response.
+- If posts insufficient for reach estimation: set `expected_reach_min/max=None`.
+- If trend signals unavailable: return cached trends when possible; otherwise return a minimal safe payload plus degraded metadata.
+- Frontend behavior:
+  - Never block rendering if optional fields are missing.
+  - Show placeholder copy for null optional fields.
+  - Show a subtle “Limited data” chip when `_meta.degraded=true`.
+
+## 4. Non-Functional Requirements
+
+- All new fields optional (default `None`) for backward compatibility
+- Opportunity score computation must be deterministic for same inputs
+- Reach estimation must be based on actual historical data, not hardcoded
+- LLM prompt changes must not break existing TOON parsing
+- Route compatibility must be preserved for existing clients
+- All route/method combinations in frontend must match backend contracts (no 405s)
+- Feature must be gated behind a runtime rollout flag
+
+---
+
+## 4.1 Observability and Product Analytics
+
+### Backend telemetry
+- Log opportunity score components (`momentum`, `niche_fit`, `content_type`, `recency`) at debug level.
+- Emit counters:
+  - `trends_generation_started`
+  - `trends_generation_completed`
+  - `trends_generation_failed`
+  - `trends_fallback_used`
+  - `toon_parse_failure`
+- Emit histogram for generation duration and trend endpoint latency.
+
+### Product analytics events
+- `trend_card_viewed`
+- `trend_card_saved`
+- `trend_generate_clicked`
+- `trend_generate_succeeded`
+- `trend_generate_failed`
+- `planner_schedule_clicked`
+- `planner_schedule_succeeded`
+
+## 4.2 Rollout and Risk Mitigation
+
+- Feature flag: `FEATURE_TREND_RECOMMENDATIONS_V2`
+- Rollout stages:
+  1. Internal only
+  2. 10% creators
+  3. 50% creators
+  4. 100% creators
+- Rollback triggers:
+  - Generation failure rate > 5% for 15 minutes
+  - p95 generation duration > 30s for 15 minutes
+  - TOON parse failures > 5%
+
+## 5. Execution Order
+
+| Step | Description | Files | Effort |
+|---|---|---|---|
+| 1 | Add new Pydantic models (`ContentGap`, `DailyInsights`) | `trend_models.py` | Small |
+| 2 | Add new fields to `TrendRecommendation`, `GlobalTrend`, `TrendAnalysisResult` | `trend_models.py` | Small |
+| 3 | Add opportunity score + reach estimation + best time + difficulty helpers | `trend_recommendation_engine.py` | Medium |
+| 4 | Add content gap detection helper | `trend_recommendation_engine.py` | Medium |
+| 5 | Add daily insights helper | `trend_recommendation_engine.py` | Medium |
+| 6 | Update LLM prompt to generate hooks + opportunity bullets | `trend_recommendation_engine.py` | Small |
+| 7 | Wire new fields into `generate_trend_recommendations` return | `trend_recommendation_engine.py` | Small |
+| 8 | Wire content gaps + daily insights into `CreatorTrendService` | `creator_trend_service.py` | Small |
+| 9 | Update frontend SuggestionCard to render new fields | `TrendRecommendations.jsx` | Medium |
+| 10 | Update frontend filters, sort, and sidebar | `TrendRecommendations.jsx` | Medium |
+| 11 | Add unit tests for scoring/reach/time/gaps/insights | `test_trend_recommendations.py` | Medium |
+| 12 | Add API contract tests for generation + polling routes | `backend/app/tests/test_content_suggestion_routes.py` | Medium |
+| 13 | Add frontend integration tests for method/path correctness | `frontend/src/...` | Medium |
+| 14 | Add feature flag wiring + staged rollout config | backend + env docs | Small |
+| 15 | Add telemetry and analytics events | backend + frontend | Medium |
+
+---
+
+## 6. Definition of Done (DoD)
+
+- All acceptance tests pass (unit + contract + targeted UI flow tests).
+- No route-method mismatch in frontend/backend integration.
+- Trend generation and polling APIs return documented response shapes.
+- Backward compatibility validated against existing consumers.
+- Feature flag rollout completed through staged gates with no rollback trigger.
+- Monitoring dashboards include latency, failure rate, fallback rate, parse-failure rate.
+- Product analytics events are visible in analytics pipeline.

@@ -157,6 +157,7 @@ def _encode_image(image: Image.Image, output_format: str, compression: int | Non
     fmt = output_format.upper()
     save_kwargs: dict[str, Any] = {}
     if fmt in {"JPEG", "JPG"}:
+        fmt = "JPEG"
         save_kwargs["quality"] = compression or 90
         save_kwargs["optimize"] = True
         image = image.convert("RGB")
@@ -169,6 +170,15 @@ def _encode_image(image: Image.Image, output_format: str, compression: int | Non
         mime_type = "image/png"
     image.save(buffer, format=fmt, **save_kwargs)
     return base64.b64encode(buffer.getvalue()).decode("ascii"), mime_type
+
+
+def _resolve_output_format(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "jpeg":
+        normalized = "jpg"
+    if normalized not in {"png", "jpg", "webp"}:
+        raise ValueError("output_format must be one of: png, jpg, webp.")
+    return normalized
 
 
 def apply_filter_to_image(image_bytes: bytes, request: ApplyFilterRequest) -> ApplyFilterResponse:
@@ -185,30 +195,42 @@ def apply_filter_to_image(image_bytes: bytes, request: ApplyFilterRequest) -> Ap
     request_hash = build_filter_request_hash(request, width, height)
 
     profile = _scale_profile(style.get("native_filter_profile", {}), int(intensity["value"]))
+    selected_controls = set(request.enabled_control_ids)
+    applied_profile = dict(profile)
+    if "white-balance" not in selected_controls:
+        applied_profile["temperature"] = 0.0
+        applied_profile["tint"] = 0.0
+    if "film-grain" not in selected_controls:
+        applied_profile["grain"] = 0.0
+    if "subtle-vignette" not in selected_controls:
+        applied_profile["vignette"] = 0.0
 
     warnings: list[ApplyFilterWarning] = []
-    if abs(float(profile.get("grain", 0))) >= 12:
+    if abs(float(applied_profile.get("grain", 0))) >= 12:
         warnings.append(ApplyFilterWarning(code="high_grain", message="Selected profile applies visible grain."))
     if abs(float(profile.get("contrast", 0))) >= 10:
         warnings.append(
             ApplyFilterWarning(code="high_contrast", message="Selected profile applies high contrast and may clip tones.")
         )
 
-    image = _split_apply_temperature(image, float(profile.get("temperature", 0)))
-    image = _apply_tint(image, float(profile.get("tint", 0)))
+    if "white-balance" in selected_controls:
+        image = _split_apply_temperature(image, float(profile.get("temperature", 0)))
+        image = _apply_tint(image, float(profile.get("tint", 0)))
     image = _apply_exposure(image, float(profile.get("exposure", 0)))
     image = _apply_contrast(image, float(profile.get("contrast", 0)))
     image = _apply_saturation(image, float(profile.get("saturation", 0)) + float(profile.get("vibrance", 0)) * 0.6)
     image = _apply_fade(image, float(profile.get("fade", 0)))
-    image = _apply_grain(image, float(profile.get("grain", 0)))
-    image = _apply_vignette(image, float(profile.get("vignette", 0)))
+    if "film-grain" in selected_controls:
+        image = _apply_grain(image, float(profile.get("grain", 0)))
+    if "subtle-vignette" in selected_controls:
+        image = _apply_vignette(image, float(profile.get("vignette", 0)))
     image = _apply_sharpness(image, float(profile.get("sharpness", 0)))
     image = _apply_monochrome(image, bool(profile.get("monochrome", False)))
 
     if image.size != original_dimensions:
         raise ValueError("Filter-only mode must preserve the source dimensions.")
 
-    output_format = str(request.output_format or quality["output_format"]).lower()
+    output_format = _resolve_output_format(str(request.output_format or quality["output_format"]))
     image_base64, mime_type = _encode_image(
         image=image,
         output_format=output_format,
@@ -226,5 +248,5 @@ def apply_filter_to_image(image_bytes: bytes, request: ApplyFilterRequest) -> Ap
         output_format=output_format,
         image_base64=image_base64,
         warnings=warnings,
-        applied_profile=profile,
+        applied_profile=applied_profile,
     )

@@ -16,6 +16,7 @@ class AccountSourceType(str, Enum):
     FIXTURE = "fixture"
     CREONNECT_BD = "creonnect_bd"
     PRECOMPUTED = "precomputed"
+    INSTAGRAM_OAUTH = "instagram_oauth"
 
 
 class AccountSourceRequest(BaseModel):
@@ -37,6 +38,7 @@ class AccountSourceRequest(BaseModel):
     bd_timeout_seconds: float | None = None
     actor_user_id: str | None = None
     actor_user_email: str | None = None
+    access_token: str | None = Field(default=None, exclude=True)
 
     @field_validator(
         "account_id",

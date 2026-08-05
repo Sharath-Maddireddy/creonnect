@@ -238,6 +238,18 @@ def _tokenize_text(value: str | None) -> list[str]:
     return re.findall(r"[a-z0-9]+", value.lower())
 
 
+def _resolve_fallback_category(scores: dict[str, int], counts: Counter[str]) -> tuple[str, int]:
+    def _tie_breaker(category: str) -> tuple[int, int, int, str]:
+        unique_hits = sum(1 for keyword in _NICHE_KEYWORDS[category] if counts.get(keyword, 0) > 0)
+        total_hits = scores.get(category, 0)
+        strongest_keyword = max((counts.get(keyword, 0) for keyword in _NICHE_KEYWORDS[category]), default=0)
+        return (total_hits, unique_hits, strongest_keyword, category)
+
+    ordered = sorted(scores, key=_tie_breaker, reverse=True)
+    best = ordered[0]
+    return best, scores.get(best, 0)
+
+
 def _fallback_creator_niche(
     posts: List[SinglePostInsights],
     bio: str | None,
@@ -247,7 +259,7 @@ def _fallback_creator_niche(
     tokens.extend(_tokenize_text(username))
     tokens.extend(_tokenize_text(bio))
     media_type_counts: Counter[str] = Counter()
-    for post in posts[:20]:
+    for post in posts[:12]:
         tokens.extend(_tokenize_text(getattr(post, "caption_text", None)))
         tokens.extend(_tokenize_text(getattr(post, "post_category", None)))
         tokens.extend(_tokenize_text(getattr(post, "creator_dominant_category", None)))
@@ -260,7 +272,7 @@ def _fallback_creator_niche(
     for category, keywords in _NICHE_KEYWORDS.items():
         scores[category] = sum(counts[keyword] for keyword in keywords)
 
-    category, score = max(scores.items(), key=lambda item: item[1])
+    category, score = _resolve_fallback_category(scores, counts)
     if score <= 0:
         # Last-resort heuristic: dominant media type hints at content category
         if media_type_counts.get("reel", 0) + media_type_counts.get("video", 0) > len(posts) // 2:

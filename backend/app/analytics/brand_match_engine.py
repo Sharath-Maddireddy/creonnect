@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from backend.app.analytics.audience_quality import calculate_authenticity_score
@@ -33,12 +34,12 @@ def _niche_fit(creator_category: str | None, brand_niche: str) -> tuple[float, l
     if category == niche:
         notes.append(f"Exact niche match: '{category}'.")
         return 20.0, notes
-    if niche in category or category in niche:
+    category_words = set(re.findall(r"[a-z0-9]+", category))
+    niche_words = set(re.findall(r"[a-z0-9]+", niche))
+    if category_words <= niche_words or niche_words <= category_words:
         notes.append(f"Partial niche match: creator='{category}', brand='{niche}'.")
         return 12.0, notes
 
-    category_words = set(category.split())
-    niche_words = set(niche.split())
     overlap = category_words & niche_words
     if overlap:
         notes.append(f"Niche word overlap: {sorted(overlap)}.")

@@ -8,8 +8,14 @@ Validates:
 
 from __future__ import annotations
 
-import pytest
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pytest
+from pydantic import ValidationError
+
+from backend.app.api import content_suggestion_routes
 from backend.app.domain.content_suggestion_models import (
     GenerateIdeasRequest,
     GenerateIdeasResponse,
@@ -17,13 +23,16 @@ from backend.app.domain.content_suggestion_models import (
     GenerateScriptResponse,
     GenerateCaptionRequest,
     GenerateCaptionResponse,
+    IdeaReasoningResponse,
     ScheduleIdeaRequest,
     ScheduledItemResponse,
     SaveIdeaRequest,
     ImproveIdeaRequest,
     VariationsRequest,
     RegenerateRequest,
+    UpdateIdeaRequest,
 )
+from backend.app.infra.models import Idea
 
 
 # ── Request Model Contract Tests ──────────────────────────────────────────────
@@ -45,6 +54,46 @@ class TestRequestModelContracts:
         assert req.count == 5
         assert req.content_type == "reel"
         assert req.optimization_goals == ["maximum_reach", "engagement"]
+
+    def test_blank_generation_topic_uses_best_stored_trend(self):
+        class FakeDb:
+            async def get(self, _model, _account_id):
+                return SimpleNamespace(
+                    recommendations_json=[
+                        {"trend_reference": "Subnautica 2 launch coverage and multiplayer survival"},
+                    ],
+                    global_trends_json=[],
+                )
+
+        request = GenerateIdeasRequest(topic=None)
+        resolved = asyncio.run(
+            content_suggestion_routes._with_default_trend_topic("creator-1", request, FakeDb())
+        )
+
+        assert resolved.topic == "Subnautica 2 launch coverage and multiplayer survival"
+
+    def test_explicit_generation_topic_is_preserved(self):
+        class FakeDb:
+            async def get(self, _model, _account_id):
+                raise AssertionError("Stored trends should not be queried for an explicit topic")
+
+        request = GenerateIdeasRequest(topic="GTA 6 trailer breakdown")
+        resolved = asyncio.run(
+            content_suggestion_routes._with_default_trend_topic("creator-1", request, FakeDb())
+        )
+
+        assert resolved.topic == "GTA 6 trailer breakdown"
+
+    def test_update_idea_request_only_accepts_supported_mutations(self):
+        req = UpdateIdeaRequest.model_validate({"content_type": "carousel", "status": "hidden"})
+        assert req.content_type == "carousel"
+        assert req.status == "hidden"
+
+        with pytest.raises(ValidationError):
+            UpdateIdeaRequest.model_validate({"content_type": "story"})
+
+        with pytest.raises(ValidationError):
+            UpdateIdeaRequest.model_validate({"account_id": "another-account"})
 
     def test_generate_script_request_formats_correctly(self):
         """Frontend sends: {idea_id, script_type, tone, language, duration_seconds}"""
@@ -188,6 +237,25 @@ class TestResponseModelContracts:
         assert data["captions"][0]["caption_text"] == "Check out this amazing content!"
         assert data["captions"][0]["character_count"] == 32
 
+    def test_idea_reasoning_response_has_truth_fields(self):
+        resp = IdeaReasoningResponse(
+            idea_id="idea-1",
+            opportunity_score=82,
+            factors=[
+                {"key": "momentum_score", "value": 88, "tooltip": "Momentum is strong"},
+            ],
+            ai_confidence_pct=79,
+            percentile_rank=84,
+            strongest_factor="momentum_score",
+            weakest_factor="competitive_score",
+            summary_explanation="Momentum is the strongest signal right now.",
+        )
+        data = resp.model_dump()
+        assert data["ai_confidence_pct"] == 79
+        assert data["percentile_rank"] == 84
+        assert data["factors"][0]["key"] == "momentum_score"
+        assert data["summary_explanation"] == "Momentum is the strongest signal right now."
+
 
 # ── Field Name Parity Tests ───────────────────────────────────────────────────
 
@@ -280,3 +348,46 @@ class TestErrorHandling:
                 "expected_impact": "High",
                 "opportunity_score": 150,  # above max 100
             })
+
+
+@pytest.mark.asyncio
+async def test_get_idea_reasoning_uses_backend_evidence():
+    idea = Idea(
+        id="idea-1",
+        account_id="acct-1",
+        title="Test idea",
+        description="Test description",
+        content_type="reel",
+        platform="instagram",
+        opportunity_score=82,
+        engagement_score=71,
+        difficulty="Medium",
+        best_time_to_post="Thu, 8:30 PM",
+        trend_reference="Power Beat Transition",
+        generation_metadata={
+            "content_style": "Educational",
+            "rationale": "This aligns with current audience demand.",
+            "trend_snapshot": {
+                "trend_type": "format",
+                "momentum": "rising",
+                "audience_match_pct": 91,
+            },
+            "recommendation_snapshot": {
+                "opportunity_score": 84,
+            },
+        },
+        status="draft",
+    )
+
+    first_result = SimpleNamespace(scalar_one_or_none=lambda: idea)
+    second_result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [60, 82, 90]))
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[first_result, second_result])
+
+    response = await content_suggestion_routes.get_idea_reasoning("acct-1", "idea-1", db=db)
+
+    assert response.idea_id == "idea-1"
+    assert response.percentile_rank == 67
+    assert response.ai_confidence_pct >= 70
+    assert any(factor.key == "momentum_score" and factor.value == 88 for factor in response.factors)
+    assert "best posting time" in response.summary_explanation.lower()

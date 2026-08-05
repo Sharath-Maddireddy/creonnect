@@ -130,6 +130,25 @@ tone_alignment_warning
 
 @patch("backend.app.analytics.draft_optimizer_engine.LLMClient")
 @patch("backend.app.analytics.draft_optimizer_engine.run_vision_analysis")
+def test_draft_visual_score_averages_available_values(mock_run_vision_analysis, mock_llm_client_cls) -> None:
+    mock_llm = MagicMock()
+    mock_llm.generate.return_value = "optimized_caption_options\npredicted_reach_band Average\noptimal_posting_times\nsafety_flags\ncontent_format_recommendation Keep it\ntone_alignment_warning"
+    mock_llm_client_cls.return_value = mock_llm
+    mock_run_vision_analysis.return_value = {
+        "signals": [{"visual_quality_score": {"composition": 8.0, "lighting": 6.0, "subject_clarity": 7.0}}]
+    }
+
+    result = asyncio.run(optimize_draft_post(
+        draft_caption="draft", post_type="REEL", media_url="https://example.com/draft.jpg",
+        account_data={"account_id": "acct_1"}, historical_posts=[],
+    ))
+
+    assert result.visual_analysis is not None
+    assert result.visual_analysis.visual_quality_score == 7
+
+
+@patch("backend.app.analytics.draft_optimizer_engine.LLMClient")
+@patch("backend.app.analytics.draft_optimizer_engine.run_vision_analysis")
 def test_optimize_draft_post_normalizes_boolean_visual_flags(mock_run_vision_analysis, mock_llm_client_cls) -> None:
     mock_llm = MagicMock()
     mock_llm.generate.return_value = """

@@ -17,13 +17,21 @@ from backend.app.domain.trend_models import (
     CreatorNiche,
 )
 from backend.app.analytics.trend_recommendation_engine import (
+    _classify_angle_type,
+    _classify_creator_level,
+    _classify_format_family,
     _compute_opportunity_score,
-    _compute_difficulty,
+    _compute_execution_effort,
     _compute_daily_insights,
     _derive_best_time,
     _detect_content_gaps,
     _estimate_reach_range,
+    _parse_opportunity_bullets,
 )
+from backend.app.services.trend_cache import TrendAnalysisCache
+from backend.app.services.creator_trend_service import _build_heatmap_from_posts
+from backend.app.services.draft_history_service import _coerce_history_post
+from backend.app.analytics.global_trend_engine import fetch_global_trends
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -86,12 +94,6 @@ class TestOpportunityScore:
         score = _compute_opportunity_score(trend, intel)
         assert 20 <= score <= 60
 
-    def test_rising_audio_medium(self):
-        trend = _make_trend(momentum="rising", trend_type="audio")
-        intel = _make_intelligence()
-        score = _compute_opportunity_score(trend, intel)
-        assert 40 <= score <= 90
-
     def test_niche_fit_boosts_score(self):
         trend = _make_trend(description="Travel destinations and hotels")
         intel = _make_intelligence(style="Creates travel content around destinations")
@@ -100,7 +102,7 @@ class TestOpportunityScore:
 
     def test_score_always_in_range(self):
         for momentum in ["rising", "peaking", "falling"]:
-            for tt in ["topic", "format", "audio", "hashtag"]:
+            for tt in ["topic", "format", "hashtag"]:
                 trend = _make_trend(momentum=momentum, trend_type=tt)
                 score = _compute_opportunity_score(trend, _make_intelligence())
                 assert 0 <= score <= 100, f"Score {score} out of range for {momentum}/{tt}"
@@ -153,30 +155,79 @@ class TestBestTime:
         assert "Thu" in result
 
 
-# ── Difficulty Tests ──────────────────────────────────────────────────────────
+# ── Execution Effort Tests ───────────────────────────────────────────────────
 
-class TestDifficulty:
-    def test_format_is_easy(self):
-        assert _compute_difficulty(_make_trend(trend_type="format")) == "Easy"
+class TestExecutionEffort:
+    def test_format_is_quick(self):
+        effort, reason = _compute_execution_effort(_make_trend(trend_type="format"))
+        assert effort == "Quick"
+        assert reason
 
-    def test_audio_is_hard(self):
-        assert _compute_difficulty(_make_trend(trend_type="audio")) == "Hard"
-
-    def test_topic_default_medium(self):
+    def test_topic_default_is_planned(self):
         trend = _make_trend(trend_type="topic", description="A standard content topic with no special keywords")
-        assert _compute_difficulty(trend) == "Medium"
+        effort, _ = _compute_execution_effort(trend)
+        assert effort == "Planned"
 
-    def test_hashtag_is_medium(self):
+    def test_hashtag_is_quick(self):
         trend = _make_trend(trend_type="hashtag", description="A standard hashtag challenge with no special keywords")
-        assert _compute_difficulty(trend) == "Medium"
+        effort, _ = _compute_execution_effort(trend)
+        assert effort == "Quick"
 
-    def test_research_topic_is_hard(self):
+    def test_research_topic_is_production_heavy(self):
         trend = _make_trend(trend_type="topic", description="Deep dive research analysis tutorial")
-        assert _compute_difficulty(trend) == "Hard"
+        effort, _ = _compute_execution_effort(trend)
+        assert effort == "Production-heavy"
 
-    def test_quick_topic_is_easy(self):
+    def test_quick_topic_is_quick(self):
         trend = _make_trend(trend_type="topic", description="Quick simple easy casual post")
-        assert _compute_difficulty(trend) == "Easy"
+        effort, _ = _compute_execution_effort(trend)
+        assert effort == "Quick"
+
+
+class TestRecommendationClassification:
+    def test_format_family_detects_carousel(self):
+        trend = _make_trend(trend_type="topic", description="A swipe carousel breakdown")
+        rec = TrendRecommendation(
+            suggested_title="Carousel breakdown of the trend",
+            rationale="Use a slide-by-slide explanation",
+            expected_impact="Higher saves",
+            content_style="Educational",
+        )
+        assert _classify_format_family(trend, rec) == "carousel"
+
+    def test_format_family_detects_photo(self):
+        trend = _make_trend(trend_type="topic", description="Static lookbook photo trend")
+        rec = TrendRecommendation(
+            suggested_title="Photo lookbook",
+            rationale="A single image look can still win here",
+            expected_impact="Better discovery",
+        )
+        assert _classify_format_family(trend, rec) == "photo"
+
+    def test_angle_type_detects_personal_story(self):
+        trend = _make_trend(description="POV lifestyle story format")
+        rec = TrendRecommendation(
+            suggested_title="My honest experience trying this trend",
+            rationale="A personal journey angle fits your niche",
+            expected_impact="Stronger connection",
+            content_style="POV/Lifestyle",
+        )
+        assert _classify_angle_type(trend, rec) == "personal_story"
+
+    def test_angle_type_detects_brand_friendly(self):
+        trend = _make_trend(description="Shopping comparison trend")
+        rec = TrendRecommendation(
+            suggested_title="Best products in this trend",
+            rationale="A storefront comparison makes this brand-friendly",
+            expected_impact="Better conversion",
+        )
+        assert _classify_angle_type(trend, rec) == "brand_friendly"
+
+    def test_creator_level_maps_easy_to_beginner(self):
+        assert _classify_creator_level("Easy", _make_trend(), None) == "beginner"
+
+    def test_creator_level_maps_hard_to_advanced(self):
+        assert _classify_creator_level("Hard", _make_trend(), None) == "advanced"
 
 
 # ── Content Gap Tests ─────────────────────────────────────────────────────────
@@ -186,11 +237,24 @@ class TestContentGaps:
         gaps = _detect_content_gaps([], [])
         assert gaps == []
 
+    def test_insufficient_recent_posts_produces_no_opportunities(self):
+        gaps = _detect_content_gaps([_make_post(media_type="IMAGE") for _ in range(4)], [])
+        assert gaps == []
+
     def test_missing_reel_type_creates_gap(self):
         posts = [_make_post(media_type="IMAGE") for _ in range(5)]
         gaps = _detect_content_gaps(posts, [])
         reel_gaps = [g for g in gaps if "reel" in g.description.lower()]
-        assert len(reel_gaps) > 0
+        assert reel_gaps == []
+
+    def test_relevant_missing_format_has_evidence_and_priority(self):
+        posts = [_make_post(media_type="IMAGE") for _ in range(5)]
+        gaps = _detect_content_gaps(posts, [_make_trend(trend_type="format")])
+        reel_gaps = [gap for gap in gaps if "reel" in gap.description.lower()]
+        assert len(reel_gaps) == 1
+        assert reel_gaps[0].evidence
+        assert reel_gaps[0].priority_score is not None
+        assert gaps == sorted(gaps, key=lambda gap: gap.priority_score or 0, reverse=True)
 
     def test_diverse_posts_fewer_gaps(self):
         posts = [
@@ -226,15 +290,6 @@ class TestDailyInsights:
         assert insights.competition_level in ("Low", "Medium", "High")
         assert insights.overall_opportunity in ("Very High", "High", "Medium", "Low")
 
-    def test_multiple_trending_audio(self):
-        trends = [
-            _make_trend(trend_type="audio"),
-            _make_trend(trend_type="audio"),
-            _make_trend(trend_type="topic"),
-        ]
-        insights = _compute_daily_insights([], [], trends)
-        assert insights.trending_audio_count == 2
-
 
 # ── Model Validation Tests ────────────────────────────────────────────────────
 
@@ -261,9 +316,17 @@ class TestModels:
             difficulty="Easy",
             hook="Everyone told me Vietnam was expensive...",
             content_style="Storytelling",
+            format_family="reel",
+            angle_type="personal_story",
+            creator_level="beginner",
+            is_trending=True,
         )
         assert rec.opportunity_score == 85.0
         assert rec.hook == "Everyone told me Vietnam was expensive..."
+        assert rec.format_family == "reel"
+        assert rec.angle_type == "personal_story"
+        assert rec.creator_level == "beginner"
+        assert rec.is_trending is True
 
     def test_content_gap_model(self):
         gap = ContentGap(
@@ -277,7 +340,6 @@ class TestModels:
         insights = DailyInsights(
             audience_active_window="8PM-11PM",
             best_content_type="Reels",
-            trending_audio_count=5,
             competition_level="Medium",
             overall_opportunity="High",
         )
@@ -320,7 +382,7 @@ class TestDeterminism:
         assert peak > rise > fall, f"peaking={peak} rising={rise} falling={fall}"
 
     def test_score_rounds_to_one_decimal(self):
-        trend = _make_trend(momentum="rising", trend_type="audio")
+        trend = _make_trend(momentum="rising", trend_type="format")
         intel = _make_intelligence()
         score = _compute_opportunity_score(trend, intel)
         # Score should be rounded to 1 decimal place
@@ -357,6 +419,88 @@ class TestDegradedMode:
     def test_no_posts_no_gaps(self):
         gaps = _detect_content_gaps([], [_make_trend()])
         assert len(gaps) == 0
+
+
+class TestOpportunityBulletsParsing:
+    def test_structured_parser_ignores_keyword_in_rationale_text(self):
+        raw = """
+recommendations
+  -
+    suggested_title: Travel idea
+    rationale: Mention the word opportunity_bullets in prose without breaking parsing
+    expected_impact: Higher reach
+opportunity_bullets
+  - Travel reels are underutilized
+  - Storytelling hooks outperform static posts
+"""
+        bullets = _parse_opportunity_bullets(raw)
+        assert bullets == [
+            "Travel reels are underutilized",
+            "Storytelling hooks outperform static posts",
+        ]
+
+
+class TestTrendCache:
+    def test_invalidate_uses_versioned_key_pattern(self, monkeypatch):
+        seen_patterns: list[str] = []
+
+        class FakeRedis:
+            def scan_iter(self, match):
+                seen_patterns.append(match)
+                return []
+
+        monkeypatch.setattr("backend.app.services.trend_cache.get_redis", lambda: FakeRedis())
+        TrendAnalysisCache.invalidate("acct_123")
+        assert seen_patterns == ["trend_cache:v3:acct_123:*"]
+
+    def test_cache_key_changes_when_post_content_changes(self):
+        first = SinglePostInsights(media_id="post-1", account_id="acct", caption_text="first caption")
+        second = SinglePostInsights(media_id="post-1", account_id="acct", caption_text="updated caption")
+
+        assert TrendAnalysisCache.get_cache_key("acct", [first]) != TrendAnalysisCache.get_cache_key("acct", [second])
+
+
+class TestHeatmapEvidence:
+    def test_missing_engagement_rate_does_not_create_a_timing_signal(self):
+        post = SinglePostInsights(
+            media_id="post-1",
+            account_id="acct",
+            published_at=datetime(2024, 6, 1, 19, 30),
+        )
+
+        assert _build_heatmap_from_posts([post]) == []
+
+    def test_history_does_not_promote_predicted_er_to_observed_engagement(self):
+        post = _coerce_history_post(
+            {
+                "post_id": "post-1",
+                "scores": {"predicted_er": 0.09},
+            },
+            account_id="acct",
+            follower_count=1_000,
+        )
+
+        assert post is not None
+        assert post.derived_metrics.engagement_rate is None
+
+
+@pytest.mark.asyncio
+async def test_global_trends_require_live_signals(monkeypatch):
+    async def _no_signals(*_args, **_kwargs):
+        return []
+
+    class UnexpectedLLM:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("LLM should not run without live evidence")
+
+    monkeypatch.setattr("backend.app.analytics.global_trend_engine.fetch_live_trend_signals", _no_signals)
+    monkeypatch.setattr("backend.app.analytics.global_trend_engine.LLMClient", UnexpectedLLM)
+
+    result = await fetch_global_trends(
+        CreatorNiche(primary_category="Fitness", sub_niches=["workouts"], confidence_score=0.8)
+    )
+
+    assert result == []
 
 
 # ── SLO Boundary Tests ────────────────────────────────────────────────────────

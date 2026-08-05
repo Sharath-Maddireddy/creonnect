@@ -34,6 +34,7 @@ from backend.app.domain.account_models import (
     TopPostSummary,
 )
 from backend.app.domain.post_models import SinglePostInsights
+from backend.app.services.brand_readiness import calculate_brand_readiness
 from backend.app.utils.logger import logger
 from backend.app.utils.number_utils import safe_float as _safe_float
 
@@ -237,6 +238,7 @@ def _build_engagement_quality(
     median_save_rate = median(save_rates) if save_rates else None
     median_share_rate = median(share_rates) if share_rates else None
     if median_save_rate is not None and median_share_rate is not None:
+        # DerivedMetrics stores rates as decimal ratios, not display percentages.
         save_share_sum = median_save_rate + median_share_rate
         if save_share_sum >= 0.05:
             score += 5.0
@@ -562,37 +564,27 @@ def _extract_hashtags_from_caption(caption: str) -> list[str]:
     return re.findall(r'#(\w+)', caption.lower())
 
 
-def _calculate_brand_readiness(posts: list[SinglePostInsights], ahs_score: float) -> BrandReadiness:
-    """Compute brand readiness score based on AHS and engagement signals."""
-    if not posts:
-        return BrandReadiness()
-    engagement_rates = [
-        _safe_float(getattr(post.derived_metrics, "engagement_rate", None))
-        for post in posts
-    ]
-    engagement_rates = [er for er in engagement_rates if er is not None]
-    avg_er = sum(engagement_rates) / len(engagement_rates) if engagement_rates else 0.0
-    score = (ahs_score * 0.6) + (min(avg_er / 0.10, 1.0) * 100.0 * 0.4)
-    score = round(min(100.0, max(0.0, score)), 2)
-    if score >= 80:
-        label = "Highly Marketable"
-    elif score >= 60:
-        label = "Marketable"
-    elif score >= 40:
-        label = "Developing"
-    else:
-        label = "Early Stage"
-    est_rate_per_post = round(avg_er * 5000, 2) if avg_er > 0 else None
-    est_cpm = round(avg_er * 25, 2) if avg_er > 0 else None
-    est_min = round(est_rate_per_post * 0.8, 2) if est_rate_per_post is not None else None
-    est_max = round(est_rate_per_post * 1.2, 2) if est_rate_per_post is not None else None
+def _post_hashtags(post: SinglePostInsights) -> list[str]:
+    """Prefer platform-provided hashtags, falling back to caption parsing."""
+    api_hashtags = getattr(post, "hashtags", None)
+    if isinstance(api_hashtags, list):
+        normalized = [tag.strip().lstrip("#").lower() for tag in api_hashtags if isinstance(tag, str) and tag.strip()]
+        if normalized:
+            return normalized
+    return _extract_hashtags_from_caption(post.caption_text or "")
+
+
+def _calculate_brand_readiness(
+    posts: list[SinglePostInsights], pillar_scores: dict[str, PillarScore]
+) -> BrandReadiness:
+    """Adapt the canonical detailed readiness calculation for the dashboard."""
+    readiness = calculate_brand_readiness(
+        posts,
+        pillar_scores={key: {"score": pillar.score} for key, pillar in pillar_scores.items()},
+    )
     return BrandReadiness(
-        score=score,
-        label=label,
-        est_rate_per_post=est_rate_per_post,
-        est_rate_per_post_min=est_min,
-        est_rate_per_post_max=est_max,
-        est_cpm=est_cpm,
+        score=readiness.overall_score,
+        label=readiness.overall_label,
     )
 
 
@@ -677,13 +669,13 @@ def _extract_content_pillars(posts: list[SinglePostInsights]) -> list[ContentPil
     """Derive content pillars from caption hashtags and post categories."""
     pillar_counter = Counter()
     for post in posts:
-        caption = post.caption_text or ""
-        hashtags = _extract_hashtags_from_caption(caption)
+        hashtags = _post_hashtags(post)
         category = (post.post_category or "").strip().lower()
-        for tag in hashtags[:5]:
-            pillar_counter[tag] += 1
         if category and category not in {"unknown", ""}:
-            pillar_counter[category] += 1
+            pillar_counter[category] += 1.0
+        for tag in hashtags[:5]:
+            if tag != category:
+                pillar_counter[tag] += 0.25
     total = sum(pillar_counter.values()) or 1
     pillars = [
         ContentPillar(name=name, engagement_percentage=round((count / total) * 100, 2))
@@ -693,24 +685,30 @@ def _extract_content_pillars(posts: list[SinglePostInsights]) -> list[ContentPil
 
 
 def _generate_engagement_heatmap(posts: list[SinglePostInsights]) -> list[HeatmapData]:
-    """Generate a synthetic engagement heatmap from post timing."""
-    heat_bins = Counter()
-    er_bins = {}
+    """Generate posting-time slots from observed engagement data only.
+
+    A time recommendation needs repeated evidence. Slots with fewer than three
+    posts carrying an observed engagement rate are omitted instead of receiving
+    a neutral, fabricated intensity.
+    """
+    er_bins: dict[tuple[int, int], list[float]] = defaultdict(list)
     for post in posts:
         if post.published_at and hasattr(post.published_at, "weekday") and hasattr(post.published_at, "hour"):
             day = post.published_at.weekday()
             hour = post.published_at.hour
             key = (day, hour)
-            heat_bins[key] += 1
             er = _safe_float(getattr(post.derived_metrics, "engagement_rate", None))
-            if er is not None:
-                er_bins.setdefault(key, []).append(er)
-    max_count = max(heat_bins.values()) if heat_bins else 1
+            if er is not None and er >= 0.0:
+                er_bins[key].append(er)
+
+    valid_bins = {key: values for key, values in er_bins.items() if len(values) >= 3}
+    max_count = max((len(values) for values in valid_bins.values()), default=1)
     heatmap = []
-    for (day, hour), count in heat_bins.items():
+    for (day, hour), er_list in valid_bins.items():
+        count = len(er_list)
         count_weight = count / max_count
-        er_list = er_bins.get((day, hour), [])
-        er_weight = (sum(er_list) / len(er_list) / 0.10) if er_list else 0.5
+        avg_er = sum(er_list) / len(er_list)
+        er_weight = _map_absolute_er_to_score(avg_er) / 100.0
         intensity = round(min(1.0, max(0.0, (count_weight * 0.4 + er_weight * 0.6))), 3)
         heatmap.append(HeatmapData(day_of_week=day, hour_of_day=hour, intensity=intensity))
     return heatmap
@@ -722,8 +720,7 @@ def _aggregate_hashtag_performance(posts: list[SinglePostInsights]) -> list[Hash
     tag_reach = defaultdict(list)
     tag_er = defaultdict(list)
     for post in posts:
-        caption = post.caption_text or ""
-        hashtags = _extract_hashtags_from_caption(caption)
+        hashtags = _post_hashtags(post)
         reach = _safe_float(getattr(post.core_metrics, "reach", None))
         er = _safe_float(getattr(post.derived_metrics, "engagement_rate", None))
         seen = set()
@@ -763,19 +760,15 @@ def _calculate_funnel_metrics(posts: list[SinglePostInsights]) -> ConversionFunn
     for post in posts:
         total_pv += int(_safe_float(getattr(post.core_metrics, "profile_visits", None)) or 0)
         total_wt += int(_safe_float(getattr(post.core_metrics, "website_taps", None)) or 0)
-    # Synthetic estimate: 15% visit-to-follow conversion.
-    # Replace with real data from Instagram API when available.
-    total_follows = int(total_pv * 0.15)
-    vtfr = round((total_follows / total_pv) * 100, 2) if total_pv > 0 else None
     return ConversionFunnel(
         profile_visits=total_pv if total_pv > 0 else None,
         website_clicks=total_wt if total_wt > 0 else None,
-        follows=total_follows if total_follows > 0 else None,
-        profile_visit_to_follow_pct=vtfr,
+        follows=None,
+        profile_visit_to_follow_pct=None,
     )
 
 
-def _build_audience_insights(posts: list[SinglePostInsights]) -> AudienceInsights | None:
+def _build_audience_insights(posts: list[SinglePostInsights]) -> AudienceInsights:
     """Build audience insights when real API data is available.
 
     Instagram Graph API does not currently expose audience viewer breakdown
@@ -784,7 +777,11 @@ def _build_audience_insights(posts: list[SinglePostInsights]) -> AudienceInsight
     is integrated so the frontend can show "Data unavailable" instead of
     fabricated metrics.
     """
-    return None
+    return AudienceInsights(
+        data_unavailable_reason=(
+            "Audience viewer and sentiment breakdowns are not available from the connected Instagram data source."
+        )
+    )
 
 
 def _build_ai_summary(
@@ -811,10 +808,16 @@ def _build_ai_summary(
         "BUILDING_MOMENTUM": "high-growth-potential",
     }
     tier_label = tier_map.get(ahs_band, "developing")
+    next_step_map = {
+        "EXCEPTIONAL": "Maintain the current quality bar and protect the formats that are already working.",
+        "STRONG": "Focus on the weakest pillar while continuing to scale the top-performing format.",
+        "AVERAGE": "Build consistency and test stronger hooks around the best-performing content pillar.",
+        "BUILDING_MOMENTUM": "Establish a reliable posting cadence and refine content around one clear pillar.",
+    }
     text_summary = (
-        f"This account is in the '{tier_label}' tier, with clear opportunities to build momentum. "
-        f"Top content pillar is '{top_pillar}'. Best performing format is {top_content_type}. "
-        f"Prioritise posting consistency, refine your hashtag mix, and double down on your top-performing content type to accelerate growth."
+        f"This account is in the '{tier_label}' tier. Top content pillar is '{top_pillar}', "
+        f"and the best performing format is {top_content_type}. "
+        f"{next_step_map.get(ahs_band, next_step_map['AVERAGE'])}"
     )
     best_posting_time = _compute_best_posting_time(heatmap) if heatmap else None
     return AISummary(
@@ -946,7 +949,7 @@ def compute_account_health_score(
         metadata=metadata,
         # New dashboard fields
         growth_stage=_derive_growth_stage(ahs_band),
-        brand_readiness=_calculate_brand_readiness(recent_posts, ahs_score),
+        brand_readiness=_calculate_brand_readiness(recent_posts, pillars),
         core_metrics=_build_core_metrics_dashboard(recent_posts, follower_count),
         growth_overview_chart=_build_growth_overview_chart(recent_posts, follower_count),
         content_type_performance=compute_content_type_performance(recent_posts),
@@ -1001,6 +1004,9 @@ def _build_niche_benchmark(
         engagement_rate_vs_niche=er_vs_niche,
         reach_vs_niche=None,
         growth_vs_niche=None,
+        data_unavailable_reason=(
+            "Niche reach and growth benchmarks are not available from the connected benchmark data source."
+        ),
     )
 
 

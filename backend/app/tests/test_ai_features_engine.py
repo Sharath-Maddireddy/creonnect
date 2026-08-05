@@ -55,7 +55,7 @@ tone_alignment_warning
     assert result.safety_flags == ["Shadowban risk: repetitive use of giveaway language"]
     assert result.content_format_recommendation == "Turn this into a 7-second Reel for maximum reach"
     assert result.tone_alignment_warning == ""
-    assert result.campaign_roi_prediction == "High"
+    assert result.campaign_roi_prediction == "Unknown"
     assert result.best_posting_time == result.optimal_posting_times
     mock_llm.generate.assert_called_once()
 

@@ -203,9 +203,8 @@ def test_brand_safety_penalty() -> None:
 
 def test_determinism() -> None:
     posts = [_build_post(i, s1=33.0, s2=32.0, s3=34.0, engagement_rate=0.065) for i in range(12)]
-    now = datetime(2026, 2, 24, tzinfo=timezone.utc)
-    first = compute_account_health_score(posts, account_avg_engagement_rate=0.06, now_ts=now).model_dump(mode="python")
-    second = compute_account_health_score(posts, account_avg_engagement_rate=0.06, now_ts=now).model_dump(mode="python")
+    first = compute_account_health_score(posts, account_avg_engagement_rate=0.06).model_dump(mode="python")
+    second = compute_account_health_score(posts, account_avg_engagement_rate=0.06).model_dump(mode="python")
     assert first == second
 
 

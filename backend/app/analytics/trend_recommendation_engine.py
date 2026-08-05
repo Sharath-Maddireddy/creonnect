@@ -14,6 +14,7 @@ import hashlib
 from typing import List
 
 from backend.app.ai.llm_client import LLMClient
+from backend.app.ai.toon import loads as toon_loads
 from backend.app.ai.toon_helpers import toon_parse_list
 from backend.app.domain.account_models import CreatorIntelligence, HeatmapData
 from backend.app.domain.post_models import SinglePostInsights
@@ -151,6 +152,10 @@ _MOMENTUM_SCORES: dict[str, float] = {
     "falling": 10.0,
 }
 
+
+def momentum_score(momentum: str | None) -> float:
+    return _MOMENTUM_SCORES.get(str(momentum or "").lower(), 20.0)
+
 _TREND_TYPE_SCORES: dict[str, float] = {
     "format": 20.0,
     "topic": 12.0,
@@ -186,7 +191,7 @@ def _compute_opportunity_score(
     - Recency boost (0-10): based on post frequency
     """
     # Momentum component (0-40)
-    momentum_score = _MOMENTUM_SCORES.get(trend.momentum, 20.0)
+    momentum_score_value = momentum_score(trend.momentum)
 
     # Niche fit component (0-30)
     niche_score = 15.0  # default mid-range
@@ -202,17 +207,19 @@ def _compute_opportunity_score(
         creator_tokens |= _tokenize_text(theme)
     trend_tokens = _tokenize_text(combined_text)
 
+    category_scores: list[float] = []
     for category, keywords in _NICHE_CATEGORY_KEYWORDS.items():
         category_lower = category.lower()
         if category_lower in primary:
             keyword_hits = sum(1 for kw in keywords if kw in combined_text)
             if keyword_hits >= 2:
-                niche_score = 28.0
+                category_scores.append(28.0)
             elif keyword_hits >= 1:
-                niche_score = 22.0
+                category_scores.append(22.0)
             else:
-                niche_score = 12.0
-            break
+                category_scores.append(12.0)
+    if category_scores:
+        niche_score = max(category_scores)
     else:
         overlap_count = len((creator_tokens & trend_tokens) - {"with", "from", "your", "this"})
         if overlap_count >= 4:
@@ -243,8 +250,29 @@ def _compute_opportunity_score(
     elif posts and len(posts) >= 3:
         recency_score = 8.0
 
-    total = momentum_score + niche_score + type_score + recency_score
+    total = momentum_score_value + niche_score + type_score + recency_score
     return round(min(100.0, max(0.0, total)), 1)
+
+
+def _parse_opportunity_bullets(text: str) -> list[str]:
+    try:
+        parsed = toon_loads(text.strip())
+    except Exception:
+        return []
+
+    if not isinstance(parsed, dict):
+        return []
+
+    raw_bullets = parsed.get("opportunity_bullets")
+    if not isinstance(raw_bullets, list):
+        return []
+
+    bullets: list[str] = []
+    for item in raw_bullets:
+        value = _clean_text(item)
+        if value:
+            bullets.append(value)
+    return bullets
 
 
 def _estimate_reach_range(
@@ -443,13 +471,24 @@ def _detect_content_gaps(
     if storytelling_formats and not trend_types_used.intersection(storytelling_formats):
         format_label = ", ".join(sorted(storytelling_formats))
         evidence = f"None of your last {total} captions used POV, storytime, or tutorial framing."
+        storytelling_momentum = max(
+            (
+                {"peaking": 20.0, "rising": 15.0, "falling": 5.0}.get(trend.momentum, 10.0)
+                for trend in trends
+                if trend.trend_type == "format"
+                and any(token in f"{trend.topic_name} {trend.description}".lower() for token in storytelling_formats)
+            ),
+            default=10.0,
+        )
+        novelty_bonus = 12.0 if not trend_types_used else 6.0
+        priority = min(95.0, 48.0 + storytelling_momentum + novelty_bonus)
         opportunities.append(ContentGap(
             id=_opportunity_id(f"storytelling:{format_label}"),
             description=f"Try the active {format_label} format",
             severity="opportunity",
             suggested_action="Adapt one relevant POV, storytime, or tutorial structure to your niche this week.",
             evidence=evidence,
-            priority_score=75.0,
+            priority_score=priority,
         ))
 
     return sorted(opportunities, key=lambda opportunity: opportunity.priority_score or 0, reverse=True)
@@ -632,15 +671,7 @@ async def generate_trend_recommendations(
         results = toon_parse_list(raw, root_key="recommendations", model_cls=TrendRecommendation)
 
         # Parse opportunity_bullets from the raw text
-        opportunity_bullets: list[str] = []
-        if "opportunity_bullets" in text:
-            bullets_section = text.split("opportunity_bullets")[-1]
-            for line in bullets_section.splitlines():
-                line = line.strip()
-                if line.startswith("-"):
-                    val = line[1:].strip()
-                    if val:
-                        opportunity_bullets.append(val)
+        opportunity_bullets = _parse_opportunity_bullets(text)
 
         # Enrich recommendations with computed fields
         enriched: list[TrendRecommendation] = []

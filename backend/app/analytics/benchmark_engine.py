@@ -5,7 +5,7 @@ from __future__ import annotations
 from backend.app.domain.post_models import BenchmarkMetrics, SinglePostInsights
 
 
-MIN_VALID_HISTORY_POSTS = 1
+MIN_VALID_HISTORY_POSTS = 5
 
 
 def empty_benchmark_metrics() -> BenchmarkMetrics:

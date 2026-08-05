@@ -78,6 +78,8 @@ def test_build_creator_dashboard_marks_demo_authenticity_unavailable(monkeypatch
     assert result["authenticity_analysis"]["score"] is None
     assert result["authenticity_analysis"]["band"] == "unavailable"
     assert "synthetic" in result["authenticity_analysis"]["note"].lower()
+    assert result["summary"]["momentum"]["available"] is False
+    assert result["summary"]["momentum"]["momentum_value"] is None
 
 
 def test_build_creator_dashboard_keeps_real_authenticity_for_oauth_data(monkeypatch) -> None:
@@ -101,3 +103,4 @@ def test_build_creator_dashboard_keeps_real_authenticity_for_oauth_data(monkeypa
     assert result["authenticity_analysis"]["available"] is True
     assert result["authenticity_analysis"]["score"] == 88.0
     assert result["authenticity_analysis"]["band"] == "high"
+    assert result["summary"]["momentum"]["available"] is False

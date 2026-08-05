@@ -51,10 +51,10 @@ def _calculate_base_rate(engagement_rate: float) -> float:
     Instagram sponsored post rates typically correlate with engagement rate.
     Higher engagement = higher value to brands.
     """
-    # Base calculation: $X per 1% engagement rate
-    # Industry benchmark: $100-200 per 1% ER for mid-tier creators
-    base = engagement_rate * 15000  # $150 per 1% ER (adjustable)
-    return round(max(50.0, min(5000.0, base)), 2)  # Floor at $50, ceiling at $5000
+    # INR heuristic for Indian creator partnerships. Replace with market-rate
+    # data when it becomes available.
+    base = engagement_rate * 150_000
+    return round(max(1_000.0, min(250_000.0, base)), 2)
 
 
 def _calculate_follower_multiplier(follower_count: int) -> float:
@@ -183,7 +183,7 @@ def _calculate_revenue_projections(recommended_rate: float) -> RevenueProjection
     return RevenueProjections(
         monthly_deals_4=(round(rate_min * 4, 2), round(rate_max * 4, 2)),
         monthly_deals_8=(round(rate_min * 8, 2), round(rate_max * 8, 2)),
-        annual_potential=(round(rate_min * 48, 2), round(rate_max * 96, 2)),
+        annual_potential=(round(rate_min * 48, 2), round(rate_max * 48, 2)),
     )
 
 
@@ -195,6 +195,7 @@ def calculate_rate_recommendation(
     content_quality_score: float,
     save_rate: float,
     share_rate: float,
+    average_impressions: float | None = None,
 ) -> RateRecommendation:
     """Calculate comprehensive rate recommendation.
 
@@ -233,10 +234,13 @@ def calculate_rate_recommendation(
     rate_min = round(recommended_rate * 0.8, 2)
     rate_max = round(recommended_rate * 1.2, 2)
 
-    # Calculate CPM (cost per 1000 impressions)
-    # Estimate impressions from engagement rate and followers
-    estimated_impressions = follower_count * 0.3  # Assume 30% see sponsored content
-    cpm = round((recommended_rate / estimated_impressions * 1000), 2) if estimated_impressions > 0 else 0
+    # Calculate CPM from observed impressions. Do not invent a reach rate from
+    # follower count when post-level performance is unavailable.
+    cpm = (
+        round((recommended_rate / average_impressions * 1000), 2)
+        if isinstance(average_impressions, (int, float)) and average_impressions > 0
+        else 0.0
+    )
 
     # Build breakdown
     breakdown = RateBreakdown(
@@ -295,6 +299,7 @@ def calculate_rate_from_posts(
     engagement_rates = []
     save_rates = []
     share_rates = []
+    impressions = []
 
     for post in posts:
         er = _safe_float(getattr(post.derived_metrics, "engagement_rate", None))
@@ -306,6 +311,10 @@ def calculate_rate_from_posts(
         saves = _safe_float(getattr(post.core_metrics, "saves", None))
         shares = _safe_float(getattr(post.core_metrics, "shares", None))
         reach = _safe_float(getattr(post.core_metrics, "reach", None))
+        post_impressions = _safe_float(getattr(post.core_metrics, "impressions", None))
+
+        if post_impressions > 0:
+            impressions.append(post_impressions)
 
         if reach > 0:
             if saves > 0:
@@ -317,6 +326,7 @@ def calculate_rate_from_posts(
     avg_er = sum(engagement_rates) / len(engagement_rates) if engagement_rates else 0.03
     avg_save_rate = sum(save_rates) / len(save_rates) if save_rates else 0.05
     avg_share_rate = sum(share_rates) / len(share_rates) if share_rates else 0.01
+    avg_impressions = sum(impressions) / len(impressions) if impressions else None
 
     return calculate_rate_recommendation(
         engagement_rate=avg_er,
@@ -326,4 +336,5 @@ def calculate_rate_from_posts(
         content_quality_score=content_quality_score,
         save_rate=avg_save_rate,
         share_rate=avg_share_rate,
+        average_impressions=avg_impressions,
     )

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import GenerateIdeasModal from '../components/GenerateIdeasModal'
 import GenerationProgress from '../components/GenerationProgress'
@@ -10,6 +10,7 @@ import SaveIdeaModal from '../components/SaveIdeaModal'
 import MoreOptionsMenu from '../components/MoreOptionsMenu'
 import IdeaDetailDrawer from '../components/IdeaDetailDrawer'
 import AllTrendingTopics from '../components/AllTrendingTopics'
+import { formatCompactNumber } from '../utils/format'
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 // All calls go through Vite proxy (/api → http://localhost:8000)
@@ -164,7 +165,6 @@ const NAV_SECTIONS = [
             { icon: '▦', label: 'Overview', path: '/analytics' },
             { icon: '⌁', label: 'Analytics', path: '/analytics' },
             { icon: 'ϟ', label: 'AI Post Insights', path: '/analytics' },
-            { icon: '⌁', label: 'Account Analysis', path: '/account-analysis-demo' },
         ]
     },
     {
@@ -198,6 +198,7 @@ const NAV_SECTIONS = [
 // ─── Score Gauge (SVG) ────────────────────────────────────────────────────────
 function ScoreGauge({ score, label, color = '#8b5cf6' }) {
     const [animated, setAnimated] = useState(0)
+    const gradientId = useId()
     const radius = 52
     const circ = Math.PI * radius
 
@@ -220,7 +221,7 @@ function ScoreGauge({ score, label, color = '#8b5cf6' }) {
         <div className="cs-gauge">
             <svg viewBox="0 0 140 90" className="cs-gauge__svg">
                 <defs>
-                    <linearGradient id={`g-${label}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                    <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
                         <stop offset="0%" stopColor="#10b981" />
                         <stop offset="55%" stopColor="#3b82f6" />
                         <stop offset="100%" stopColor="#8b5cf6" />
@@ -230,7 +231,7 @@ function ScoreGauge({ score, label, color = '#8b5cf6' }) {
                 <path
                     className="cs-gauge__fill"
                     d="M 18 78 A 52 52 0 0 1 122 78"
-                    stroke={`url(#g-${label})`}
+                    stroke={`url(#${gradientId})`}
                     strokeDasharray={circ}
                     strokeDashoffset={progress}
                 />
@@ -417,7 +418,7 @@ function SuggestionCard({ trend, rec, index, onSaveIdea, onGenerate, onMoreOptio
                 {rec?.expected_reach_min != null && rec?.expected_reach_max != null && (
                     <div className="cs-stat">
                         <span className="cs-stat__label">Expected Reach</span>
-                        <span className="cs-stat__score">{(rec.expected_reach_min / 1000).toFixed(0)}K – {(rec.expected_reach_max / 1000).toFixed(0)}K</span>
+                        <span className="cs-stat__score">{formatCompactNumber(rec.expected_reach_min)} – {formatCompactNumber(rec.expected_reach_max)}</span>
                     </div>
                 )}
                 <div className="cs-stat">
@@ -718,6 +719,7 @@ export default function TrendRecommendations() {
     const [showCalendar, setShowCalendar] = useState(false)
     const [ideaPage, setIdeaPage] = useState(1)
     const [ideaLoading, setIdeaLoading] = useState(false)
+    const activeFetchRef = useRef({ controller: null, requestId: 0 })
 
     // ── On mount: load user_id from localStorage (set by Dashboard/OAuth flow) ──
     useEffect(() => {
@@ -762,12 +764,18 @@ export default function TrendRecommendations() {
     }, [])
 
     const fetchExisting = useCallback(async (id) => {
+        activeFetchRef.current.controller?.abort()
+        const controller = new AbortController()
+        const requestId = activeFetchRef.current.requestId + 1
+        activeFetchRef.current = { controller, requestId }
         setError(null); setLoading(true)
         try {
             // credentials:'include' sends session cookie for authentication
             const res = await fetch(`/api/v1/accounts/${encodeURIComponent(id)}/trends`, {
                 credentials: 'include',
+                signal: controller.signal,
             })
+            if (activeFetchRef.current.requestId !== requestId) return
             if (res.status === 401) {
                 setError('Not authenticated. Please log in from the Dashboard first.')
                 return
@@ -790,9 +798,12 @@ export default function TrendRecommendations() {
                 throw new Error(err.detail || `Server error ${res.status}`)
             }
         } catch (e) {
+            if (e.name === 'AbortError') return
             setError(e.message)
         } finally {
-            setLoading(false)
+            if (activeFetchRef.current.requestId === requestId) {
+                setLoading(false)
+            }
         }
     }, [triggerRefresh]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -833,6 +844,7 @@ export default function TrendRecommendations() {
     useEffect(() => {
         if (!jobId || !queued) return
         let cancelled = false
+        let reachedTerminalState = false
         setPolling(true)
         ;(async () => {
                         for (let i = 0; i < 90; i++) {  // poll for up to 7.5 minutes (90 x 5s)
@@ -847,19 +859,26 @@ export default function TrendRecommendations() {
                     const json = await res.json()
                     // Backend returns: {status: 'finished'|'failed'|'queued'|'processing', result?:{}}
                     if (json.status === 'finished' || json.status === 'completed') {
+                        reachedTerminalState = true
                         setData(json.result ?? json)
                         setVisibleCount(3)
                         setQueued(false); setJobId(null)
                         break
                     }
                     if (json.status === 'failed') {
+                        reachedTerminalState = true
                         setError(json.error || 'Background analysis failed. Please try refreshing.')
                         setQueued(false)
                         break
                     }
                 } catch (_) { /* network error while polling — retry next iteration */ }
             }
-            setPolling(false)
+            if (!cancelled && !reachedTerminalState) {
+                setError('Trend analysis took longer than expected. Please refresh to check the latest job status.')
+                setQueued(false)
+                setJobId(null)
+            }
+            if (!cancelled) setPolling(false)
         })()
         return () => { cancelled = true }
     }, [jobId, queued, accountId])
@@ -880,7 +899,7 @@ export default function TrendRecommendations() {
                     : rawInput.replace(/^@+/, '')
 
                 setAccountId(canonicalId)
-                fetchExisting(canonicalId)
+                await fetchExisting(canonicalId)
 
                 if (resolved && !resolved.resolved) {
                     setError(`We couldn't fully resolve "${rawInput}", so we tried it directly.`)
@@ -890,7 +909,7 @@ export default function TrendRecommendations() {
             } catch (_) {
                 const fallback = rawInput.replace(/^@+/, '')
                 setAccountId(fallback)
-                fetchExisting(fallback)
+                await fetchExisting(fallback)
             }
         })()
     }
@@ -901,7 +920,34 @@ export default function TrendRecommendations() {
     const allCards = (() => {
         const trends = data?.global_trends || []
         const recs   = data?.recommendations || []
-        const cards  = trends.map((t, i) => ({ trend: t, rec: recs[i] || null }))
+        const recommendationBuckets = new Map()
+        recs.forEach((rec, index) => {
+            const key = typeof rec?.trend_reference === 'string' ? rec.trend_reference.trim().toLowerCase() : ''
+            if (key) {
+                const existing = recommendationBuckets.get(key) || []
+                existing.push(rec)
+                recommendationBuckets.set(key, existing)
+            } else if (!key) {
+                recommendationBuckets.set(`__unmatched_${index}`, [rec])
+            }
+        })
+        const unmatchedRecommendations = recs.filter(rec => {
+            const key = typeof rec?.trend_reference === 'string' ? rec.trend_reference.trim().toLowerCase() : ''
+            return !key || !trends.some(trend => String(trend?.topic_name || '').trim().toLowerCase() === key)
+        })
+        const cards = trends.flatMap((t) => {
+            const key = String(t?.topic_name || '').trim().toLowerCase()
+            const matches = recommendationBuckets.get(key) || []
+            if (!matches.length) {
+                return [{ trend: t, rec: null }]
+            }
+            return matches.map((rec) => ({ trend: t, rec }))
+        })
+        unmatchedRecommendations.forEach((rec) => {
+            if (!cards.some(card => card.rec === rec)) {
+                cards.push({ trend: null, rec })
+            }
+        })
         const filtered = cards.filter(c => {
             const persistedIdeaId = quickIdeaMap[ideaKey(c.trend, c.rec)]?.ideaId
             return !hiddenIdeaIds.has(persistedIdeaId) && matchesFilter(c, activeFilter)
@@ -1037,7 +1083,7 @@ export default function TrendRecommendations() {
                     ideaId: idea.id,
                     title: idea.title,
                     hook: idea.hook || rec?.hook || null,
-                    contentType: idea.content_type || rec?.content_type || 'reel',
+                    contentType: idea.content_type || rec?.format_family || 'reel',
                 })
             } else if (kind === 'caption') {
                 setShowCaptionGen({
@@ -1061,7 +1107,7 @@ export default function TrendRecommendations() {
                     ideaId: persistedIdea.id,
                     title: persistedIdea.title,
                     hook: persistedIdea.hook || idea?.hook || null,
-                    contentType: persistedIdea.content_type || idea?.content_type || 'reel',
+                    contentType: persistedIdea.content_type || idea?.format_family || idea?.content_type || 'reel',
                 })
             } else if (kind === 'caption') {
                 setShowCaptionGen({
@@ -1078,7 +1124,7 @@ export default function TrendRecommendations() {
                             id: persistedIdea.id,
                             title: persistedIdea.title,
                             hook: persistedIdea.hook || idea?.hook || null,
-                            contentType: persistedIdea.content_type || idea?.content_type || null,
+                            contentType: persistedIdea.content_type || idea?.format_family || idea?.content_type || null,
                         },
                     },
                 })
@@ -1175,6 +1221,17 @@ export default function TrendRecommendations() {
         const topicName = topic?.topic_name || topic?.name || ''
         setSeedTopic(topicName)
         setShowAllTopics(false)
+        setShowGenerateModal(true)
+    }
+
+    function openGenerateIdeas() {
+        const strongestRecommendation = (data?.recommendations || []).find((item) =>
+            typeof item?.trend_reference === 'string' && item.trend_reference.trim(),
+        )
+        const strongestTrend = (data?.global_trends || []).find((item) =>
+            typeof item?.topic_name === 'string' && item.topic_name.trim(),
+        )
+        setSeedTopic(strongestRecommendation?.trend_reference || strongestTrend?.topic_name || '')
         setShowGenerateModal(true)
     }
 
@@ -1363,7 +1420,7 @@ export default function TrendRecommendations() {
                                     />
                                     <kbd className="cs-topbar__kbd">⌘ K</kbd>
                                 </form>
-                                <button className="cs-generate-btn" onClick={() => accountId && setShowGenerateModal(true)} disabled={busy || !accountId} title={!accountId ? 'Load an account first' : 'Create full database-backed content ideas'}>
+                                <button className="cs-generate-btn" onClick={() => accountId && openGenerateIdeas()} disabled={busy || !accountId} title={!accountId ? 'Load an account first' : 'Create full database-backed content ideas'}>
                                     {busy ? 'Analyzing…' : 'Generate Full Ideas'}
                                 </button>
                                 <button className="cs-topbar__refresh-icon" onClick={() => accountId && fetchExisting(accountId)} disabled={busy} title="Refresh">↻</button>
@@ -1402,7 +1459,7 @@ export default function TrendRecommendations() {
                     )}
 
                     {/* ── Opportunity Banner ── */}
-                    <OpportunityBanner niche={niche} weeklyOpportunity={weeklyOpportunity} onRefresh={() => accountId && setShowGenerateModal(true)} busy={busy} hasAccount={!!accountId} />
+                    <OpportunityBanner niche={niche} weeklyOpportunity={weeklyOpportunity} onRefresh={() => accountId && openGenerateIdeas()} busy={busy} hasAccount={!!accountId} />
 
                     {/* ── Filter Tabs + Sort ── */}
                     <div className="cs-filters-row">

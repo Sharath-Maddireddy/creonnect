@@ -11,6 +11,11 @@ from backend.app.domain.brand_models import BrandProfile
 from backend.app.utils.logger import logger
 
 
+def _parse_follower_count(value: str, suffix: str | None) -> int:
+    multiplier = {"k": 1_000, "m": 1_000_000}.get((suffix or "").lower(), 1)
+    return int(float(value) * multiplier)
+
+
 def _fallback_keyword_extraction(prompt: str) -> dict:
     """Best-effort regex extraction if LLM fails."""
     prompt_lower = prompt.lower()
@@ -23,10 +28,37 @@ def _fallback_keyword_extraction(prompt: str) -> dict:
             break
 
     min_followers = None
-    follower_match = re.search(r"(\d+)k(\+)?\s*(followers|subs|subscribers)?", prompt_lower)
-    if follower_match:
+    max_followers = None
+    range_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*([km])?\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)\s*([km])?\s*(?:followers|subs|subscribers)",
+        prompt_lower,
+    )
+    if range_match:
         try:
-            min_followers = int(follower_match.group(1)) * 1000
+            min_followers = _parse_follower_count(range_match.group(1), range_match.group(2))
+            max_followers = _parse_follower_count(range_match.group(3), range_match.group(4))
+        except ValueError:
+            pass
+    else:
+        follower_match = re.search(
+            r"(\d+(?:\.\d+)?)\s*([km])?\s*(\+|or more|minimum|at least)?\s*(?:followers|subs|subscribers)",
+            prompt_lower,
+        )
+        if follower_match:
+            try:
+                min_followers = _parse_follower_count(follower_match.group(1), follower_match.group(2))
+            except ValueError:
+                pass
+
+    min_engagement_rate = None
+    er_match = re.search(
+        r"(?:engagement(?:\s+rate)?|er)\s*(?:of|above|over|at least|>=|>)?\s*(\d+(?:\.\d+)?)\s*%|"
+        r"(\d+(?:\.\d+)?)\s*%\s*(?:engagement(?:\s+rate)?|er)",
+        prompt_lower,
+    )
+    if er_match:
+        try:
+            min_engagement_rate = float(er_match.group(1) or er_match.group(2)) / 100.0
         except ValueError:
             pass
 
@@ -34,11 +66,12 @@ def _fallback_keyword_extraction(prompt: str) -> dict:
         "brand_name": "Fallback Brand",
         "niche": niche_found or "general",
         "min_followers": min_followers,
-        "max_followers": None,
-        "min_engagement_rate": None,
+        "max_followers": max_followers,
+        "min_engagement_rate": min_engagement_rate,
         "campaign_goal": None,
         "content_type_preference": None,
         "additional_requirements": [],
+        "parse_source": "fallback",
     }
 
 
@@ -64,6 +97,8 @@ def parse_campaign_prompt(prompt: str, brand_name: str | None = None) -> dict:
                 response_text,
             )
             parsed = _fallback_keyword_extraction(prompt)
+        else:
+            parsed["parse_source"] = "llm"
         logger.debug("[CampaignPromptService] AI extraction successful: %s", parsed)
 
     except Exception as exc:

@@ -15,6 +15,35 @@ export function formatNumber(value) {
 }
 
 /**
+ * Format a count compactly without hiding meaningful sub-thousand values.
+ * E.g. 855 -> "855", 1283 -> "1.3K", 12000 -> "12K".
+ */
+export function formatCompactNumber(value) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+        return 'N/A'
+    }
+
+    const absolute = Math.abs(value)
+    if (absolute < 1000) {
+        return Math.round(value).toLocaleString('en-US')
+    }
+
+    const suffixes = [
+        { threshold: 1_000_000_000, suffix: 'B' },
+        { threshold: 1_000_000, suffix: 'M' },
+        { threshold: 1_000, suffix: 'K' },
+    ]
+    const unit = suffixes.find(({ threshold }) => absolute >= threshold)
+    if (!unit) {
+        return Math.round(value).toLocaleString('en-US')
+    }
+
+    const scaled = value / unit.threshold
+    const digits = Math.abs(scaled) < 10 && !Number.isInteger(scaled) ? 1 : 0
+    return `${scaled.toFixed(digits)}${unit.suffix}`
+}
+
+/**
  * Format a ratio (0–1) as a percentage string (e.g., 0.123 → "12.3%").
  * Returns "N/A" for non-numeric or NaN inputs.
  */

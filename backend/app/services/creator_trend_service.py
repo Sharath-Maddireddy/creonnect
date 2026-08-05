@@ -16,6 +16,10 @@ from backend.app.utils.logger import logger
 from backend.app.utils.number_utils import safe_float as _safe_float
 
 
+class TrendDataUnavailableError(RuntimeError):
+    """Raised when the trend pipeline cannot produce usable trend data."""
+
+
 def _build_heatmap_from_posts(posts: list[SinglePostInsights]) -> list[HeatmapData]:
     """Build a simple engagement heatmap from post timing and engagement rates."""
     heat_bins: dict[tuple[int, int], list[float]] = {}
@@ -29,7 +33,8 @@ def _build_heatmap_from_posts(posts: list[SinglePostInsights]) -> list[HeatmapDa
         hour = published_at.hour
         key = (day, hour)
         er = _safe_float(getattr(post.derived_metrics, "engagement_rate", None))
-        heat_bins.setdefault(key, []).append(er if er is not None else 0.0)
+        if er is not None and er >= 0:
+            heat_bins.setdefault(key, []).append(er)
 
     if not heat_bins:
         return []
@@ -39,7 +44,7 @@ def _build_heatmap_from_posts(posts: list[SinglePostInsights]) -> list[HeatmapDa
     for (day, hour), ers in heat_bins.items():
         count_weight = len(ers) / max_count
         avg_er = sum(ers) / len(ers) if ers else 0.0
-        er_weight = min(1.0, avg_er / 0.10) if avg_er > 0 else 0.5
+        er_weight = min(1.0, avg_er / 0.10)
         intensity = round(min(1.0, max(0.0, count_weight * 0.4 + er_weight * 0.6)), 3)
         heatmap.append(HeatmapData(day_of_week=day, hour_of_day=hour, intensity=intensity))
     return heatmap
@@ -119,6 +124,8 @@ class CreatorTrendService:
         try:
             niche = await discover_creator_niche(posts, bio, username)
             trends = await fetch_global_trends(niche)
+            if not trends:
+                raise TrendDataUnavailableError("Global trends unavailable")
             enriched_intelligence = _derive_creator_intelligence(creator_intelligence, posts, niche)
 
             # Build heatmap from posts for timing recommendations
@@ -150,12 +157,15 @@ class CreatorTrendService:
             logger.info("[CreatorTrendService] Completed trend analysis for account=%s", account_id)
             return result
 
+        except TrendDataUnavailableError:
+            logger.warning("[CreatorTrendService] No usable trend data for account=%s", account_id)
+            raise
         except Exception as exc:
             logger.error("[CreatorTrendService] Orchestration failed for account=%s: %s", account_id, exc)
             raise RuntimeError("Creator trend orchestration failed") from exc
 
 
-__all__ = ["CreatorTrendService"]
+__all__ = ["CreatorTrendService", "TrendDataUnavailableError"]
 
 
 def build_weekly_opportunity(

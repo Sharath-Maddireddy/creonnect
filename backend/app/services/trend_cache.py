@@ -25,21 +25,22 @@ class TrendAnalysisCache:
 
     CACHE_TTL_SECONDS = 86400  # 24 hours
     CACHE_KEY_PREFIX = "trend_cache"
-    ANALYSIS_SCHEMA_VERSION = "v2"
+    ANALYSIS_SCHEMA_VERSION = "v3"
 
     @staticmethod
     def _get_post_content_hash(posts: list[SinglePostInsights]) -> str:
         """Generate stable hash based on post content.
         
-        Uses post IDs to detect when historical posts have changed.
-        Different post set = different cache entry = forces re-analysis.
+        Includes the complete analysis inputs, not merely IDs, so corrected
+        captions, timestamps, metrics, and scores invalidate stale results.
         """
         if not posts:
             return "empty"
 
-        post_ids = "|".join(sorted(p.media_id or "" for p in posts[:12]))
-        content_hash = hashlib.md5(post_ids.encode()).hexdigest()
-        return content_hash
+        normalized_posts = [post.model_dump(mode="json", exclude_none=True) for post in posts]
+        normalized_posts.sort(key=lambda post: str(post.get("media_id") or ""))
+        payload = json.dumps(normalized_posts, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
     def get_cache_key(account_id: str, posts: list[SinglePostInsights]) -> str:
@@ -192,7 +193,7 @@ class TrendAnalysisCache:
         """
         try:
             redis_client = get_redis()
-            pattern = f"{cls.CACHE_KEY_PREFIX}:{account_id}:*"
+            pattern = f"{cls.CACHE_KEY_PREFIX}:{cls.ANALYSIS_SCHEMA_VERSION}:{account_id}:*"
             deleted_count = 0
             for key in redis_client.scan_iter(match=pattern):
                 redis_client.delete(key)

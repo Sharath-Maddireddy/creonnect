@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 from typing import Any
 
@@ -173,7 +174,11 @@ async def _analyze_visual_draft(
     first_signal = signals[0] if isinstance(signals, list) and signals and isinstance(signals[0], dict) else {}
     visual_quality = first_signal.get("visual_quality_score")
     if isinstance(visual_quality, dict):
-        visual_quality_score = int(round(sum(float(visual_quality.get(key) or 0.0) for key in visual_quality) / 4.0))
+        quality_values = [
+            float(value) for value in visual_quality.values()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        visual_quality_score = int(round(sum(quality_values) / len(quality_values))) if quality_values else 0
     else:
         try:
             visual_quality_score = int(round(float(visual_quality)))
@@ -219,7 +224,7 @@ async def optimize_draft_post(
     )
     prompt = {
         "system": _DRAFT_OPTIMIZER_SYSTEM_PROMPT,
-        "user": toon.dumps(payload) if hasattr(toon, "dumps") else str(payload),
+        "user": json.dumps(payload, ensure_ascii=True, default=str),
     }
 
     visual_analysis = None

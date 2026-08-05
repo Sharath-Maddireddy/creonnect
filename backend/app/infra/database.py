@@ -9,7 +9,7 @@ import threading
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -203,12 +203,33 @@ async def init_db(*, strict: bool = False) -> None:
     """
     from backend.app.infra.models import Base
 
+    def _ensure_trend_result_columns(sync_connection) -> None:
+        inspector = inspect(sync_connection)
+        table_names = set(inspector.get_table_names())
+        if "creator_trend_results" not in table_names:
+            return
+
+        column_names = {
+            column["name"]
+            for column in inspector.get_columns("creator_trend_results")
+            if isinstance(column, dict) and column.get("name")
+        }
+        if "weekly_opportunity_json" in column_names:
+            return
+
+        dialect_name = sync_connection.dialect.name
+        json_type = "JSONB" if dialect_name == "postgresql" else "JSON"
+        sync_connection.exec_driver_sql(
+            f"ALTER TABLE creator_trend_results ADD COLUMN weekly_opportunity_json {json_type}"
+        )
+
     try:
         engine = get_async_engine()
         async with engine.begin() as connection:
             if connection.dialect.name == "postgresql":
                 await connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
             await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(_ensure_trend_result_columns)
     except (RuntimeError, SQLAlchemyError, OSError) as exc:
         logger.warning("[Database] Skipping init_db because database setup failed: %s", redact_database_urls(str(exc)))
         if strict:

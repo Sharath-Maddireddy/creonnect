@@ -125,10 +125,10 @@ def test_fallback_when_all_missing() -> None:
         s6=None,
         s7=None,
     )
-    assert result.normalized_score_0_50 == 25.0
-    assert result.score == 50.0
+    assert result.normalized_score_0_50 == 0.0
+    assert result.score == 0.0
     assert result.weights_used == {}
-    assert any("fallback" in note.lower() for note in result.notes)
+    assert any("returning 0" in note.lower() for note in result.notes)
 
 
 def test_bounds_clamp_and_max_guard() -> None:

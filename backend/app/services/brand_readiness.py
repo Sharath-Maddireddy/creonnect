@@ -6,6 +6,9 @@ for brand partnership readiness assessment.
 
 from __future__ import annotations
 
+from datetime import datetime
+import statistics
+
 from backend.app.domain.account_models import (
     BrandReadinessBreakdown,
     ImprovementOpportunity,
@@ -39,19 +42,19 @@ def _calculate_content_quality_score(posts: list[SinglePostInsights]) -> float:
             first_signal = post.vision_analysis.signals[0]
 
             # Composition quality
-            composition = _safe_float(getattr(first_signal, "composition_score", None))
+            composition = _safe_float(getattr(first_signal, "composition", None))
             if composition > 0:
-                post_score += (composition / 10) * 2  # Up to +20
+                post_score += (composition / 10) * 20  # Up to +20
 
             # Lighting quality
-            lighting = _safe_float(getattr(first_signal, "lighting_score", None))
+            lighting = _safe_float(getattr(first_signal, "lighting", None))
             if lighting > 0:
-                post_score += (lighting / 10) * 1.5  # Up to +15
+                post_score += (lighting / 10) * 15  # Up to +15
 
             # Subject clarity
-            clarity = _safe_float(getattr(first_signal, "subject_clarity_score", None))
+            clarity = _safe_float(getattr(first_signal, "subject_clarity", None))
             if clarity > 0:
-                post_score += (clarity / 10) * 1.5  # Up to +15
+                post_score += (clarity / 10) * 15  # Up to +15
 
             # Penalize for cringe
             cringe = _safe_float(getattr(first_signal, "cringe_score", None))
@@ -140,8 +143,7 @@ def _calculate_consistency_score(posts: list[SinglePostInsights]) -> float:
         reverse=True,
     )
 
-    # Check posting frequency consistency
-    from datetime import datetime
+    # Check posting frequency consistency.
     gaps = []
     for i in range(len(sorted_posts) - 1):
         if sorted_posts[i].published_at and sorted_posts[i + 1].published_at:
@@ -152,13 +154,12 @@ def _calculate_consistency_score(posts: list[SinglePostInsights]) -> float:
         return 50.0
 
     # Calculate coefficient of variation for gaps
-    import statistics
     try:
         mean_gap = statistics.mean(gaps)
         if mean_gap == 0:
             return 70.0
 
-        std_gap = statistics.stdev(gaps) if len(gaps) > 1 else 0
+        std_gap = statistics.pstdev(gaps) if len(gaps) > 1 else 0
         cv = std_gap / mean_gap
 
         # Lower CV = more consistent

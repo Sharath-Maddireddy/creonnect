@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.domain.account_models import AccountHealthScore
+from backend.app.domain.creator_intelligence_report_models import CreatorIntelligenceReport
+from backend.app.services.creator_intelligence_report_store import get_latest_creator_intelligence_report
 from backend.app.utils.logger import logger
 from backend.app.services.account_analysis_jobs import (
     AccountAnalysisRateLimitError,
@@ -17,6 +19,7 @@ from backend.app.services.account_analysis_jobs import (
     get_account_analysis_job_status,
 )
 from backend.app.api.instagram_auth_routes import AuthenticatedInstagramUser, get_current_instagram_user
+from backend.app.infra.token_store import get_token_async
 
 
 router = APIRouter(
@@ -119,6 +122,17 @@ class AccountAnalysisStatusResponse(BaseModel):
     quality: AccountAnalysisQualityResponse | None = None
 
 
+@router.get("/creator-intelligence/latest", response_model=CreatorIntelligenceReport)
+def get_latest_creator_intelligence(
+    current_user: AuthenticatedInstagramUser = Depends(get_current_instagram_user),
+) -> CreatorIntelligenceReport:
+    """Return the authenticated creator's newest persisted intelligence report."""
+    report = get_latest_creator_intelligence_report(current_user.id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="No Creator Intelligence report is available yet.")
+    return report
+
+
 @router.post("/account-analysis", response_model=AccountAnalysisEnqueueResponse)
 async def enqueue_account_analysis(
     request: AccountAnalysisRequest,
@@ -129,6 +143,12 @@ async def enqueue_account_analysis(
     if payload.get("account_id") and str(payload["account_id"]) != current_user.id:
         raise HTTPException(status_code=403, detail="You are not allowed to analyze this account.")
     payload["account_id"] = current_user.id
+    if not isinstance(payload.get("posts"), list) and not payload.get("source"):
+        token = await get_token_async(current_user.id)
+        access_token = token.get("access_token") if isinstance(token, dict) else None
+        if isinstance(access_token, str) and access_token:
+            payload["source"] = "instagram_oauth"
+            payload["access_token"] = access_token
     try:
         response = await enqueue_account_analysis_job_async(payload)
         return AccountAnalysisEnqueueResponse.model_validate(response)

@@ -93,7 +93,7 @@ def _build_google_keywords(primary_category: str, sub_niches: list[str]) -> list
 
 
 def _fetch_google_trends_signals_sync(primary_category: str, sub_niches: list[str]) -> list[str]:
-    """Fetch related top queries from Google Trends synchronously."""
+    """Fetch related top and rising queries from Google Trends synchronously."""
     try:
         from pytrends.request import TrendReq
     except Exception as exc:
@@ -117,19 +117,22 @@ def _fetch_google_trends_signals_sync(primary_category: str, sub_niches: list[st
         if not isinstance(first_related, dict):
             return []
 
-        top_df = first_related.get("top")
-        if top_df is None or getattr(top_df, "empty", True):
-            return []
-
-        if "query" not in getattr(top_df, "columns", []):
-            return []
-
-        queries = top_df["query"].dropna().astype(str).tolist()
         signals: list[str] = []
-        for query in queries[:5]:
-            text = _clean_text(query)
-            if text:
-                signals.append(text)
+        for key in ("rising", "top"):
+            frame = first_related.get(key)
+            if frame is None or getattr(frame, "empty", True):
+                continue
+            if "query" not in getattr(frame, "columns", []):
+                continue
+            queries = frame["query"].dropna().astype(str).tolist()
+            for query in queries:
+                text = _clean_text(query)
+                if text and text not in signals:
+                    signals.append(text)
+                if len(signals) >= 5:
+                    break
+            if len(signals) >= 5:
+                break
         return signals
     except Exception as exc:
         logger.warning("[TrendSignals] Google Trends fetch failed: %s", exc)

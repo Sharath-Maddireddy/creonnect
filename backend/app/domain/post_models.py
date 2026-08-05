@@ -941,9 +941,11 @@ class SinglePostInsights(BaseModel):
 
     account_id: str | None = Field(default=None, description="Internal account identifier.")
     media_id: str | None = Field(default=None, description="Platform media identifier for the post.")
+    shortcode: str | None = Field(default=None, description="Platform shortcode used to link to the post.")
     media_url: str | None = Field(default=None, description="Public or signed media URL for vision analysis.")
     media_type: str | None = Field(default=None, description="Instagram media type (e.g., IMAGE, VIDEO, CAROUSEL).")
     caption_text: str = Field(default="", description="Post caption text used for deterministic clarity scoring.")
+    hashtags: list[str] = Field(default_factory=list, description="Hashtags supplied by the platform for this post.")
     post_category: str | None = Field(default=None, description="Predicted/assigned post category for audience relevance.")
     creator_dominant_category: str | None = Field(default=None, description="Creator dominant category for audience relevance.")
     extracted_brand_mentions: list[str] = Field(default_factory=list, description="Brand mentions extracted from post/caption.")

@@ -1,23 +1,18 @@
-"""Background job definitions for trend analysis.
-
-This module defines RQ jobs for async trend processing.
-Allows trend analysis to be queued instead of synchronous,
-preventing rate limit rejections and improving scalability.
-"""
+"""Background job definitions for trend analysis."""
 
 from __future__ import annotations
 
-from typing import List
-from datetime import datetime
-
 import asyncio
-from backend.app.domain.trend_models import TrendAnalysisResult
-from backend.app.infra.database import get_sync_sessionmaker
-from backend.app.infra.models import CreatorTrendResult
 from backend.app.services.account_ai_intelligence import generate_creator_intelligence
+from backend.app.services.creator_trend_service import CreatorTrendService, TrendDataUnavailableError, attach_weekly_opportunity
 from backend.app.services.draft_history_service import load_draft_history_context
-from backend.app.services.creator_trend_service import CreatorTrendService, attach_weekly_opportunity
+from backend.app.services.trend_cache import TrendAnalysisCache
+from backend.app.services.trend_result_store import upsert_trend_result_sync
 from backend.app.utils.logger import logger
+
+
+def _run_async(coro):
+    return asyncio.run(coro)
 
 
 def run_trend_analysis(account_id: str) -> dict:
@@ -49,9 +44,20 @@ def run_trend_analysis(account_id: str) -> dict:
         bio = history_context.account_data.get("bio")
         username = history_context.account_data.get("username")
 
+        cached_result = TrendAnalysisCache.get(account_id, posts)
+        if cached_result is not None:
+            cached_result = attach_weekly_opportunity(cached_result)
+            upsert_trend_result_sync(account_id, cached_result)
+            logger.info(f"[TrendAnalysisJob] Reused cache for account={account_id}")
+            return {
+                "status": "success",
+                "account_id": account_id,
+                "result": cached_result.model_dump(mode="python"),
+            }
+
         # Build real creator intelligence from account data
         logger.debug(f"[TrendAnalysisJob] Building creator intelligence for account={account_id}")
-        creator_intelligence = asyncio.run(generate_creator_intelligence(
+        creator_intelligence = _run_async(generate_creator_intelligence(
             posts=posts,
             account_id=account_id,
             username=username,
@@ -64,7 +70,7 @@ def run_trend_analysis(account_id: str) -> dict:
         # Use the same orchestrator as the synchronous endpoint so queued jobs include
         # recommendations, opportunities, and insights with the current schema.
         logger.debug(f"[TrendAnalysisJob] Building trend result for account={account_id}")
-        result = asyncio.run(CreatorTrendService().get_trends_and_recommendations(
+        result = _run_async(CreatorTrendService().get_trends_and_recommendations(
             account_id=account_id,
             posts=posts,
             bio=bio,
@@ -73,10 +79,11 @@ def run_trend_analysis(account_id: str) -> dict:
             recommendation_count=5,
         ))
         result = attach_weekly_opportunity(result)
+        TrendAnalysisCache.set(account_id, posts, result)
 
         # Upsert to database
         logger.debug(f"[TrendAnalysisJob] Upserting to database for account={account_id}")
-        _upsert_trend_result(account_id, result)
+        upsert_trend_result_sync(account_id, result)
 
         logger.info(f"[TrendAnalysisJob] Completed successfully for account={account_id}")
         return {
@@ -84,50 +91,11 @@ def run_trend_analysis(account_id: str) -> dict:
             "account_id": account_id,
             "result": result.model_dump(mode="python")
         }
+    except TrendDataUnavailableError as exc:
+        logger.warning(f"[TrendAnalysisJob] Trend data unavailable for account={account_id}: {exc}")
+        raise
     except Exception as exc:
         logger.exception(f"[TrendAnalysisJob] Failed for account={account_id}: {exc}")
         raise
-
-def _upsert_trend_result(account_id: str, result: TrendAnalysisResult) -> None:
-    """Upsert trend result to database (synchronous, using session factory).
-    
-    Args:
-        account_id: Creator's account ID
-        result: TrendAnalysisResult to store
-    """
-    session_factory = get_sync_sessionmaker()
-
-    with session_factory() as session:
-        existing = session.get(CreatorTrendResult, account_id)
-
-        niche_payload = result.niche.model_dump(mode="python") if hasattr(result.niche, "model_dump") else {}
-        global_trends_payload = [t.model_dump(mode="python") for t in result.global_trends]
-        recommendations_payload = [r.model_dump(mode="python") for r in result.recommendations]
-        content_gaps_payload = [g.model_dump(mode="python") for g in result.content_gaps] if result.content_gaps else []
-        daily_insights_payload = result.daily_insights.model_dump(mode="python") if result.daily_insights and hasattr(result.daily_insights, "model_dump") else None
-        opportunity_bullets_payload = result.opportunity_bullets if result.opportunity_bullets else []
-
-        if existing is None:
-            new_row = CreatorTrendResult(
-                account_id=account_id,
-                niche_json=niche_payload,
-                global_trends_json=global_trends_payload,
-                recommendations_json=recommendations_payload,
-                content_gaps_json=content_gaps_payload,
-                daily_insights_json=daily_insights_payload,
-                opportunity_bullets_json=opportunity_bullets_payload,
-            )
-            session.add(new_row)
-        else:
-            existing.niche_json = niche_payload
-            existing.global_trends_json = global_trends_payload
-            existing.recommendations_json = recommendations_payload
-            existing.content_gaps_json = content_gaps_payload
-            existing.daily_insights_json = daily_insights_payload
-            existing.opportunity_bullets_json = opportunity_bullets_payload
-            session.add(existing)
-
-        session.commit()
-        logger.debug(f"[TrendAnalysisJob] Upserted to database for account={account_id}")
 
 

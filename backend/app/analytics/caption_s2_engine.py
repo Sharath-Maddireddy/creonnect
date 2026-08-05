@@ -163,7 +163,7 @@ def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffecti
     elif 1 <= tag_count < 5:
         hashtag_score = 60
     elif tag_count > 15:
-        hashtag_score = 70
+        hashtag_score = 40
     else:
         hashtag_score = 20
 
