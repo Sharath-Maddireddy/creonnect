@@ -32,7 +32,8 @@ COPY backend/requirements.txt ./backend/requirements.txt
 
 RUN pip install --upgrade pip && \
     pip install --prefix=/install -r requirements.txt && \
-    pip install --prefix=/install -r backend/requirements.txt
+    PYTHONPATH=/install pip install --prefix=/install -r backend/requirements.txt && \
+    PYTHONPATH=/install python -c "import fastapi, pydantic, uvicorn; from fastapi._compat import CoreSchema; print(f'fastapi={fastapi.__version__} pydantic={pydantic.__version__} uvicorn={uvicorn.__version__}')"
 
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
