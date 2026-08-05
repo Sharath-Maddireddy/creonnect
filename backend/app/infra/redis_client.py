@@ -109,6 +109,11 @@ def get_json(key: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def delete_key(key: str) -> bool:
+    """Delete one application key and report whether it existed."""
+    return bool(get_redis().delete(key))
+
+
 async def aset_json(key: str, obj: dict[str, Any], ttl_seconds: int | None = None) -> None:
     """Store JSON payload under key with optional TTL using async Redis."""
     redis_client = get_async_redis()

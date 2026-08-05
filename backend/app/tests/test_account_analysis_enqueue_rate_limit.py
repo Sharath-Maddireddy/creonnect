@@ -6,6 +6,8 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
+import pytest
+
 from backend.app.services import account_analysis_jobs
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
 
@@ -18,6 +20,12 @@ class _QueueStub:
     def enqueue(self, *args: Any, **kwargs: Any) -> None:
         self._assert_ready()
         self.calls.append((args, kwargs))
+
+
+@pytest.fixture(autouse=True)
+def _stub_analysis_generation(monkeypatch) -> None:
+    """Keep enqueue tests isolated from the Redis-backed disconnect generation."""
+    monkeypatch.setattr(account_analysis_jobs, "_read_analysis_generation", lambda _account_id: 0)
 
 
 def _build_post(index: int) -> SinglePostInsights:

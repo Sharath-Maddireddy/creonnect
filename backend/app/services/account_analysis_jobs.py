@@ -72,6 +72,7 @@ ACCOUNT_ANALYSIS_JOB_KEY_PREFIX = "account_analysis:job:"
 ACCOUNT_ANALYSIS_DEDUPE_KEY_PREFIX = "account_analysis:dedupe:"
 ACCOUNT_ANALYSIS_RATE_KEY_PREFIX = "account_analysis:rate:"
 ACCOUNT_ANALYSIS_INPUTHASH_KEY_PREFIX = "account_analysis:inputhash:"
+ACCOUNT_ANALYSIS_GENERATION_KEY_PREFIX = "account_analysis:generation:"
 ACCOUNT_ANALYSIS_STATUS_TTL_SECONDS = 86400
 ACCOUNT_ANALYSIS_DEDUPE_TTL_SECONDS = 7200
 ACCOUNT_ANALYSIS_INPUTHASH_TTL_SECONDS = 86400
@@ -126,7 +127,35 @@ def get_queue():
     return get_rq_queue(ACCOUNT_ANALYSIS_QUEUE_NAME)
 
 
-def _dedupe_key(account_id: str, post_limit: int) -> str:
+def _generation_key(account_id: str) -> str:
+    return f"{ACCOUNT_ANALYSIS_GENERATION_KEY_PREFIX}{account_id}"
+
+
+def _read_analysis_generation(account_id: str) -> int:
+    raw_generation = get_text(_generation_key(account_id))
+    try:
+        return max(0, int(raw_generation or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_analysis_generation(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_analysis_generation_current(account_id: str, analysis_generation: int) -> bool:
+    return _read_analysis_generation(account_id) == analysis_generation
+
+
+def _dedupe_key(account_id: str, post_limit: int, generation: int | None = None) -> str:
+    resolved_generation = _read_analysis_generation(account_id) if generation is None else generation
+    return f"{ACCOUNT_ANALYSIS_DEDUPE_KEY_PREFIX}{account_id}:{resolved_generation}:{post_limit}"
+
+
+def _legacy_dedupe_key(account_id: str, post_limit: int) -> str:
     return f"{ACCOUNT_ANALYSIS_DEDUPE_KEY_PREFIX}{account_id}:{post_limit}"
 
 
@@ -134,7 +163,12 @@ def _rate_key(account_id: str) -> str:
     return f"{ACCOUNT_ANALYSIS_RATE_KEY_PREFIX}{account_id}"
 
 
-def _inputhash_key(account_id: str, payload_hash: str) -> str:
+def _inputhash_key(account_id: str, payload_hash: str, generation: int | None = None) -> str:
+    resolved_generation = _read_analysis_generation(account_id) if generation is None else generation
+    return f"{ACCOUNT_ANALYSIS_INPUTHASH_KEY_PREFIX}{account_id}:{resolved_generation}:{payload_hash}"
+
+
+def _legacy_inputhash_key(account_id: str, payload_hash: str) -> str:
     return f"{ACCOUNT_ANALYSIS_INPUTHASH_KEY_PREFIX}{account_id}:{payload_hash}"
 
 
@@ -250,6 +284,48 @@ def _normalize_account_id(value: Any) -> str:
         )
     return account_id
 
+
+def invalidate_account_analysis_cache(account_id: str) -> dict[str, Any]:
+    """Remove Redis state that could reuse an account's previous analysis."""
+    normalized_account_id = _normalize_account_id(account_id)
+    redis_store = get_redis()
+    analysis_generation = int(redis_store.incr(_generation_key(normalized_account_id)))
+    mapping_keys = {
+        *redis_store.scan_iter(match=f"{ACCOUNT_ANALYSIS_DEDUPE_KEY_PREFIX}{normalized_account_id}:*"),
+        *redis_store.scan_iter(match=f"{ACCOUNT_ANALYSIS_INPUTHASH_KEY_PREFIX}{normalized_account_id}:*"),
+    }
+    job_ids: set[str] = set()
+
+    for key in mapping_keys:
+        normalized_key = str(key)
+        if normalized_key.startswith(ACCOUNT_ANALYSIS_DEDUPE_KEY_PREFIX):
+            payload = get_json(normalized_key)
+            job_id = payload.get("job_id") if isinstance(payload, dict) else None
+        else:
+            job_id = get_text(normalized_key)
+        if isinstance(job_id, str) and job_id.strip():
+            job_ids.add(job_id.strip())
+
+    keys_to_delete = {
+        *mapping_keys,
+        _rate_key(normalized_account_id),
+        *(f"{ACCOUNT_ANALYSIS_JOB_KEY_PREFIX}{job_id}" for job_id in job_ids),
+    }
+    deleted_keys = int(redis_store.delete(*keys_to_delete)) if keys_to_delete else 0
+    logger.info(
+        "[AccountAnalysisJob] Invalidated Redis state account_id=%s jobs=%s deleted_keys=%s",
+        normalized_account_id,
+        len(job_ids),
+        deleted_keys,
+    )
+    return {
+        "account_id": normalized_account_id,
+        "analysis_generation": analysis_generation,
+        "invalidated_job_ids": sorted(job_ids),
+        "deleted_keys": deleted_keys,
+    }
+
+
 def _normalize_post_limit(value: Any) -> int:
     try:
         post_limit = int(value)
@@ -302,16 +378,29 @@ def _status_value(job_id: str) -> str | None:
 
 
 def _read_dedupe_job_id(account_id: str, post_limit: int) -> str | None:
-    payload = get_json(_dedupe_key(account_id, post_limit))
+    analysis_generation = _read_analysis_generation(account_id)
+    payload = get_json(_dedupe_key(account_id, post_limit, analysis_generation))
+    if not isinstance(payload, dict) and analysis_generation == 0:
+        payload = get_json(_legacy_dedupe_key(account_id, post_limit))
     if not isinstance(payload, dict):
         return None
     job_id = payload.get("job_id")
     return job_id if isinstance(job_id, str) and job_id.strip() else None
 
 
-def _write_dedupe_job_id(account_id: str, post_limit: int, job_id: str) -> None:
+def _write_dedupe_job_id(
+    account_id: str,
+    post_limit: int,
+    job_id: str,
+    analysis_generation: int | None = None,
+) -> None:
+    if (
+        analysis_generation is not None
+        and not _is_analysis_generation_current(account_id, analysis_generation)
+    ):
+        return
     set_json(
-        _dedupe_key(account_id, post_limit),
+        _dedupe_key(account_id, post_limit, analysis_generation),
         {"job_id": job_id, "created_at": _now_iso()},
         ttl_seconds=ACCOUNT_ANALYSIS_DEDUPE_TTL_SECONDS,
     )
@@ -342,18 +431,41 @@ def _coalesce_account_id(*values: Any) -> str:
     raise ValueError("account_id is required for account analysis jobs.")
 
 
+def _capture_request_analysis_generation(payload: dict[str, Any]) -> int | None:
+    try:
+        account_id = _normalize_account_id(
+            _coalesce_account_id(payload.get("account_id"), payload.get("username"))
+        )
+    except ValueError:
+        return None
+    return _read_analysis_generation(account_id)
+
+
 def _read_inputhash_job_id(account_id: str, payload_hash: str | None) -> str | None:
     if not payload_hash:
         return None
-    job_id = get_text(_inputhash_key(account_id, payload_hash))
+    analysis_generation = _read_analysis_generation(account_id)
+    job_id = get_text(_inputhash_key(account_id, payload_hash, analysis_generation))
+    if not job_id and analysis_generation == 0:
+        job_id = get_text(_legacy_inputhash_key(account_id, payload_hash))
     return job_id if isinstance(job_id, str) and job_id.strip() else None
 
 
-def _write_inputhash_job_id(account_id: str, payload_hash: str | None, job_id: str) -> None:
+def _write_inputhash_job_id(
+    account_id: str,
+    payload_hash: str | None,
+    job_id: str,
+    analysis_generation: int | None = None,
+) -> None:
     if not payload_hash:
         return
+    if (
+        analysis_generation is not None
+        and not _is_analysis_generation_current(account_id, analysis_generation)
+    ):
+        return
     set_text(
-        _inputhash_key(account_id, payload_hash),
+        _inputhash_key(account_id, payload_hash, analysis_generation),
         job_id,
         ttl_seconds=ACCOUNT_ANALYSIS_INPUTHASH_TTL_SECONDS,
     )
@@ -495,6 +607,7 @@ def _enqueue_account_analysis_job_impl(
     payload: dict[str, Any],
     *,
     sanitized_payload: dict[str, Any],
+    requested_analysis_generation: int | None = None,
 ) -> dict[str, str]:
     account_id = _normalize_account_id(
         _coalesce_account_id(
@@ -505,6 +618,13 @@ def _enqueue_account_analysis_job_impl(
         )
     )
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
+    analysis_generation = (
+        _read_analysis_generation(account_id)
+        if requested_analysis_generation is None
+        else requested_analysis_generation
+    )
+    if not _is_analysis_generation_current(account_id, analysis_generation):
+        raise ValueError("Account analysis request was invalidated by a disconnect.")
     include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
     include_posts_summary_max = _normalize_include_posts_summary_max(payload.get("include_posts_summary_max", 30))
     payload_hash = _compute_posts_payload_hash(sanitized_payload)
@@ -539,6 +659,7 @@ def _enqueue_account_analysis_job_impl(
     full_payload = dict(sanitized_payload)
     full_payload["job_id"] = job_id
     full_payload["account_id"] = account_id
+    full_payload["analysis_generation"] = analysis_generation
     full_payload["post_limit"] = post_limit
     full_payload["include_posts_summary"] = include_posts_summary
     full_payload["include_posts_summary_max"] = include_posts_summary_max
@@ -593,8 +714,8 @@ def _enqueue_account_analysis_job_impl(
             )
         # Write Redis state only after the transport has accepted the job.
         initialize_job_status(job_id)
-        _write_dedupe_job_id(account_id, post_limit, job_id)
-        _write_inputhash_job_id(account_id, payload_hash, job_id)
+        _write_dedupe_job_id(account_id, post_limit, job_id, analysis_generation)
+        _write_inputhash_job_id(account_id, payload_hash, job_id, analysis_generation)
         logger.debug(
             "[AccountAnalysisJob] Dedupe/inputhash recorded job_id=%s payload_hash_prefix=%s",
             job_id,
@@ -612,6 +733,7 @@ def _enqueue_account_analysis_job_impl(
 def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
     """Enqueue account analysis background job and persist queued status."""
     payload = payload if isinstance(payload, dict) else {}
+    requested_analysis_generation = _capture_request_analysis_generation(payload)
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
     logger.info(
         "[AccountAnalysisJob] Enqueue request received sync account_id=%s post_limit=%s source=%s has_posts=%s",
@@ -627,12 +749,17 @@ def enqueue_account_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         len(sanitized_payload.get("posts")) if isinstance(sanitized_payload.get("posts"), list) else None,
         sanitized_payload.get("source"),
     )
-    return _enqueue_account_analysis_job_impl(payload, sanitized_payload=sanitized_payload)
+    return _enqueue_account_analysis_job_impl(
+        payload,
+        sanitized_payload=sanitized_payload,
+        requested_analysis_generation=requested_analysis_generation,
+    )
 
 
 async def enqueue_account_analysis_job_async(payload: dict[str, Any]) -> dict[str, str]:
     """Async enqueue path that materializes Instagram media without blocking the event loop."""
     payload = payload if isinstance(payload, dict) else {}
+    requested_analysis_generation = _capture_request_analysis_generation(payload)
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
     logger.info(
         "[AccountAnalysisJob] Enqueue request received async account_id=%s post_limit=%s source=%s has_posts=%s",
@@ -648,7 +775,11 @@ async def enqueue_account_analysis_job_async(payload: dict[str, Any]) -> dict[st
         len(sanitized_payload.get("posts")) if isinstance(sanitized_payload.get("posts"), list) else None,
         sanitized_payload.get("source"),
     )
-    return _enqueue_account_analysis_job_impl(payload, sanitized_payload=sanitized_payload)
+    return _enqueue_account_analysis_job_impl(
+        payload,
+        sanitized_payload=sanitized_payload,
+        requested_analysis_generation=requested_analysis_generation,
+    )
 
 
 def _coerce_single_post(item: Any) -> SinglePostInsights:
@@ -1065,6 +1196,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
     account_id = _normalize_account_id(
         _coalesce_account_id(payload.get("account_id"), payload.get("username"))
     )
+    analysis_generation = _normalize_analysis_generation(payload.get("analysis_generation"))
     post_limit = _normalize_post_limit(payload.get("post_limit", 30))
     include_posts_summary = _normalize_include_posts_summary(payload.get("include_posts_summary", False))
     include_posts_summary_max = _normalize_include_posts_summary_max(payload.get("include_posts_summary_max", 30))
@@ -1082,6 +1214,15 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         sorted(payload.keys()),
     )
 
+    if not _is_analysis_generation_current(account_id, analysis_generation):
+        logger.info(
+            "[AccountAnalysisJob] Skipping invalidated job job_id=%s account_id=%s generation=%s",
+            job_id,
+            account_id,
+            analysis_generation,
+        )
+        return
+
     if not vision_enabled:
         _append_unique_warning(
             warnings_global,
@@ -1092,6 +1233,8 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         )
 
     def _progress(stage: str, done: int, total: int) -> None:
+        if not _is_analysis_generation_current(account_id, analysis_generation):
+            return
         _update_status(
             job_id,
             status="started",
@@ -1126,7 +1269,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             account_id,
             len(posts),
         )
-        _write_dedupe_job_id(account_id, post_limit, job_id)
+        _write_dedupe_job_id(account_id, post_limit, job_id, analysis_generation)
         run_single_post_pipeline = not _posts_payload_has_precomputed_scores(payload)
         logger.info(
             "[AccountAnalysisJob] Running post pipeline job_id=%s account_id=%s enabled=%s",
@@ -1226,6 +1369,15 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
         persisted_result_payload = dict(result_payload)
         persisted_result_payload["draft_optimizer_history"] = _draft_optimizer_history(processed_posts)
 
+        if not _is_analysis_generation_current(account_id, analysis_generation):
+            logger.info(
+                "[AccountAnalysisJob] Discarding invalidated result job_id=%s account_id=%s generation=%s",
+                job_id,
+                account_id,
+                analysis_generation,
+            )
+            return
+
         def _enqueue_embedding() -> None:
             upsert_creator({
                 "account_id": account_id,
@@ -1260,6 +1412,15 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
                 summary_exc,
             )
 
+        if not _is_analysis_generation_current(account_id, analysis_generation):
+            logger.info(
+                "[AccountAnalysisJob] Discarding invalidated result job_id=%s account_id=%s generation=%s",
+                job_id,
+                account_id,
+                analysis_generation,
+            )
+            return
+
         logger.info(
             "[AccountAnalysisJob] Succeeded job_id=%s account_id=%s ahs_score=%s warnings=%s vision_errors=%s ai_fallbacks=%s",
             job_id,
@@ -1291,6 +1452,14 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             error=None,
         )
     except Exception as exc:
+        if not _is_analysis_generation_current(account_id, analysis_generation):
+            logger.info(
+                "[AccountAnalysisJob] Suppressing invalidated failure job_id=%s account_id=%s generation=%s",
+                job_id,
+                account_id,
+                analysis_generation,
+            )
+            return
         logger.exception("[AccountAnalysisJob] Job failed for job_id=%s", job_id)
         error_payload = {"type": exc.__class__.__name__, "message": str(exc)}
         _update_status(
