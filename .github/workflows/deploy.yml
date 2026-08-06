@@ -74,7 +74,11 @@ jobs:
             ${{ steps.vars.outputs.image_uri }}
             ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
           cache-from: type=gha,scope=creonnect-python-production
-          cache-to: type=gha,mode=max,scope=creonnect-python-production,timeout=15m,ignore-error=true
+          # Export only the final image layers. The full mode=max cache can
+          # upload the ML dependency graph for 20+ minutes and delay deploys.
+          # Cache failures are non-blocking because the ECR image is the
+          # deployable artifact.
+          cache-to: type=gha,mode=min,scope=creonnect-python-production,timeout=5m,ignore-error=true
 
   deploy:
     name: Deploy Docker on AWS EC2
