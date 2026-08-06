@@ -68,6 +68,7 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
+          progress: plain
           push: true
           tags: |
             ${{ steps.vars.outputs.image_uri }}
