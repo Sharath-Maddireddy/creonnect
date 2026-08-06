@@ -124,7 +124,7 @@ def enqueue_single_post_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
 
 
 async def enqueue_single_post_analysis_job_async(payload: dict[str, Any]) -> dict[str, str]:
-    return enqueue_single_post_analysis_job(payload)
+    return await asyncio.to_thread(enqueue_single_post_analysis_job, payload)
 
 
 def get_single_post_analysis_job_status(job_id: str) -> dict[str, Any] | None:

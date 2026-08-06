@@ -100,7 +100,8 @@ async def _invalidate_account_handler(payload: dict[str, Any]) -> dict[str, Any]
     account_id = str(payload.get("account_id") or "").strip()
     if not account_id:
         return {"ok": False, "error": {"message": "account_id is required"}}
-    return {"ok": True, "data": invalidate_account_analysis_cache(account_id)}
+    result = await asyncio.to_thread(invalidate_account_analysis_cache, account_id)
+    return {"ok": True, "data": result}
 
 
 async def _start_single_post_handler(payload: dict[str, Any]) -> dict[str, Any]:

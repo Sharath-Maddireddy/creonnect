@@ -61,6 +61,7 @@ def _get_sqs_client():
     if _SQS_CLIENT is not None:
         return _SQS_CLIENT
     import boto3
+    from botocore.config import Config
 
     client_kwargs: dict[str, Any] = {}
     region_name = (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "").strip()
@@ -69,6 +70,14 @@ def _get_sqs_client():
         client_kwargs["region_name"] = region_name
     if endpoint_url:
         client_kwargs["endpoint_url"] = endpoint_url
+    # Keep a transient AWS/SQS network problem from blocking the gRPC event
+    # loop until the Node caller's deadline expires. Callers can retry a
+    # bounded send failure instead of hanging the connection lifecycle.
+    client_kwargs["config"] = Config(
+        connect_timeout=3,
+        read_timeout=5,
+        retries={"mode": "standard", "max_attempts": 1},
+    )
     _SQS_CLIENT = boto3.client("sqs", **client_kwargs)
     return _SQS_CLIENT
 

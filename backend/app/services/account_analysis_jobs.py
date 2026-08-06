@@ -597,6 +597,12 @@ async def _materialize_posts_for_enqueue_async(
         sanitized_payload = dict(payload)
         sanitized_payload.pop("access_token", None)
         return sanitized_payload
+    if get_queue_backend() == "sqs":
+        # SQS enqueueing must remain fast enough for the gRPC start-account
+        # deadline. The worker will fetch and normalize the source payload.
+        sanitized_payload = dict(payload)
+        sanitized_payload.pop("access_token", None)
+        return sanitized_payload
     try:
         return await materialize_account_source_payload(payload, post_limit=post_limit)
     except Exception as exc:
@@ -606,6 +612,10 @@ async def _materialize_posts_for_enqueue_async(
 def _materialize_posts_for_enqueue(payload: dict[str, Any], post_limit: int) -> dict[str, Any]:
     """Sync-only helper. Callers in async contexts must use `_materialize_posts_for_enqueue_async`."""
     if isinstance(payload.get("posts"), list):
+        sanitized_payload = dict(payload)
+        sanitized_payload.pop("access_token", None)
+        return sanitized_payload
+    if get_queue_backend() == "sqs":
         sanitized_payload = dict(payload)
         sanitized_payload.pop("access_token", None)
         return sanitized_payload
@@ -787,7 +797,8 @@ async def enqueue_account_analysis_job_async(payload: dict[str, Any]) -> dict[st
         len(sanitized_payload.get("posts")) if isinstance(sanitized_payload.get("posts"), list) else None,
         sanitized_payload.get("source"),
     )
-    return _enqueue_account_analysis_job_impl(
+    return await asyncio.to_thread(
+        _enqueue_account_analysis_job_impl,
         payload,
         sanitized_payload=sanitized_payload,
         requested_analysis_generation=requested_analysis_generation,
@@ -809,9 +820,24 @@ def _fetch_posts_from_source(payload: dict[str, Any], post_limit: int) -> list[S
         for item in raw_posts[:post_limit]:
             posts.append(_coerce_single_post(item))
         return posts
-    raise ValueError(
-        "No post source configured. Provide precomputed posts in payload['posts'] via enqueue_account_analysis_job."
+    logger.info(
+        "[AccountAnalysisJob] Materializing deferred source in worker account_id=%s source=%s post_limit=%s",
+        payload.get("account_id"),
+        payload.get("source"),
+        post_limit,
     )
+    try:
+        materialized_payload = _run_coroutine_sync(
+            materialize_account_source_payload(payload, post_limit=post_limit)
+        )
+    except Exception as exc:
+        raise ValueError(f"Failed to materialize account source in worker: {exc}") from exc
+    if not isinstance(materialized_payload.get("posts"), list):
+        raise ValueError(
+            "No post source configured. Provide precomputed posts in payload['posts'] "
+            "or configure a supported account source."
+        )
+    return _fetch_posts_from_source(materialized_payload, post_limit)
 
 
 def _posts_payload_has_precomputed_scores(payload: dict[str, Any]) -> bool:
