@@ -33,7 +33,7 @@ COPY requirements.runtime-extra.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install --prefix=/install -r requirements.txt -r requirements.runtime-extra.txt && \
-    PYTHONPATH=/install python -c "from fastapi import FastAPI; import fastapi, pydantic, uvicorn; print(f'fastapi={fastapi.__version__} pydantic={pydantic.__version__} uvicorn={uvicorn.__version__}')"
+    PYTHONPATH=/install/lib/python3.11/site-packages python -c "from fastapi import FastAPI; import fastapi, pydantic, uvicorn; print(f'fastapi={fastapi.__version__} pydantic={pydantic.__version__} uvicorn={uvicorn.__version__}')"
 
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
