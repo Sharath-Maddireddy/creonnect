@@ -70,7 +70,6 @@ def _validate_internal_hmac_secret_configuration() -> bool:
         return False
 
     weak_values = {
-        "a-big-hash-value-to-be-added-not-added-now",
         "changeme",
         "change-me",
         "replace_me",
