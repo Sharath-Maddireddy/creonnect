@@ -194,6 +194,12 @@ class VisionSignal(BaseModel):
         default=None,
         description="Vision-estimated hook strength in range 0..1.",
     )
+    virality_potential: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=10.0,
+        description="Vision-estimated virality potential in range 0..10.",
+    )
     primary_objects: list[str] | None = Field(
         default=None,
         description="Primary objects used for deterministic visual scoring.",

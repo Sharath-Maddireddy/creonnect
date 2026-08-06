@@ -47,6 +47,8 @@ from backend.app.utils.logger import logger
 CACHE_TTL_SECONDS = 86400
 MIN_REGEN_SECONDS = 1
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
+VISION_MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 30.0
+MAX_VISION_MEDIA_BYTES = 15 * 1024 * 1024
 _DEFAULT_GEMINI_MODEL = PRIMARY_GEMINI_MODEL
 _SIMPLIFIED_GEMINI_VISION_PROMPT = (
     "Analyze the provided Instagram media and return ONLY valid JSON. "
@@ -797,15 +799,44 @@ def _infer_mime_type(url: str) -> str:
     return "image/jpeg"
 
 
+def _download_vision_media(media_url: str) -> tuple[bytes, str]:
+    """Download public image media for Gemini inline vision with a strict size cap."""
+    with httpx.Client(
+        timeout=VISION_MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
+        follow_redirects=False,
+        trust_env=False,
+    ) as client:
+        with client.stream("GET", media_url) as response:
+            response.raise_for_status()
+            mime_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if mime_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+                raise ValueError(f"Unsupported vision media type: {mime_type or 'unknown'}")
+
+            chunks: list[bytes] = []
+            total_bytes = 0
+            for chunk in response.iter_bytes(65536):
+                chunks.append(chunk)
+                total_bytes += len(chunk)
+                if total_bytes > MAX_VISION_MEDIA_BYTES:
+                    raise ValueError("Vision media exceeds the 15 MB limit")
+
+    media_bytes = b"".join(chunks)
+    if not media_bytes:
+        raise ValueError("Vision media download returned no bytes")
+    return media_bytes, mime_type
+
+
 def _build_gemini_vision_adapter():
     try:
         from google import genai
         from google.genai import types as genai_types
+        if not hasattr(genai, "Client") or not hasattr(genai_types, "Part"):
+            raise ImportError("google-genai client is unavailable")
         class _GoogleGenaiVisionAdapter:
             def __init__(self, api_key: str) -> None:
                 self._client = genai.Client(api_key=api_key)
-            def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
-                image_part = genai_types.Part.from_uri(file_uri=media_url, mime_type=mime_type)
+            def generate_content(self, *, model_name: str, instruction: str, media_bytes: bytes, mime_type: str):
+                image_part = genai_types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
                 return self._client.models.generate_content(model=model_name, contents=[instruction, image_part])
             def generate_text(self, *, model_name: str, prompt: str):
                 return self._client.models.generate_content(model=model_name, contents=prompt)
@@ -815,8 +846,8 @@ def _build_gemini_vision_adapter():
         class _LegacyGenaiVisionAdapter:
             def __init__(self, api_key: str) -> None:
                 legacy_genai.configure(api_key=api_key)
-            def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str):
-                return legacy_genai.GenerativeModel(model_name).generate_content([instruction, {"mime_type": mime_type, "file_uri": media_url}])
+            def generate_content(self, *, model_name: str, instruction: str, media_bytes: bytes, mime_type: str):
+                return legacy_genai.GenerativeModel(model_name).generate_content([instruction, {"mime_type": mime_type, "data": media_bytes}])
             def generate_text(self, *, model_name: str, prompt: str):
                 return legacy_genai.GenerativeModel(model_name).generate_content(prompt)
         return _LegacyGenaiVisionAdapter
@@ -837,8 +868,14 @@ class _OpenAIVisionAdapter:
 
 def _call_gemini_vision_api(*, api_key: str, instruction: str, media_url: str) -> str:
     model_name = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
+    media_bytes, mime_type = _download_vision_media(media_url)
     client = _build_gemini_vision_adapter()(api_key=api_key)
-    response = client.generate_content(model_name=model_name, instruction=instruction, media_url=media_url, mime_type=_infer_mime_type(media_url))
+    response = client.generate_content(
+        model_name=model_name,
+        instruction=instruction,
+        media_bytes=media_bytes,
+        mime_type=mime_type,
+    )
     text = getattr(response, "text", None)
     if not isinstance(text, str):
         raise ValueError("Gemini response missing text.")

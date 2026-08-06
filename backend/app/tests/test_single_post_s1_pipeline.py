@@ -165,7 +165,7 @@ def test_run_vision_analysis_reads_gemini_key(monkeypatch) -> None:
     assert result["signals"][0]["visual_quality_score"]["composition"] == 7.0
 
 
-def test_call_gemini_vision_api_falls_back_when_google_genai_client_is_missing(monkeypatch) -> None:
+def test_call_gemini_vision_api_uses_inline_media_when_google_genai_client_is_missing(monkeypatch) -> None:
     class FakeLegacyModel:
         def __init__(self, model_name: str) -> None:
             self.model_name = model_name
@@ -173,7 +173,7 @@ def test_call_gemini_vision_api_falls_back_when_google_genai_client_is_missing(m
         def generate_content(self, contents: list[object]):
             assert contents[0]
             assert contents[1]["mime_type"] == "image/jpeg"
-            assert contents[1]["file_uri"] == "https://example.com/post.jpg"
+            assert contents[1]["data"] == b"image-bytes"
             return types.SimpleNamespace(
                 text=json.dumps(
                     {
@@ -202,6 +202,7 @@ def test_call_gemini_vision_api_falls_back_when_google_genai_client_is_missing(m
     monkeypatch.setitem(sys.modules, "google.genai", fake_genai_module)
     monkeypatch.setitem(sys.modules, "google.genai.types", fake_genai_types_module)
     monkeypatch.setitem(sys.modules, "google.generativeai", fake_legacy_genai)
+    monkeypatch.setattr(ai_analysis_service, "_download_vision_media", lambda _url: (b"image-bytes", "image/jpeg"))
 
     text = ai_analysis_service._call_gemini_vision_api(
         api_key="test-key",
