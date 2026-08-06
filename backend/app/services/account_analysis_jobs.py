@@ -127,6 +127,18 @@ def get_queue():
     return get_rq_queue(ACCOUNT_ANALYSIS_QUEUE_NAME)
 
 
+def get_queue_backend() -> str:
+    """Return the configured account-analysis transport.
+
+    RQ remains the default for local development and existing tests. Production
+    deployments that run the SQS worker must set ``QUEUE_BACKEND=sqs``.
+    """
+    backend = (os.getenv("QUEUE_BACKEND") or "rq").strip().lower()
+    if backend not in {"rq", "sqs"}:
+        raise ValueError("QUEUE_BACKEND must be either 'rq' or 'sqs'.")
+    return backend
+
+
 def _generation_key(account_id: str) -> str:
     return f"{ACCOUNT_ANALYSIS_GENERATION_KEY_PREFIX}{account_id}"
 
@@ -672,8 +684,29 @@ def _enqueue_account_analysis_job_impl(
         sanitized_payload.get("source"),
     )
     try:
-        queue = get_queue()
-        if hasattr(queue, "enqueue"):
+        queue_backend = get_queue_backend()
+        if queue_backend == "sqs":
+            enqueued_job = enqueue_callable(
+                queue_name=ACCOUNT_ANALYSIS_QUEUE_NAME,
+                job_name=ACCOUNT_ANALYSIS_JOB_NAME,
+                func=run_account_analysis_job,
+                payload=full_payload,
+                job_id=job_id,
+                timeout_seconds=DEFAULT_JOB_TIMEOUT_SECONDS,
+                result_ttl_seconds=DEFAULT_RESULT_TTL_SECONDS,
+                failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
+                retry_max=2,
+                retry_intervals=[10, 30],
+            )
+            logger.info(
+                "[AccountAnalysisJob] Enqueued job job_id=%s queue=%s backend=sqs message_id=%s retry=%s",
+                job_id,
+                ACCOUNT_ANALYSIS_QUEUE_NAME,
+                enqueued_job.raw_status,
+                2,
+            )
+        else:
+            queue = get_queue()
             retry = Retry(max=2, interval=[10, 30])
             enqueued_job = queue.enqueue(
                 run_account_analysis_job,
@@ -689,27 +722,6 @@ def _enqueue_account_analysis_job_impl(
                 job_id,
                 ACCOUNT_ANALYSIS_QUEUE_NAME,
                 getattr(enqueued_job, "get_status", lambda: "queued")(),
-                2,
-            )
-        else:
-            enqueued_job = enqueue_callable(
-                queue_name=ACCOUNT_ANALYSIS_QUEUE_NAME,
-                job_name=ACCOUNT_ANALYSIS_JOB_NAME,
-                func=run_account_analysis_job,
-                payload=full_payload,
-                job_id=job_id,
-                timeout_seconds=DEFAULT_JOB_TIMEOUT_SECONDS,
-                result_ttl_seconds=DEFAULT_RESULT_TTL_SECONDS,
-                failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
-                retry_max=2,
-                retry_intervals=[10, 30],
-            )
-            logger.info(
-                "[AccountAnalysisJob] Enqueued job job_id=%s queue=%s backend=%s transport_status=%s retry=%s",
-                job_id,
-                ACCOUNT_ANALYSIS_QUEUE_NAME,
-                enqueued_job.backend,
-                enqueued_job.raw_status,
                 2,
             )
         # Write Redis state only after the transport has accepted the job.

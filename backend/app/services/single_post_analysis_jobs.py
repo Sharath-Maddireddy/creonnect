@@ -103,7 +103,7 @@ def enqueue_single_post_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         normalized.get("post_id"),
         normalized.get("media_url"),
     )
-    enqueue_callable(
+    enqueued_job = enqueue_callable(
         queue_name=SINGLE_POST_ANALYSIS_QUEUE_NAME,
         job_name=SINGLE_POST_ANALYSIS_JOB_NAME,
         func=run_single_post_analysis_job,
@@ -114,6 +114,11 @@ def enqueue_single_post_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
         retry_max=2,
         retry_intervals=[10, 30],
+    )
+    logger.info(
+        "[SinglePostJob] Enqueued job_id=%s backend=sqs message_id=%s",
+        job_id,
+        enqueued_job.raw_status,
     )
     return {"job_id": job_id, "status": "queued"}
 

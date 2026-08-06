@@ -15,6 +15,7 @@ services:
       - .env
     environment:
       REDIS_URL: redis://redis:6379/0
+      QUEUE_BACKEND: sqs
     ports:
       - "8000:8000"
       - "50051:50051"
@@ -44,6 +45,7 @@ services:
       - .env
     environment:
       REDIS_URL: redis://redis:6379/0
+      QUEUE_BACKEND: sqs
     depends_on:
       - redis
     command: ["python", "-m", "backend.app.workers.sqs_worker"]

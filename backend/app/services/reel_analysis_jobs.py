@@ -66,7 +66,7 @@ def enqueue_reel_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         payload.get("watch_time_pct"),
     )
     initialize_reel_job_status(job_id)
-    enqueue_callable(
+    enqueued_job = enqueue_callable(
         queue_name=REEL_ANALYSIS_QUEUE_NAME,
         job_name=REEL_ANALYSIS_JOB_NAME,
         func=run_reel_analysis_job,
@@ -75,6 +75,11 @@ def enqueue_reel_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         timeout_seconds=REEL_JOB_TIMEOUT_SECONDS,
         result_ttl_seconds=DEFAULT_RESULT_TTL_SECONDS,
         failure_ttl_seconds=DEFAULT_FAILURE_TTL_SECONDS,
+    )
+    logger.info(
+        "[ReelAnalysisJob] Enqueued job_id=%s backend=sqs message_id=%s",
+        job_id,
+        enqueued_job.raw_status,
     )
     return {"job_id": job_id, "status": "queued"}
 
