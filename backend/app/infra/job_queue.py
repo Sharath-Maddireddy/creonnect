@@ -14,6 +14,7 @@ from backend.app.infra.job_defaults import (
     DEFAULT_JOB_TIMEOUT_SECONDS,
     DEFAULT_RESULT_TTL_SECONDS,
 )
+from backend.app.utils.env_numbers import get_int_env
 from backend.app.utils.logger import logger
 
 
@@ -70,12 +71,12 @@ def _get_sqs_client():
         client_kwargs["region_name"] = region_name
     if endpoint_url:
         client_kwargs["endpoint_url"] = endpoint_url
-    # Keep a transient AWS/SQS network problem from blocking the gRPC event
-    # loop until the Node caller's deadline expires. Callers can retry a
-    # bounded send failure instead of hanging the connection lifecycle.
+    # The worker uses 20-second SQS long polling, so its read timeout must be
+    # longer than the poll. Production Compose supplies a shorter value for
+    # the API producer and a longer value for the worker consumer.
     client_kwargs["config"] = Config(
-        connect_timeout=3,
-        read_timeout=5,
+        connect_timeout=max(1, get_int_env("AWS_SQS_CONNECT_TIMEOUT_SECONDS", 3)),
+        read_timeout=max(1, get_int_env("AWS_SQS_READ_TIMEOUT_SECONDS", 30)),
         retries={"mode": "standard", "max_attempts": 1},
     )
     _SQS_CLIENT = boto3.client("sqs", **client_kwargs)
