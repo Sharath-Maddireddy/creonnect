@@ -103,7 +103,7 @@ def enqueue_single_post_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         normalized.get("post_id"),
         normalized.get("media_url"),
     )
-    enqueue_callable(
+    enqueued_job = enqueue_callable(
         queue_name=SINGLE_POST_ANALYSIS_QUEUE_NAME,
         job_name=SINGLE_POST_ANALYSIS_JOB_NAME,
         func=run_single_post_analysis_job,
@@ -115,11 +115,16 @@ def enqueue_single_post_analysis_job(payload: dict[str, Any]) -> dict[str, str]:
         retry_max=2,
         retry_intervals=[10, 30],
     )
+    logger.info(
+        "[SinglePostJob] Enqueued job_id=%s backend=sqs message_id=%s",
+        job_id,
+        enqueued_job.raw_status,
+    )
     return {"job_id": job_id, "status": "queued"}
 
 
 async def enqueue_single_post_analysis_job_async(payload: dict[str, Any]) -> dict[str, str]:
-    return enqueue_single_post_analysis_job(payload)
+    return await asyncio.to_thread(enqueue_single_post_analysis_job, payload)
 
 
 def get_single_post_analysis_job_status(job_id: str) -> dict[str, Any] | None:

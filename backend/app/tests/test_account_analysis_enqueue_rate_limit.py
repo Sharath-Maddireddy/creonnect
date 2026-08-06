@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from backend.app.services import account_analysis_jobs
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
@@ -18,6 +21,12 @@ class _QueueStub:
     def enqueue(self, *args: Any, **kwargs: Any) -> None:
         self._assert_ready()
         self.calls.append((args, kwargs))
+
+
+@pytest.fixture(autouse=True)
+def _stub_analysis_generation(monkeypatch) -> None:
+    """Keep enqueue tests isolated from the Redis-backed disconnect generation."""
+    monkeypatch.setattr(account_analysis_jobs, "_read_analysis_generation", lambda _account_id: 0)
 
 
 def _build_post(index: int) -> SinglePostInsights:
@@ -100,6 +109,33 @@ def test_new_job_enforces_rate_limit_before_enqueue(monkeypatch) -> None:
     assert result["status"] == "queued"
     assert calls["rate_limit_calls"] == 1
     assert len(queue.calls) == 1
+
+
+def test_sqs_backend_routes_account_analysis_to_sqs(monkeypatch) -> None:
+    sqs_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setenv("QUEUE_BACKEND", "sqs")
+    monkeypatch.setattr(account_analysis_jobs, "_resolve_reusable_job", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(account_analysis_jobs, "_enforce_rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: (_ for _ in ()).throw(AssertionError("RQ was used")))
+    monkeypatch.setattr(account_analysis_jobs, "enqueue_callable", lambda **kwargs: sqs_calls.append(kwargs) or SimpleNamespace(raw_status="message-1"))
+    monkeypatch.setattr(account_analysis_jobs, "initialize_job_status", lambda _job_id: {"job_id": _job_id})
+    monkeypatch.setattr(account_analysis_jobs, "_write_dedupe_job_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(account_analysis_jobs, "_write_inputhash_job_id", lambda *args, **kwargs: None)
+
+    result = account_analysis_jobs.enqueue_account_analysis_job(
+        {
+            "account_id": "acct_sqs",
+            "post_limit": 1,
+            "posts": [_build_post(1).model_dump(mode="python")],
+        }
+    )
+
+    assert result["status"] == "queued"
+    assert len(sqs_calls) == 1
+    assert sqs_calls[0]["queue_name"] == account_analysis_jobs.ACCOUNT_ANALYSIS_QUEUE_NAME
+    assert sqs_calls[0]["job_name"] == account_analysis_jobs.ACCOUNT_ANALYSIS_JOB_NAME
+    assert sqs_calls[0]["job_id"] == result["job_id"]
 
 
 def test_enqueue_failure_rolls_back_rate_counter_and_mappings(monkeypatch) -> None:

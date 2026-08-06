@@ -6,6 +6,8 @@ import json
 import time
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from backend.app.utils.env import load_app_env
 
 load_app_env(override=False)
@@ -89,12 +91,17 @@ def main() -> None:
     while True:
         handled_message = False
         for queue_name, queue_url in queue_urls.items():
-            response = client.receive_message(
-                QueueUrl=queue_url,
-                MaxNumberOfMessages=MAX_MESSAGES_PER_POLL,
-                WaitTimeSeconds=POLL_WAIT_TIME_SECONDS,
-                VisibilityTimeout=300,
-            )
+            try:
+                response = client.receive_message(
+                    QueueUrl=queue_url,
+                    MaxNumberOfMessages=MAX_MESSAGES_PER_POLL,
+                    WaitTimeSeconds=POLL_WAIT_TIME_SECONDS,
+                    VisibilityTimeout=300,
+                )
+            except (BotoCoreError, ClientError) as exc:
+                logger.warning("[SQSWorker] Receive failed queue=%s; retrying: %s", queue_name, exc)
+                time.sleep(IDLE_SLEEP_SECONDS)
+                continue
             messages = response.get("Messages") or []
             if not messages:
                 continue
@@ -108,8 +115,11 @@ def main() -> None:
                     continue
 
                 if isinstance(receipt_handle, str) and receipt_handle:
-                    client.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
-                    logger.debug("[SQSWorker] Deleted message queue=%s", queue_name)
+                    try:
+                        client.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+                        logger.debug("[SQSWorker] Deleted message queue=%s", queue_name)
+                    except (BotoCoreError, ClientError) as exc:
+                        logger.warning("[SQSWorker] Delete failed queue=%s; message will reappear: %s", queue_name, exc)
         if not handled_message:
             time.sleep(IDLE_SLEEP_SECONDS)
 

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # =============================================================================
 # Creonnect Backend — Production Dockerfile
 # =============================================================================
@@ -14,7 +15,6 @@ FROM python:3.11-slim AS builder
 # Prevent .pyc files and enable unbuffered output for cleaner logs
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
@@ -27,10 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies first (Docker layer cache optimisation)
-COPY backend/requirements.txt ./backend/requirements.txt
+COPY requirements.txt ./
+COPY requirements.runtime-extra.txt ./
 
-RUN pip install --upgrade pip && \
-    pip install --prefix=/install -r backend/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install --prefix=/install -r requirements.txt -r requirements.runtime-extra.txt && \
+    PYTHONPATH=/install/lib/python3.11/site-packages python -c "from fastapi import FastAPI; import fastapi, pydantic, uvicorn; print(f'fastapi={fastapi.__version__} pydantic={pydantic.__version__} uvicorn={uvicorn.__version__}')"
 
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────

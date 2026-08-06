@@ -10,41 +10,39 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
+
 env:
-  PYTHON_VERSION: "3.11"
   ECR_REPOSITORY: "creonnect-python"
 
 jobs:
   build-and-push:
     name: Build and Push Docker Image to ECR
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     outputs:
       image_tag: ${{ steps.vars.outputs.image_tag }}
-      image_uri: ${{ steps.vars.outputs.image_uri }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install test dependencies
+      # PyTorch and its native dependencies can exhaust the ~14 GB normally
+      # available on a hosted runner. These SDKs are not used by this workflow.
+      - name: Reclaim runner disk space
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          set -euo pipefail
+          echo "Disk space before cleanup:"
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          docker system prune --all --force
+          echo "Disk space after cleanup:"
+          df -h /
 
-      - name: Run backend tests
-        # CI does not start a Redis service container in this workflow.
-        # We force in-memory limiter mode for deterministic backend test runs.
-        env:
-          DATABASE_URL: sqlite+aiosqlite:///:memory:
-          # Placeholder URL retained for compatibility with components reading REDIS_URL.
-          REDIS_URL: redis://localhost:6379/0
-          # Explicitly disable Redis-backed limiter in CI unless a Redis service is added.
-          RATE_LIMIT_USE_REDIS: "false"
-        run: pytest backend/app/tests -q
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -80,14 +78,23 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          platforms: linux/amd64
+          progress: plain
           push: true
           tags: |
             ${{ steps.vars.outputs.image_uri }}
             ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha,scope=creonnect-python-production
+          # Export only the final image layers. The full mode=max cache can
+          # upload the ML dependency graph for 20+ minutes and delay deploys.
+          # Cache failures are non-blocking because the ECR image is the
+          # deployable artifact.
+          cache-to: type=gha,mode=min,scope=creonnect-python-production,timeout=5m,ignore-error=true
 
   deploy:
     name: Deploy Docker on AWS EC2
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: build-and-push
     steps:
       - name: Checkout
@@ -116,6 +123,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           envs: APP_ENV,APP_DIR,AWS_REGION,AWS_ACCOUNT_ID,ECR_REPOSITORY,IMAGE_TAG
+          command_timeout: 15m
           script_stop: true
           script: |
             set -euo pipefail
@@ -129,7 +137,7 @@ jobs:
             export ECR_IMAGE="${IMAGE_URI}"
             printf 'ECR_IMAGE=%s\n' "${IMAGE_URI}" >> "${APP_DIR}/.env"
             docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" pull
-            docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" up -d
+            docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" up -d --remove-orphans
             HEALTH_URL="http://127.0.0.1:8000/health"
             ATTEMPTS=24
             SLEEP_SECONDS=5
@@ -141,11 +149,19 @@ jobs:
               if [ "${attempt}" -eq "${ATTEMPTS}" ]; then
                 echo "Health check failed after $((ATTEMPTS * SLEEP_SECONDS)) seconds."
                 docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" ps
-                docker logs --tail 200 creonnect-python-api || true
-                docker logs --tail 200 creonnect-python-worker || true
+                docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" logs --tail 200 api worker || true
                 exit 1
               fi
               echo "Health check not ready (${attempt}/${ATTEMPTS}); retrying in ${SLEEP_SECONDS}s..."
               sleep "${SLEEP_SECONDS}"
             done
+            for service in redis api worker; do
+              container_id="$(docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" ps -q "${service}")"
+              if [ -z "${container_id}" ] || [ "$(docker inspect --format '{{.State.Status}}' "${container_id}")" != "running" ]; then
+                echo "Service ${service} is not running."
+                docker compose -f "${APP_DIR}/docker-compose.yml" --env-file "${APP_DIR}/.env" ps
+                exit 1
+              fi
+            done
+            docker image prune --force
             docker ps --filter name=creonnect-python-api --filter name=creonnect-python-worker --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"

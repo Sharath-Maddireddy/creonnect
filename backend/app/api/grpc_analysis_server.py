@@ -15,6 +15,7 @@ import grpc
 from backend.app.services.account_analysis_jobs import (
     enqueue_account_analysis_job_async,
     get_account_analysis_job_status,
+    invalidate_account_analysis_cache,
 )
 from backend.app.services.single_post_analysis_jobs import (
     enqueue_single_post_analysis_job_async,
@@ -27,6 +28,7 @@ from backend.app.utils.logger import logger
 _GRPC_SERVICE_NAME = "creonnect.analysis.AnalysisService"
 _GRPC_METHOD_START_ACCOUNT = f"/{_GRPC_SERVICE_NAME}/StartAccountAnalysis"
 _GRPC_METHOD_GET_ACCOUNT_STATUS = f"/{_GRPC_SERVICE_NAME}/GetAccountAnalysisStatus"
+_GRPC_METHOD_INVALIDATE_ACCOUNT = f"/{_GRPC_SERVICE_NAME}/InvalidateAccountAnalysis"
 _GRPC_METHOD_START_SINGLE_POST = f"/{_GRPC_SERVICE_NAME}/StartSinglePostAnalysis"
 _GRPC_METHOD_GET_SINGLE_POST_STATUS = f"/{_GRPC_SERVICE_NAME}/GetSinglePostAnalysisStatus"
 _GRPC_ALLOWED_SKEW_SECONDS = 300
@@ -94,6 +96,14 @@ async def _get_account_status_handler(payload: dict[str, Any]) -> dict[str, Any]
     return {"ok": True, "data": status}
 
 
+async def _invalidate_account_handler(payload: dict[str, Any]) -> dict[str, Any]:
+    account_id = str(payload.get("account_id") or "").strip()
+    if not account_id:
+        return {"ok": False, "error": {"message": "account_id is required"}}
+    result = await asyncio.to_thread(invalidate_account_analysis_cache, account_id)
+    return {"ok": True, "data": result}
+
+
 async def _start_single_post_handler(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         result = await enqueue_single_post_analysis_job_async(payload)
@@ -151,6 +161,7 @@ async def start_grpc_analysis_server() -> None:
     handlers = {
         "StartAccountAnalysis": _build_unary_unary_handler(_start_account_handler),
         "GetAccountAnalysisStatus": _build_unary_unary_handler(_get_account_status_handler),
+        "InvalidateAccountAnalysis": _build_unary_unary_handler(_invalidate_account_handler),
         "StartSinglePostAnalysis": _build_unary_unary_handler(_start_single_post_handler),
         "GetSinglePostAnalysisStatus": _build_unary_unary_handler(_get_single_post_status_handler),
     }

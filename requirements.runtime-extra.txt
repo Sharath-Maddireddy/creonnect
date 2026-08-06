@@ -1,0 +1,3 @@
+# Packages used by the production application that are not in requirements.txt.
+google-genai==1.66.0
+rq==1.16.2
