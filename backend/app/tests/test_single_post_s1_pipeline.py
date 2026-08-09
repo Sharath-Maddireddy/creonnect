@@ -214,6 +214,72 @@ def test_call_gemini_vision_api_uses_inline_media_when_google_genai_client_is_mi
     assert payload["scene_description"] == "Person presenting"
 
 
+def test_download_vision_media_follows_cdn_redirects(monkeypatch) -> None:
+    """Instagram CDN redirect URLs must be usable as Gemini image inputs."""
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        headers = {"content-type": "image/jpeg"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_bytes(self, _chunk_size: int):
+            yield b"image-bytes"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(ai_analysis_service.httpx, "Client", FakeClient)
+    media_bytes, mime_type = ai_analysis_service._download_vision_media("https://instagram.example/post.jpg")
+
+    assert captured["follow_redirects"] is True
+    assert media_bytes == b"image-bytes"
+    assert mime_type == "image/jpeg"
+
+
+def test_run_vision_analysis_routes_reels_to_video_engine(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        ai_analysis_service,
+        "run_reel_gemini_analysis",
+        lambda media_url: {
+            "status": "ok",
+            "signals": {
+                "hook_frame_score": 0.82,
+                "retention_signal": 0.7,
+                "objects": ["creator", "product"],
+                "scene_description": "Creator demonstrates a product.",
+                "visual_style": "tutorial",
+            },
+        },
+    )
+    post = _build_post("m_reel", reach=1000, engagement_rate=0.05, media_url="https://example.com/post.mp4")
+    post.media_type = "REEL"
+
+    result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
+
+    assert result["status"] == "ok"
+    assert result["signals"][0]["objects"] == ["creator", "product"]
+    assert result["signals"][0]["hook_strength_score"] == 0.82
+
+
 def test_run_vision_analysis_repairs_malformed_output(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-visible")
 
@@ -292,6 +358,27 @@ def test_run_vision_analysis_repairs_malformed_openai_fallback_output(monkeypatc
     assert result["signals"][0]["primary_objects"] == ["person", "laptop"]
     assert result["signals"][0]["technical_flaws"] == ["Clean lighting", "Balanced framing"]
     assert result["signals"][0]["aesthetic_fixes"] == ["Tighten crop"]
+
+
+def test_run_vision_analysis_uses_azure_as_image_fallback(monkeypatch) -> None:
+    """Azure-only deployments must not lose vision fallback coverage."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "azure-test-key")
+
+    async def fake_generate_openai_vision_json(*, api_key: str, instruction: str, media_url: str) -> str:
+        assert api_key == "azure-test-key"
+        return json.dumps({"visual_quality_score": 8, "primary_objects": ["person"]})
+
+    monkeypatch.setattr(ai_analysis_service, "_generate_openai_vision_json", fake_generate_openai_vision_json)
+
+    post = _build_post("m_azure_fallback", reach=1000, engagement_rate=0.05, media_url="https://example.com/post.jpg")
+    result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
+
+    assert result["provider"] == "openai"
+    assert result["status"] == "ok"
+    assert result["signals"][0]["primary_objects"] == ["person"]
 
 
 def test_run_vision_analysis_retries_with_simplified_prompt(monkeypatch) -> None:

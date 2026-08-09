@@ -26,6 +26,7 @@ from backend.app.analytics.caption_s2_engine import analyze_caption_via_llm
 from backend.app.analytics.content_score import compute_content_score
 from backend.app.analytics.post_weighted_score_engine import compute_weighted_post_score
 from backend.app.analytics.predicted_er_engine import compute_predicted_engagement_rate
+from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
 from backend.app.analytics.s4_audience_relevance_engine import analyze_audience_relevance_via_llm
 from backend.app.analytics.s6_brand_safety_engine import compute_s6_brand_safety
 from backend.app.analytics.vision_s1_engine import _as_float, compute_visual_quality_score
@@ -723,6 +724,28 @@ async def run_vision_analysis(
 
     api_key = os.getenv("GEMINI_API_KEY")
 
+    # Video URLs cannot be passed to the inline image adapter below.  Route
+    # Reels through Gemini's File API, then adapt its video signals to the
+    # canonical vision shape used by the rest of this report.
+    if _is_reel:
+        if not isinstance(api_key, str) or not api_key.strip():
+            failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+            failure_payload["error_reason"] = "GEMINI_API_KEY missing"
+            return failure_payload
+        reel_result = await asyncio.to_thread(run_reel_gemini_analysis, media_url)
+        reel_status = str(reel_result.get("status") or "error")
+        reel_signals = reel_result.get("signals")
+        if reel_status == "ok" and isinstance(reel_signals, dict):
+            normalized_reel_signals = dict(reel_signals)
+            normalized_reel_signals["hook_strength_score"] = reel_signals.get("hook_frame_score")
+            normalized_reel_signals["virality_potential"] = reel_signals.get("retention_signal", 5.0)
+            signal = _build_vision_signal(normalized_reel_signals, media_url=media_url)
+            return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
+        failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+        error = reel_result.get("error")
+        failure_payload["error_reason"] = str(error or f"Reel Gemini status={reel_status}")[:300]
+        return failure_payload
+
     try:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("GEMINI_API_KEY missing")
@@ -765,21 +788,37 @@ async def run_vision_analysis(
             }
             return VisionAnalysis(provider="gemini", status="ok", signals=[synthetic_signal]).model_dump(mode="python")
 
-        openai_api_key = os.getenv("OPENAI_API_KEY")
+        # LLMClient supports both direct OpenAI and Azure OpenAI.  The product
+        # commonly runs with Azure credentials only, so requiring a direct
+        # OPENAI_API_KEY here left the image fallback permanently unreachable.
+        # A non-empty sentinel is sufficient on the Azure path because
+        # _OpenAIVisionAdapter delegates authentication to LLMClient.
+        direct_openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        azure_openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+        azure_openai_api_key = os.getenv("AZURE_OPENAI_API_KEY", "").strip()
+        openai_api_key = direct_openai_api_key or (
+            azure_openai_api_key if azure_openai_endpoint and azure_openai_api_key else ""
+        )
         mime_type = _infer_mime_type(media_url)
-        if isinstance(openai_api_key, str) and openai_api_key.strip() and mime_type.startswith("image/"):
+        if openai_api_key and mime_type.startswith("image/"):
             try:
                 openai_signal = await _retry_parse_with_retry_only(
                     generate_fn=_generate_openai_vision_json,
-                    api_key=openai_api_key.strip(),
+                    api_key=openai_api_key,
                     instruction=instruction,
                     media_url=media_url,
                     provider_label="OpenAI",
                     post_id=post_id,
                 )
                 return VisionAnalysis(provider="openai", status="ok", signals=[openai_signal]).model_dump(mode="python")
-            except Exception:
-                pass
+            except Exception as openai_exc:
+                # Preserve both provider failures; this is shown in job
+                # diagnostics and makes a bad media URL distinguishable from
+                # a provider/configuration problem.
+                gemini_error_reason = (
+                    f"Gemini: {gemini_error_reason}; "
+                    f"Azure/OpenAI fallback: {str(openai_exc).strip() or openai_exc.__class__.__name__}"
+                )
 
         failure_payload = VisionAnalysis(provider="openai", status="error", signals=[]).model_dump(mode="python")
         failure_payload["error_reason"] = gemini_error_reason[:300]
@@ -803,7 +842,10 @@ def _download_vision_media(media_url: str) -> tuple[bytes, str]:
     """Download public image media for Gemini inline vision with a strict size cap."""
     with httpx.Client(
         timeout=VISION_MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
-        follow_redirects=False,
+        # Instagram/Facebook CDN URLs routinely redirect to their final image
+        # host.  Rejecting redirects meant otherwise-public post media never
+        # reached Gemini and was reported as a generic vision fallback.
+        follow_redirects=True,
         trust_env=False,
     ) as client:
         with client.stream("GET", media_url) as response:
@@ -1687,8 +1729,18 @@ async def analyze_single_post_ai(
     post_id = post.media_id if isinstance(post.media_id, str) else None
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     openai_api_key = os.getenv("OPENAI_API_KEY")
+    azure_openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    azure_openai_api_key = os.getenv("AZURE_OPENAI_API_KEY")
     gemini_enabled = bool(isinstance(gemini_api_key, str) and gemini_api_key.strip())
-    openai_enabled = bool(isinstance(openai_api_key, str) and openai_api_key.strip())
+    openai_enabled = bool(
+        (isinstance(openai_api_key, str) and openai_api_key.strip())
+        or (
+            isinstance(azure_openai_endpoint, str)
+            and azure_openai_endpoint.strip()
+            and isinstance(azure_openai_api_key, str)
+            and azure_openai_api_key.strip()
+        )
+    )
     external_ai_calls_enabled = os.getenv("AI_EXTERNAL_CALLS_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
     vision_enabled = external_ai_calls_enabled and (gemini_enabled or openai_enabled)
     warnings: list[AIWarning] = []
