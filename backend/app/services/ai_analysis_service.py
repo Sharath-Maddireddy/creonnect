@@ -1575,6 +1575,44 @@ def _fallback_summary(score: int, band: str) -> str:
     return f"Post scored {score}/100 ({band}) based on deterministic content signals."
 
 
+def _fallback_recommendations(
+    visual_quality_score: VisualQualityScore,
+    caption_effectiveness_score: CaptionEffectivenessScore,
+    content_clarity_score: ContentClarityScore,
+) -> list[AIRecommendation]:
+    """Return useful score-grounded moves when the coaching LLM is unavailable."""
+    recommendations: list[AIRecommendation] = []
+    if visual_quality_score.total < 35.0:
+        recommendations.append({
+            "id": "fallback_visual_focus",
+            "text": "Use one clear focal subject in the opening frame and remove competing background elements.",
+            "impact_level": "HIGH",
+            "category": "VISUAL",
+        })
+    if caption_effectiveness_score.total_0_50 < 35.0:
+        recommendations.append({
+            "id": "fallback_caption_hook",
+            "text": "Open the caption with the main takeaway, then add one specific reason to save or share the post.",
+            "impact_level": "HIGH",
+            "category": "CAPTION",
+        })
+    if content_clarity_score.total < 35.0:
+        recommendations.append({
+            "id": "fallback_content_clarity",
+            "text": "Make the post's single message explicit in the first frame and support it with a matching caption.",
+            "impact_level": "MEDIUM",
+            "category": "VISUAL",
+        })
+    if not recommendations:
+        recommendations.append({
+            "id": "fallback_engagement",
+            "text": "Repeat this format with one concrete audience question to encourage useful comments.",
+            "impact_level": "MEDIUM",
+            "category": "ENGAGEMENT",
+        })
+    return recommendations[:3]
+
+
 def _build_ai_warning(
     *,
     code: Literal["GEMINI_API_KEY_MISSING", "VISION_ERROR"],
@@ -1946,7 +1984,11 @@ async def analyze_single_post_ai(
     if summary is None:
         summary = _fallback_summary(score, band)
         drivers = deterministic_drivers
-        recommendations = []
+        recommendations = _fallback_recommendations(
+            visual_quality_score,
+            caption_effectiveness_score,
+            content_clarity_score,
+        )
         engagement_potential_score = _fallback_engagement_potential_score()
         caption_improvement = None
         posting_intelligence = None

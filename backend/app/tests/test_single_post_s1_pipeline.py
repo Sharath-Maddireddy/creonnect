@@ -8,9 +8,12 @@ from datetime import datetime, timezone
 
 from backend.app.domain.post_models import (
     BenchmarkMetrics,
+    CaptionEffectivenessScore,
+    ContentClarityScore,
     CoreMetrics,
     DerivedMetrics,
     SinglePostInsights,
+    VisualQualityScore,
 )
 from backend.app.services import ai_analysis_service
 from backend.app.services.post_insights_service import build_single_post_insights
@@ -278,6 +281,17 @@ def test_run_vision_analysis_routes_reels_to_video_engine(monkeypatch) -> None:
     assert result["status"] == "ok"
     assert result["signals"][0]["objects"] == ["creator", "product"]
     assert result["signals"][0]["hook_strength_score"] == 0.82
+
+
+def test_fallback_recommendations_are_present_when_coaching_llm_fails() -> None:
+    recommendations = ai_analysis_service._fallback_recommendations(
+        VisualQualityScore(total=20.0),
+        CaptionEffectivenessScore(total_0_50=20.0),
+        ContentClarityScore(total=20.0),
+    )
+
+    assert len(recommendations) == 3
+    assert {item["category"] for item in recommendations} == {"VISUAL", "CAPTION"}
 
 
 def test_run_vision_analysis_repairs_malformed_output(monkeypatch) -> None:
