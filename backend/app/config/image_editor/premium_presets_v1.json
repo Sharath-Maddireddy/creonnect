@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0",
+  "presets": [
+    {
+      "style_id": "lofi_dusk",
+      "version": "1.0.0",
+      "name": "Lofi Dusk",
+      "prompt": "dark editorial dusk portrait, warm peach skin highlights, glowing rim light, near-black bokeh, restrained DSLR flash, fine analog film grain and soft halation",
+      "negative_prompt": "plastic skin, identity change, extra limbs, altered product, text, logo, watermark, oversharpening, cartoon rendering",
+      "variations": ["subtle rim-light with restrained grain", "stronger flash contrast with gentle bloom"],
+      "quality_rules": ["preserve face and hands", "keep source product and logos unchanged", "retain natural skin texture"]
+    },
+    {
+      "style_id": "sun_kissed",
+      "version": "1.0.0",
+      "name": "Sun-Kissed",
+      "prompt": "warm natural golden-hour portrait, luminous but realistic skin, soft sun flare, radiant highlights, clean warm editorial color grade",
+      "negative_prompt": "orange skin, burned highlights, identity change, added objects, text, logo, watermark, artificial plastic smoothing",
+      "variations": ["soft low-angle sun flare", "cleaner warm editorial glow"],
+      "quality_rules": ["preserve face and hands", "protect skin tones", "retain source composition"]
+    },
+    {
+      "style_id": "y2k_digicam",
+      "version": "1.0.0",
+      "name": "Y2K Digicam",
+      "prompt": "authentic early-2000s compact digital camera aesthetic, direct flash, saturated colors, slight low-resolution softness, candid nightlife energy",
+      "negative_prompt": "modern studio lighting, face distortion, added text, logo, watermark, overdone glitch, altered product",
+      "variations": ["clean direct flash with modest color pop", "stronger flash with playful digicam grain"],
+      "quality_rules": ["preserve identity", "keep edges natural", "do not alter source product"]
+    },
+    {
+      "style_id": "luxury_product",
+      "version": "1.0.0",
+      "name": "Luxury Product",
+      "prompt": "premium editorial product photograph, controlled soft directional light, precise material detail, refined contrast, minimal luxury campaign finish",
+      "negative_prompt": "changed product shape, altered packaging, changed logo, fake text, clutter, watermark, unrealistic reflections",
+      "variations": ["soft side-light with deep premium shadows", "bright clean studio finish with restrained contrast"],
+      "quality_rules": ["product geometry must match source", "logos must remain unchanged", "keep label text legible"]
+    }
+  ]
+}

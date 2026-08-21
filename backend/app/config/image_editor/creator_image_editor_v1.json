@@ -1,0 +1,31 @@
+{
+  "config_version": "2.0.0",
+  "styles": [
+    {"id":"lofi_dusk","label":"Lofi Dusk","description":"Muted warm-cool dusk tones, soft grain, and low contrast.","tag":"rotating","is_rotating":true,"category":"trending"},
+    {"id":"sun_kissed","label":"Sun-Kissed","description":"Warm golden ambience, soft glow, and bright natural light.","tag":"evergreen","is_rotating":false,"category":"trending"},
+    {"id":"old_fuji","label":"Old Fuji","description":"Classic film color, desaturated greens, soft contrast, and fine grain.","tag":"evergreen","is_rotating":false,"category":"trending"},
+    {"id":"y2k_digicam","label":"Y2K Digicam","description":"Flash-lit digital color, slight overexposure, and subtle compression artifacts.","tag":"rotating","is_rotating":true,"category":"trending"},
+    {"id":"disposable_flash","label":"Disposable Flash","description":"Direct flash, bright highlights, grain, and a slight vignette.","tag":"rotating","is_rotating":true,"category":"trending"},
+    {"id":"golden_hour_film","label":"Golden Hour Film","description":"Warm directional light, soft grain, and gentle highlight rolloff.","tag":"evergreen","is_rotating":false,"category":"trending"},
+    {"id":"vsco_muted","label":"VSCO Muted","description":"Desaturated color, cool shadows, and soft matte contrast.","tag":"evergreen","is_rotating":false,"category":"trending"},
+    {"id":"polaroid_vintage","label":"Polaroid Vintage","description":"Faded warm color, soft edges, and a film-border feel.","tag":"evergreen","is_rotating":false,"category":"trending"},
+    {"id":"luxury_product","label":"Luxury Product","description":"Clean contrast, rich color, and a polished premium studio feel.","tag":"evergreen","is_rotating":false,"category":"brand-production"},
+    {"id":"brand_kit_color_match","label":"Brand-Kit Color Match","description":"Match a creator image to an approved brand palette while preserving natural skin tones.","tag":"evergreen","is_rotating":false,"category":"brand-production"},
+    {"id":"product_pop_enhancement","label":"Product-Pop Enhancement","description":"Enhance product clarity and contrast without oversaturating the surrounding image.","tag":"evergreen","is_rotating":false,"category":"brand-production"},
+    {"id":"relight","label":"Relight","description":"Apply an intentional lighting direction and mood while preserving the subject and product.","tag":"evergreen","is_rotating":false,"category":"brand-production"}
+  ],
+  "goals": [
+    {"id":"post","label":"Post","description":"Feed-ready visual."},
+    {"id":"story","label":"Story","description":"Vertical story visual."},
+    {"id":"reel_cover","label":"Reel cover","description":"Cover image for a reel."},
+    {"id":"ad","label":"Ad","description":"Paid campaign creative."},
+    {"id":"portfolio","label":"Portfolio","description":"Portfolio-ready visual."}
+  ],
+  "events": [{"id":"none","label":"No event","description":"No seasonal context."}],
+  "enhancements": [
+    {"id":"auto_enhance","label":"Auto enhance","description":"Balance exposure and colour."},
+    {"id":"background_remove","label":"Remove background","description":"Remove the background.","mutually_exclusive_with":["background_blur"]},
+    {"id":"background_blur","label":"Blur background","description":"Add a background blur.","mutually_exclusive_with":["background_remove"]}
+  ],
+  "output_formats": ["png", "jpg", "webp"]
+}

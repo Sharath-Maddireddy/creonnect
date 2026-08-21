@@ -1,0 +1,33 @@
+{
+  "catalog_version": "1.0.0",
+  "presets": [
+    {
+      "id": "warm_editorial",
+      "version": "1.0.0",
+      "name": "Warm Editorial",
+      "description": "Warm skin-conscious color, polished contrast, and restrained texture.",
+      "adjustments": {"temperature": 7, "tint": 1, "exposure": 1, "contrast": 6, "saturation": 3, "sharpness": 2, "grain": 2, "vignette": 1}
+    },
+    {
+      "id": "clean_portrait",
+      "version": "1.0.0",
+      "name": "Clean Portrait",
+      "description": "Open shadows, gentle contrast, and natural color for portraits.",
+      "adjustments": {"temperature": 2, "tint": 0, "exposure": 2, "contrast": -4, "saturation": -2, "sharpness": 1, "grain": 0, "vignette": 0}
+    },
+    {
+      "id": "moody_film",
+      "version": "1.0.0",
+      "name": "Moody Film",
+      "description": "Cooler shadows, muted color, deeper contrast, and visible fine grain.",
+      "adjustments": {"temperature": -2, "tint": 2, "exposure": -2, "contrast": 12, "saturation": -8, "sharpness": -3, "grain": 7, "vignette": 6}
+    },
+    {
+      "id": "golden_hour",
+      "version": "1.0.0",
+      "name": "Golden Hour",
+      "description": "Luminous warmth with softened contrast and protected highlights.",
+      "adjustments": {"temperature": 12, "tint": 2, "exposure": 2, "contrast": -2, "saturation": 6, "sharpness": 0, "grain": 2, "vignette": 3}
+    }
+  ]
+}

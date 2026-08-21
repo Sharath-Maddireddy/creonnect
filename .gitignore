@@ -64,3 +64,57 @@ backend/*.db
 pytest-cache-files-*/
 
 frontend/node_modules
+# Generated image-editor artifacts (runtime output, not source)
+backend/.image_editor_assets/
+backend/.image_editor_qa/
+
+# Temporary ML dataset pipeline runs
+backend/ml/tests/.tmp_run_dataset_pipeline_*/
+
+# Installed agent plugin caches (not project source)
+.claude/skills/
+.claude/hooks/node_modules/
+.agents/
+
+# Local scratch scripts and fixtures
+/test_extract.py
+/test_get_trends.py
+/test_html.py
+/test_live_refresh.py
+/test_trend_pipeline.py
+/test_trends.py
+/test_trends_full.py
+/temp_fixture.json
+/temp_fixture_result.json
+backend/temp_fixture_priyankanagar.json
+backend/result_priyankanagar_final.json
+/combined_scraped_profiles.json
+/combined_new_batch_profiles_*.json
+/session_scraped_profiles_*.json
+/20_more_creators.json
+/azure_proxy.js
+/azure_proxy.py
+/azure_proxy2.py
+/fix_external_ai.py
+internal_tools/artifacts/
+internal_tools/dataset.jsonl
+
+# Personal editor / session tooling
+.obsidian/
+.claude/hooks/
+scratch/
+
+# Local debug scratch scripts
+backend/check_db.py
+backend/check_db_2.py
+backend/check_sqlite.py
+backend/extract_one.py
+backend/fetch_and_run.py
+backend/local_run.py
+backend/test_auth_methods.py
+backend/test_azure_connection.py
+backend/test_llm_client_raw.py
+
+# Scraped third-party account data (PII) and local PRD copies
+internal_tools/fixtures/
+*.docx
