@@ -216,6 +216,27 @@ class FollowerSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class PostAnalysisScoreSnapshot(Base):
+    """Immutable score observation used for account-level post-score baselines."""
+
+    __tablename__ = "post_analysis_score_snapshots"
+    __table_args__ = (
+        Index("ix_post_score_snapshots_account_analyzed", "account_id", "analyzed_at"),
+        Index("ix_post_score_snapshots_account_post", "account_id", "post_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    post_id: Mapped[str] = mapped_column(Text, nullable=False)
+    contract_version: Mapped[str] = mapped_column(Text, nullable=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score_components_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    confidence_level: Mapped[str] = mapped_column(Text, nullable=False)
+    source_posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class BackgroundJob(Base):
     """Stores cross-queue job state independently of the transport backend."""
 
@@ -226,6 +247,13 @@ class BackgroundJob(Base):
         Index("ix_background_jobs_account_id", "account_id"),
         Index("ix_background_jobs_created_at", "created_at"),
         Index("ix_background_jobs_payload_hash", "payload_hash"),
+        Index(
+            "uq_background_jobs_idempotency_key",
+            "queue_name",
+            "account_id",
+            "idempotency_key_hash",
+            unique=True,
+        ),
     )
 
     job_id: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -236,6 +264,10 @@ class BackgroundJob(Base):
     source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     post_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payload_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Unlike payload_hash (audit/dedupe input), this nullable key is an atomic
+    # ownership claim. Queues that permit retry after failure release the claim
+    # without discarding the original payload hash.
+    idempotency_key_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     progress_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -494,5 +526,31 @@ class ImageEditResultRecord(Base):
     width: Mapped[int] = mapped_column(Integer, nullable=False)
     height: Mapped[int] = mapped_column(Integer, nullable=False)
     output_format: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ImageEditComparisonRecord(Base):
+    """A side-by-side GPT Image and Gemini render from one immutable source."""
+
+    __tablename__ = "image_edit_comparisons"
+    __table_args__ = (
+        Index("ix_image_edit_comparisons_account_id", "account_id"),
+        Index("ix_image_edit_comparisons_original_asset_id", "original_asset_id"),
+        Index("ix_image_edit_comparisons_request_hash", "request_hash"),
+        Index("ix_image_edit_comparisons_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    original_asset_id: Mapped[str] = mapped_column(Text, ForeignKey("image_assets.id", ondelete="CASCADE"), nullable=False)
+    gpt_result_asset_id: Mapped[str | None] = mapped_column(Text, ForeignKey("image_assets.id", ondelete="SET NULL"), nullable=True)
+    gemini_result_asset_id: Mapped[str | None] = mapped_column(Text, ForeignKey("image_assets.id", ondelete="SET NULL"), nullable=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    filter_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    request_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    gpt_metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    gemini_metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
