@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import Any, Literal, NotRequired, TypedDict
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -23,9 +23,9 @@ from backend.app.ai.prompts import S2_CAPTION_EVALUATION_PROMPT, S4_AUDIENCE_REL
 from backend.app.ai.toon import loads as toon_loads
 from backend.app.ai.llm_client import LLMClient
 from backend.app.analytics.caption_s2_engine import analyze_caption_via_llm
-from backend.app.analytics.content_score import compute_content_score
 from backend.app.analytics.post_weighted_score_engine import compute_weighted_post_score
-from backend.app.analytics.predicted_er_engine import compute_predicted_engagement_rate
+from backend.app.analytics.reel_analysis_service import compute_reel_analysis
+from backend.app.analytics.reel_audio_engine import compute_reel_audio_score
 from backend.app.analytics.reel_gemini_engine import run_reel_gemini_analysis
 from backend.app.analytics.s4_audience_relevance_engine import analyze_audience_relevance_via_llm
 from backend.app.analytics.s6_brand_safety_engine import compute_s6_brand_safety
@@ -37,19 +37,32 @@ from backend.app.domain.post_models import (
     CaptionEffectivenessScore,
     ContentClarityScore,
     EngagementPotentialScore,
+    ReelAnalysis,
     SinglePostInsights,
     VisionAnalysis,
     VisualQualityScore,
     WeightedPostScore,
 )
+from backend.app.infra.outbound_media import resolve_public_http_url
 from backend.app.utils.logger import logger
 
 
 CACHE_TTL_SECONDS = 86400
 MIN_REGEN_SECONDS = 1
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
+AI_ANALYSIS_CACHE_VERSION = "creative-v2r2"
+CAROUSEL_VISION_CONCURRENCY = 3
 VISION_MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 30.0
 MAX_VISION_MEDIA_BYTES = 15 * 1024 * 1024
+VISION_MEDIA_MAX_REDIRECTS = 3
+# Worst case inside run_reel_gemini_analysis: 30s download + 2 models x 2
+# attempts each with a 35s sleep on HTTP 429 (~140s), now that the video is
+# sent inline instead of through the File API upload/poll cycle. Unlike the
+# image vision path, this call previously had no timeout at all, so a
+# rate-limit storm could hang a synchronous /post-analysis request for
+# several minutes.
+REEL_VISION_TIMEOUT_SECONDS = 180.0
+_VISION_MEDIA_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _DEFAULT_GEMINI_MODEL = PRIMARY_GEMINI_MODEL
 _SIMPLIFIED_GEMINI_VISION_PROMPT = (
     "Analyze the provided Instagram media and return ONLY valid JSON. "
@@ -89,8 +102,14 @@ class AIAnalysisResult(TypedDict):
     summary: str
     drivers: list["AIDriver"]
     recommendations: list["AIRecommendation"]
-    ai_content_score: int
+    # Backward-compatible aliases for the canonical AI creative score.
+    ai_content_score: float | None
     ai_content_band: str
+    creative_score: float | None
+    creative_band: str
+    score_source: str
+    performance_score: None
+    performance_score_status: str
     caption_effectiveness_score: dict[str, Any]
     visual_quality_score: dict[str, Any]
     content_clarity_score: dict[str, Any]
@@ -105,6 +124,7 @@ class AIAnalysisResult(TypedDict):
     warnings: list["AIWarning"]
     vision_status: Literal["ok", "error", "disabled", "no_media"]
     fallback_used: bool
+    fallback_reason: NotRequired[str | None]
     vision_error_reason: NotRequired[str | None]
     # Enhanced analytics fields (v2)
     caption_improvement: NotRequired[dict[str, str] | None]
@@ -189,7 +209,7 @@ def _cache_key(post: SinglePostInsights) -> str | None:
     published_at = post.published_at.isoformat() if post.published_at is not None else "unknown_time"
 
     if account_id and media_id:
-        return f"{account_id}:{media_id}:{published_at}"
+        return f"{AI_ANALYSIS_CACHE_VERSION}:{account_id}:{media_id}:{published_at}"
 
     caption_hint = _hash_cache_hint(post.caption_text)
     media_hint = _hash_cache_hint(post.media_url)
@@ -199,12 +219,17 @@ def _cache_key(post: SinglePostInsights) -> str | None:
 
     account_part = account_id or "unknown_account"
     media_part = media_id or "unknown_media"
-    return f"{account_part}:{media_part}:{published_at}:{caption_hint}:{media_hint}"
+    return f"{AI_ANALYSIS_CACHE_VERSION}:{account_part}:{media_part}:{published_at}:{caption_hint}:{media_hint}"
 
 
 def _is_fresh(entry: _CacheEntry, now_ts: float) -> bool:
     """Return True when cache entry is still valid by TTL."""
     return (now_ts - entry.cached_at) <= CACHE_TTL_SECONDS
+
+
+def _should_cache_analysis_result(result: AIAnalysisResult) -> bool:
+    """Transient vision failures must be retried instead of cached for a day."""
+    return result.get("vision_status") != "error"
 
 
 def _prune_analysis_cache(now_ts: float) -> None:
@@ -225,17 +250,34 @@ def _prune_analysis_cache(now_ts: float) -> None:
         _ANALYSIS_CACHE.pop(key, None)
 
 
-def _score_payload(post: SinglePostInsights) -> tuple[int, str]:
-    """Compute deterministic content score payload from post metrics."""
-    payload = compute_content_score(post.derived_metrics, post.benchmark_metrics)
-    score = int(payload.get("score", 0))
-    band = str(payload.get("band", "NEEDS_WORK"))
+def _creative_score_payload(weighted_post_score: WeightedPostScore) -> tuple[float | None, str]:
+    """Return the canonical AI-only creative score and creator-facing band."""
+    raw_score = weighted_post_score.score
+    if not isinstance(raw_score, (int, float)):
+        return None, "UNAVAILABLE"
+
+    score = round(max(0.0, min(100.0, float(raw_score))), 2)
+    if score < 40.0:
+        band = "OPPORTUNITY_TO_REFINE"
+    elif score < 65.0:
+        band = "BUILDING_MOMENTUM"
+    elif score < 85.0:
+        band = "STRONG_FOUNDATION"
+    else:
+        band = "EXCEPTIONAL"
     return score, band
 
 
 def _resolve_score(attr_val: Any, cls: type) -> Any:
     "Return attr_val if already an instance of cls, else return cls()."
     return attr_val if isinstance(attr_val, cls) else cls()
+
+
+def _available_audience_relevance_total(score: AudienceRelevanceScore) -> float | None:
+    """Return S4 only when creator/post category context supports the score."""
+    if score.status != "available":
+        return None
+    return score.total_0_50
 
 
 def _fallback_engagement_potential_score() -> EngagementPotentialScore:
@@ -285,15 +327,7 @@ def _is_public_ip_address(value: str) -> bool:
         parsed = ip_address(value)
     except ValueError:
         return False
-
-    return not (
-        parsed.is_private
-        or parsed.is_loopback
-        or parsed.is_link_local
-        or parsed.is_multicast
-        or parsed.is_reserved
-        or parsed.is_unspecified
-    )
+    return parsed.is_global
 
 
 async def _is_safe_public_hostname(hostname: str) -> bool:
@@ -330,10 +364,24 @@ def _is_safe_public_hostname_blocking(normalized: str) -> bool:
     return all(_is_public_ip_address(ip) for ip in resolved_ips)
 
 
+def _validate_public_vision_url(value: str) -> str:
+    """Validate one outbound inline-vision URL before opening a connection."""
+    parsed = urlparse(value)
+    hostname = parsed.hostname
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not isinstance(hostname, str)
+        or not hostname.strip()
+        or parsed.username is not None
+        or parsed.password is not None
+        or not _is_safe_public_hostname_blocking(hostname.strip().lower().rstrip("."))
+    ):
+        raise ValueError("Vision media URL must resolve to a public HTTP or HTTPS host")
+    return value
+
+
 def build_ai_input_context(
     post: SinglePostInsights,
-    ai_content_score: int,
-    ai_content_band: str,
     visual_quality_score: VisualQualityScore,
     content_clarity_score: ContentClarityScore,
     caption_effectiveness_score: CaptionEffectivenessScore,
@@ -341,7 +389,7 @@ def build_ai_input_context(
     brand_safety_score: BrandSafetyScore,
     weighted_post_score: WeightedPostScore,
 ) -> dict[str, Any]:
-    """Build enriched input context for downstream AI calls."""
+    """Build AI-only creative context without observed performance metrics."""
     import re
 
     # --- Temporal signals ---
@@ -364,7 +412,7 @@ def build_ai_input_context(
         "S1_visual_quality": visual_quality_score.total,
         "S2_caption_effectiveness": caption_effectiveness_score.total_0_50,
         "S3_content_clarity": content_clarity_score.total,
-        "S4_audience_relevance": audience_relevance_score.total_0_50,
+        "S4_audience_relevance": _available_audience_relevance_total(audience_relevance_score),
         "S6_brand_safety": brand_safety_score.total_0_50,
     }
     available_scores = {k: v for k, v in score_components.items() if isinstance(v, (int, float))}
@@ -375,6 +423,8 @@ def build_ai_input_context(
     niche_benchmark_context = getattr(post, "niche_benchmark_context", None) or {}
     creator_dominant_category = getattr(post, "creator_dominant_category", None)
     post_category = getattr(post, "post_category", None)
+
+    creative_score, creative_band = _creative_score_payload(weighted_post_score)
 
     return {
         "account_id": post.account_id,
@@ -389,15 +439,23 @@ def build_ai_input_context(
         "creator_dominant_category": creator_dominant_category,
         "post_category": post_category,
         "niche_benchmark_context": niche_benchmark_context,
-        "core_metrics": post.core_metrics.model_dump(),
-        "derived_metrics": post.derived_metrics.model_dump(),
-        "benchmark_metrics": post.benchmark_metrics.model_dump(),
-        "ai_content_score": ai_content_score,
-        "ai_content_band": ai_content_band,
+        "preliminary_creative_score": creative_score,
+        "preliminary_creative_band": creative_band,
+        "preliminary_score_source": "ai_creative_weighted_score_without_s5",
+        "performance_metrics_used": False,
         "s1_visual_quality": visual_quality_score.model_dump(),
         "s2_caption_effectiveness": caption_effectiveness_score.model_dump(),
         "s3_content_clarity": content_clarity_score.model_dump(),
-        "s4_audience_relevance": audience_relevance_score.model_dump(),
+        "s4_audience_relevance": (
+            audience_relevance_score.model_dump()
+            if audience_relevance_score.status == "available"
+            else {
+                "status": "unavailable",
+                "unavailable_reason": audience_relevance_score.unavailable_reason,
+                "post_category": audience_relevance_score.post_category,
+                "creator_dominant_category": audience_relevance_score.creator_dominant_category,
+            }
+        ),
         "s6_brand_safety": brand_safety_score.model_dump(),
         "weighted_post_score": weighted_post_score.model_dump(),
         "score_gap_analysis": {
@@ -712,6 +770,77 @@ async def run_vision_analysis(
     if not isinstance(media_url, str) or not media_url.strip():
         return VisionAnalysis(provider="gemini", status="no_media", signals=[]).model_dump(mode="python")
 
+    carousel_urls = post.carousel_media_urls if isinstance(post.carousel_media_urls, list) else []
+    if media_type_upper == "CAROUSEL" and carousel_urls:
+        semaphore = asyncio.Semaphore(CAROUSEL_VISION_CONCURRENCY)
+
+        async def _analyse_slide(index: int, url: str) -> dict[str, Any]:
+            async with semaphore:
+                slide_post = post.model_copy(update={"media_url": url, "media_type": "IMAGE", "carousel_media_urls": []})
+                return await run_vision_analysis(slide_post)
+
+        slide_results = await asyncio.gather(
+            *[_analyse_slide(index, url) for index, url in enumerate(carousel_urls, start=1)],
+            return_exceptions=True,
+        )
+        slide_signals: list[dict[str, Any]] = []
+        providers: list[str] = []
+        errors: list[str] = []
+        for index, result in enumerate(slide_results, start=1):
+            if isinstance(result, Exception):
+                errors.append(f"slide {index}: {result}")
+                continue
+            if not isinstance(result, dict):
+                errors.append(f"slide {index}: invalid vision response")
+                continue
+            provider = result.get("provider")
+            if isinstance(provider, str):
+                providers.append(provider)
+            signals = result.get("signals")
+            if isinstance(signals, list) and signals and isinstance(signals[0], dict):
+                signal = dict(signals[0])
+                signal["slide_index"] = index
+                signal["is_carousel_aggregate"] = False
+                slide_signals.append(signal)
+            else:
+                errors.append(f"slide {index}: {result.get('error_reason') or result.get('status') or 'no signal'}")
+
+        if not slide_signals:
+            failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+            failure_payload["error_reason"] = "; ".join(errors)[:300]
+            return failure_payload
+
+        numeric_keys = ("hook_strength_score", "virality_potential", "subject_clarity", "aesthetic_quality")
+        aggregate: dict[str, Any] = {
+            "slide_index": 0,
+            "is_carousel_aggregate": True,
+            "objects": list(dict.fromkeys(obj for signal in slide_signals for obj in signal.get("objects", []) if isinstance(obj, str)))[:20],
+            "primary_objects": list(dict.fromkeys(obj for signal in slide_signals for obj in signal.get("primary_objects", []) if isinstance(obj, str)))[:20],
+            "scene_description": f"Carousel summary across {len(slide_signals)} of {len(carousel_urls)} submitted slides.",
+            "technical_flaws": list(dict.fromkeys(item for signal in slide_signals for item in signal.get("technical_flaws", []) if isinstance(item, str)))[:12],
+            "aesthetic_fixes": list(dict.fromkeys(item for signal in slide_signals for item in signal.get("aesthetic_fixes", []) if isinstance(item, str)))[:12],
+            "cringe_signals": list(dict.fromkeys(item for signal in slide_signals for item in signal.get("cringe_signals", []) if isinstance(item, str)))[:12],
+            "cringe_fixes": list(dict.fromkeys(item for signal in slide_signals for item in signal.get("cringe_fixes", []) if isinstance(item, str)))[:12],
+        }
+        for key in numeric_keys:
+            values = [float(signal[key]) for signal in slide_signals if isinstance(signal.get(key), (int, float))]
+            if values:
+                aggregate[key] = round(sum(values) / len(values), 2)
+        visual_scores = [signal.get("visual_quality_score") for signal in slide_signals if isinstance(signal.get("visual_quality_score"), dict)]
+        if visual_scores:
+            score_keys = set().union(*(score.keys() for score in visual_scores))
+            aggregate["visual_quality_score"] = {
+                key: round(sum(float(score[key]) for score in visual_scores if isinstance(score.get(key), (int, float))) / sum(1 for score in visual_scores if isinstance(score.get(key), (int, float))), 2)
+                for key in score_keys
+                if any(isinstance(score.get(key), (int, float)) for score in visual_scores)
+            }
+        cringe_values = [float(signal["cringe_score"]) for signal in slide_signals if isinstance(signal.get("cringe_score"), (int, float))]
+        if cringe_values:
+            aggregate["cringe_score"] = round(sum(cringe_values) / len(cringe_values))
+        aggregate["is_cringe"] = any(signal.get("is_cringe") is True for signal in slide_signals)
+        aggregate["adult_content_detected"] = any(signal.get("adult_content_detected") is True for signal in slide_signals)
+        return VisionAnalysis(provider=providers[0] if providers else "gemini", status="ok", signals=[aggregate, *slide_signals]).model_dump(mode="python")
+
     parsed_url = urlparse(media_url)
     hostname = parsed_url.hostname
     if (
@@ -732,18 +861,37 @@ async def run_vision_analysis(
             failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
             failure_payload["error_reason"] = "GEMINI_API_KEY missing"
             return failure_payload
-        reel_result = await asyncio.to_thread(run_reel_gemini_analysis, media_url)
+        try:
+            reel_result = await asyncio.wait_for(
+                asyncio.to_thread(run_reel_gemini_analysis, media_url),
+                timeout=REEL_VISION_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
+            failure_payload["error_reason"] = f"Reel vision timed out after {REEL_VISION_TIMEOUT_SECONDS:.0f}s"
+            failure_payload["raw_reel_signals"] = {}
+            return failure_payload
         reel_status = str(reel_result.get("status") or "error")
         reel_signals = reel_result.get("signals")
         if reel_status == "ok" and isinstance(reel_signals, dict):
             normalized_reel_signals = dict(reel_signals)
             normalized_reel_signals["hook_strength_score"] = reel_signals.get("hook_frame_score")
-            normalized_reel_signals["virality_potential"] = reel_signals.get("retention_signal", 5.0)
+            # retention_signal is 0..1; virality_potential expects a 0..10 scale.
+            raw_retention = reel_signals.get("retention_signal")
+            normalized_reel_signals["virality_potential"] = (
+                float(raw_retention) * 10.0 if isinstance(raw_retention, (int, float)) else 5.0
+            )
             signal = _build_vision_signal(normalized_reel_signals, media_url=media_url)
-            return VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
+            payload = VisionAnalysis(provider="gemini", status="ok", signals=[signal]).model_dump(mode="python")
+            # Preserve the raw reel-specific fields (pacing_label, hook_frame_score,
+            # retention_signal, ...) that _build_vision_signal's generic image shape
+            # discards, so the dedicated reel scoring engine can use them.
+            payload["raw_reel_signals"] = reel_signals
+            return payload
         failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
         error = reel_result.get("error")
         failure_payload["error_reason"] = str(error or f"Reel Gemini status={reel_status}")[:300]
+        failure_payload["raw_reel_signals"] = reel_signals if isinstance(reel_signals, dict) else {}
         return failure_payload
 
     try:
@@ -839,28 +987,52 @@ def _infer_mime_type(url: str) -> str:
 
 
 def _download_vision_media(media_url: str) -> tuple[bytes, str]:
-    """Download public image media for Gemini inline vision with a strict size cap."""
+    """Download public image media with validated, bounded redirects."""
+    current_url = media_url
+    remaining_redirects = VISION_MEDIA_MAX_REDIRECTS
     with httpx.Client(
         timeout=VISION_MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
-        # Instagram/Facebook CDN URLs routinely redirect to their final image
-        # host.  Rejecting redirects meant otherwise-public post media never
-        # reached Gemini and was reported as a generic vision fallback.
-        follow_redirects=True,
+        follow_redirects=False,
         trust_env=False,
+        limits=httpx.Limits(max_keepalive_connections=0),
     ) as client:
-        with client.stream("GET", media_url) as response:
-            response.raise_for_status()
-            mime_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-            if mime_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
-                raise ValueError(f"Unsupported vision media type: {mime_type or 'unknown'}")
+        while True:
+            # Preserve this service's established validation error contract;
+            # the shared resolver below additionally produces the pinned IP.
+            _validate_public_vision_url(current_url)
+            target = resolve_public_http_url(current_url, field_name="Vision media URL")
+            current_url = target.public_url
+            with client.stream(
+                "GET",
+                target.connect_url,
+                headers=target.request_headers,
+                extensions=target.request_extensions,
+            ) as response:
+                if response.status_code in _VISION_MEDIA_REDIRECT_STATUSES:
+                    if remaining_redirects <= 0:
+                        raise ValueError(
+                            f"Vision media exceeded {VISION_MEDIA_MAX_REDIRECTS} redirects"
+                        )
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Vision media redirect is missing a Location header")
+                    current_url = urljoin(current_url, location)
+                    remaining_redirects -= 1
+                    continue
 
-            chunks: list[bytes] = []
-            total_bytes = 0
-            for chunk in response.iter_bytes(65536):
-                chunks.append(chunk)
-                total_bytes += len(chunk)
-                if total_bytes > MAX_VISION_MEDIA_BYTES:
-                    raise ValueError("Vision media exceeds the 15 MB limit")
+                response.raise_for_status()
+                mime_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if mime_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+                    raise ValueError(f"Unsupported vision media type: {mime_type or 'unknown'}")
+
+                chunks: list[bytes] = []
+                total_bytes = 0
+                for chunk in response.iter_bytes(65536):
+                    chunks.append(chunk)
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_VISION_MEDIA_BYTES:
+                        raise ValueError("Vision media exceeds the 15 MB limit")
+                break
 
     media_bytes = b"".join(chunks)
     if not media_bytes:
@@ -879,7 +1051,13 @@ def _build_gemini_vision_adapter():
                 self._client = genai.Client(api_key=api_key)
             def generate_content(self, *, model_name: str, instruction: str, media_bytes: bytes, mime_type: str):
                 image_part = genai_types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
-                return self._client.models.generate_content(model=model_name, contents=[instruction, image_part])
+                return self._client.models.generate_content(
+                    model=model_name,
+                    contents=[instruction, image_part],
+                    # Deterministic scoring: default temperature (1.0) causes
+                    # large run-to-run score swings for identical images.
+                    config=genai_types.GenerateContentConfig(temperature=0),
+                )
             def generate_text(self, *, model_name: str, prompt: str):
                 return self._client.models.generate_content(model=model_name, contents=prompt)
         return _GoogleGenaiVisionAdapter
@@ -889,7 +1067,11 @@ def _build_gemini_vision_adapter():
             def __init__(self, api_key: str) -> None:
                 legacy_genai.configure(api_key=api_key)
             def generate_content(self, *, model_name: str, instruction: str, media_bytes: bytes, mime_type: str):
-                return legacy_genai.GenerativeModel(model_name).generate_content([instruction, {"mime_type": mime_type, "data": media_bytes}])
+                generation_config = legacy_genai.types.GenerationConfig(temperature=0)
+                return legacy_genai.GenerativeModel(model_name).generate_content(
+                    [instruction, {"mime_type": mime_type, "data": media_bytes}],
+                    generation_config=generation_config,
+                )
             def generate_text(self, *, model_name: str, prompt: str):
                 return legacy_genai.GenerativeModel(model_name).generate_content(prompt)
         return _LegacyGenaiVisionAdapter
@@ -900,11 +1082,15 @@ class _OpenAIVisionAdapter:
         from backend.app.ai.llm_client import LLMClient
         self._client = LLMClient().client
     def generate_content(self, *, model_name: str, instruction: str, media_url: str, mime_type: str) -> _VisionTextResponse:
-        response = self._client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image_url", "image_url": {"url": media_url}}]}],
-            response_format={"type": "json_object"},
-        )
+        request_kwargs: dict[str, Any] = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image_url", "image_url": {"url": media_url}}]}],
+            "response_format": {"type": "json_object"},
+        }
+        # Reasoning models (o1/gpt-5.6 family) reject an explicit temperature.
+        if "5.6" not in model_name and "o1" not in model_name:
+            request_kwargs["temperature"] = 0
+        response = self._client.chat.completions.create(**request_kwargs)
         return _VisionTextResponse(text=(response.choices[0].message.content or "").strip())
 
 
@@ -957,18 +1143,14 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
     """Build a richer prompt requesting structured TOON output with v3 analytics fields."""
     media_type = str(context.get("media_type") or "IMAGE").upper()
     content_type_note = (
-        "This is a REEL (video). Consider algorithmic signals like watch-time hooks, audio trends, "
-        "loop-ability, and first-3-second retention when evaluating engagement potential and giving recommendations."
+        "This is a REEL (video). Evaluate creative proxies such as the opening hook, pacing, "
+        "audio alignment, visual progression, and loop-ability. Do not claim observed watch time or retention."
         if media_type == "REEL" else
         "This is an IMAGE post. Consider carousel potential, caption depth, save-worthiness, "
         "color pop, and scroll-stop visual power when evaluating engagement potential and giving recommendations."
     )
     weakest = context.get("score_gap_analysis", {}).get("weakest_dimension") or "unknown"
     strongest = context.get("score_gap_analysis", {}).get("strongest_dimension") or "unknown"
-    likes = (context.get("core_metrics") or {}).get("likes") or 0
-    comments = (context.get("core_metrics") or {}).get("comments") or 0
-    er = (context.get("derived_metrics") or {}).get("engagement_rate")
-    er_note = f" The post has {likes} likes, {comments} comments" + (f", engagement rate {er:.4f}" if isinstance(er, (int, float)) else "") + "."
     return {
         "system": (
             "You are a world-class Instagram growth strategist and content analyst. "
@@ -976,24 +1158,41 @@ def _build_prompt(context: dict[str, Any], vision: dict[str, Any]) -> dict[str, 
             "Your output must feel like premium, personalized coaching — specific, grounded in the data, "
             "and immediately actionable. Never use vague advice like 'improve content quality'. "
             "Return ONLY one valid JSON object and no markdown. "
-            "Return exactly these keys: "
+            "Return exactly these top-level keys: "
             "summary, drivers, recommendations, engagement_potential_score, "
             "caption_improvement, posting_intelligence, hashtag_quality_note, "
             "hashtag_analysis, viral_opportunity, creator_next_step. "
-            f"Summary: FIRST sentence must cite actual numbers.{er_note} "
+            "The exact field names below are a strict machine-readable contract — "
+            "any other field names for drivers/recommendations/caption_improvement "
+            "will cause your entire response to be discarded and replaced with a generic fallback, "
+            "so match them exactly, do not rename, add, or omit fields. "
+            "Summary: FIRST sentence must cite at least two available S1-S6 creative-signal values. "
+            "Do not state an overall score; the backend calculates the final score after your S5 output. "
+            "Do not mention or infer likes, comments, views, reach, saves, shares, watch time, retention rate, "
+            "engagement rate, follower growth, audience demographics, or predicted post performance; none of those "
+            "are inputs to this AI-only creative report. "
             f"Identify the highest-leverage opportunity ({weakest}) and explain how strengthening it can lift the result. "
             f"Mention strongest dimension ({strongest}). 3-5 sentences total. "
-            "Driver requirements: max 5 items; reference specific metric value or vision signal. "
-            "Recommendation requirements: 5 to 7 items; category is REQUIRED (CAPTION, VISUAL, TIMING, HASHTAGS, ENGAGEMENT); "
-            "avoid generic phrases. "
-            "caption_improvement: 1-sentence rewritten hook and 1-sentence improved CTA. "
+            "drivers: a list of up to 5 objects, each with EXACTLY these keys: "
+            '"id" (short slug string), "label" (short title string), '
+            '"type" (must be exactly "POSITIVE" or "LIMITING"), '
+            '"explanation" (1 sentence referencing a specific metric value or vision signal). '
+            "recommendations: a list of 5 to 7 objects, each with EXACTLY these keys: "
+            '"id" (short slug string), "text" (specific, non-generic action), '
+            '"impact_level" (must be exactly "HIGH", "MEDIUM", or "LOW"), '
+            '"category" (must be exactly one of "CAPTION", "VISUAL", "TIMING", "HASHTAGS", "ENGAGEMENT"). '
+            "engagement_potential_score: an object (not a single number) with EXACTLY these keys, "
+            "each a number from 0 to 10 based on this post's specific content: "
+            '"emotional_resonance", "shareability", "save_worthiness", "comment_potential", "novelty_or_value", '
+            'plus "total" (the sum of those 5 values, 0 to 50) and "notes" (a list of up to 3 short strings). '
+            "This score is an AI-estimated creative-potential signal, not observed or predicted performance. "
+            "caption_improvement: an object with EXACTLY these keys: "
+            '"hook_rewrite" (1-sentence rewritten hook string) and "cta_rewrite" (1-sentence improved CTA string). '
             "posting_intelligence: 1-sentence comment on optimal timing. "
             "hashtag_analysis: quality_band (Excellent|Good|Building Momentum|Opportunity to Refine), suggested_count (int), strategy_tip (str). "
             "viral_opportunity: 2 sentences on viral potential and amplification mechanics. "
             "creator_next_step: single sentence on highest-priority action based on "
-            f"highest-leverage opportunity ({weakest}). Use constructive, specific language; never say 'needs work', 'weak', 'poor', or 'underperforming'. "
-            "Allowed driver.type: POSITIVE or LIMITING. "
-            "Allowed recommendation.impact_level: HIGH, MEDIUM, LOW."
+            f"highest-leverage opportunity ({weakest}). Use constructive, specific language; never say 'needs work', 'weak', 'poor', or 'underperforming'."
         ),
         "user": json.dumps(
             {
@@ -1446,13 +1645,12 @@ def _apply_s5_consistency_cap(
     content_clarity_score: ContentClarityScore,
     percentile_rank: float | None = None,
 ) -> EngagementPotentialScore:
-    """Apply consistency caps to S5 score.
+    """Cap S5 only when creative evidence (S1 and S3) contradicts it.
 
-    Rules (applied in order, most restrictive wins):
-    1. Low S1 + S3 cap: if both visual and clarity are weak, cap S5 at 30.
-    2. Benchmark percentile cap: if the post is in the bottom 25th percentile, cap S5 at 20.
-    3. Benchmark percentile floor: if the post is in the top 25th percentile, apply a minimum floor of 35.
+    ``percentile_rank`` is retained temporarily for call compatibility but is
+    deliberately ignored: observed performance cannot affect the AI-only score.
     """
+    del percentile_rank
     current_total = engagement_score.total
     notes = list(engagement_score.notes)
     updated_total = current_total
@@ -1461,16 +1659,6 @@ def _apply_s5_consistency_cap(
     if visual_quality_score.total < 15.0 and content_clarity_score.total < 15.0 and current_total > 30.0:
         updated_total = min(updated_total, 30.0)
         notes.append("consistency cap applied: low S1 and S3 limited S5 total")
-
-    # Rule 2: Low percentile cap (real ER is poor → S5 cannot be inflated)
-    if isinstance(percentile_rank, (int, float)):
-        if percentile_rank <= 25.0 and updated_total > 20.0:
-            updated_total = min(updated_total, 20.0)
-            notes.append(f"benchmark cap applied: percentile_rank={percentile_rank:.1f} → S5 capped at 20")
-        # Rule 3: High percentile floor (real ER is strong → S5 should reflect it)
-        elif percentile_rank >= 75.0 and updated_total < 35.0:
-            updated_total = max(updated_total, 35.0)
-            notes.append(f"benchmark floor applied: percentile_rank={percentile_rank:.1f} → S5 floored at 35")
 
     if updated_total != current_total:
         return engagement_score.model_copy(update={"total": round(updated_total, 2), "notes": notes})
@@ -1494,7 +1682,7 @@ def _compute_score_analysis(
         "S1_visual_quality": visual_quality_score.total,
         "S2_caption_effectiveness": caption_effectiveness_score.total_0_50,
         "S3_content_clarity": content_clarity_score.total,
-        "S4_audience_relevance": audience_relevance_score.total_0_50,
+        "S4_audience_relevance": _available_audience_relevance_total(audience_relevance_score),
         "S6_brand_safety": brand_safety_score.total_0_50,
     }
     available = {k: float(v) for k, v in scores.items() if isinstance(v, (int, float))}
@@ -1570,9 +1758,11 @@ def _compute_predicted_er_blended(
 
 
 
-def _fallback_summary(score: int, band: str) -> str:
+def _fallback_summary(score: float | None, band: str) -> str:
     """Return deterministic fallback summary when LLM output is unavailable."""
-    return f"Post scored {score}/100 ({band}) based on deterministic content signals."
+    if score is None:
+        return "AI creative analysis is unavailable because the creative signals could not be scored."
+    return f"AI creative score: {score:.1f}/100 ({band}), based only on the post's creative signals."
 
 
 def _fallback_recommendations(
@@ -1763,7 +1953,6 @@ async def analyze_single_post_ai(
     predicted_engagement_rate = post.predicted_engagement_rate
     predicted_engagement_rate_notes = list(post.predicted_engagement_rate_notes)
 
-    score, band = _score_payload(post)
     post_id = post.media_id if isinstance(post.media_id, str) else None
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -1801,6 +1990,7 @@ async def analyze_single_post_ai(
         )
     vision_status: Literal["ok", "error", "disabled", "no_media"] = "disabled" if not vision_enabled else "ok"
     fallback_used = False
+    fallback_reasons: list[str] = []
     logger.debug(
         "[AIAnalysis] Vision config media_id=%s vision_enabled=%s published_at=%s",
         post.media_id,
@@ -1817,6 +2007,7 @@ async def analyze_single_post_ai(
         post_age_seconds = (now_utc - published_at).total_seconds()
         if post_age_seconds < MIN_REGEN_SECONDS:
             fallback_used = True
+            fallback_reasons.append("post_too_new")
             logger.info(
                 "[AIAnalysis] Skipping AI analysis for very recent post media_id=%s age_seconds=%.2f",
                 post.media_id,
@@ -1826,8 +2017,13 @@ async def analyze_single_post_ai(
                 "summary": "AI analysis unavailable. Post is still accumulating data.",
                 "drivers": [],
                 "recommendations": [],
-                "ai_content_score": score,
-                "ai_content_band": band,
+                "ai_content_score": None,
+                "ai_content_band": "UNAVAILABLE",
+                "creative_score": None,
+                "creative_band": "UNAVAILABLE",
+                "score_source": "ai_creative_weighted_score",
+                "performance_score": None,
+                "performance_score_status": "unavailable_not_part_of_ai_creative_analysis",
                 "caption_effectiveness_score": caption_effectiveness_score.model_dump(),
                 "visual_quality_score": visual_quality_score.model_dump(),
                 "content_clarity_score": content_clarity_score.model_dump(),
@@ -1840,12 +2036,14 @@ async def analyze_single_post_ai(
                     status=str(vision_status),
                     signals=[],
                 ).model_dump(mode="python"),
-                "tier_avg_engagement_rate": tier_avg_engagement_rate,
-                "predicted_engagement_rate": predicted_engagement_rate,
-                "predicted_engagement_rate_notes": predicted_engagement_rate_notes,
+                "tier_avg_engagement_rate": None,
+                "predicted_engagement_rate": None,
+                "predicted_engagement_rate_notes": ["Not part of the AI-only creative analysis contract."],
                 "warnings": warnings,
                 "vision_status": vision_status,
                 "fallback_used": fallback_used,
+                "fallback_reason": ",".join(fallback_reasons) or None,
+                "predicted_er_confidence": "unavailable",
             }
             return result
 
@@ -1874,6 +2072,28 @@ async def analyze_single_post_ai(
         elif vision.get("status") == "no_media":
             vision_status = "no_media"
     logger.debug("[AIAnalysis] Vision finished media_id=%s status=%s", post.media_id, vision_status)
+
+    if str(post.media_type or "").upper() == "REEL":
+        raw_reel_signals = vision.get("raw_reel_signals")
+        raw_reel_signals = raw_reel_signals if isinstance(raw_reel_signals, dict) else {}
+        audio_score = compute_reel_audio_score(
+            audio_name=post.audio_name,
+            caption_text=post.caption_text or "",
+            reel_vision_signals=raw_reel_signals,
+        )
+        post.reel_analysis = compute_reel_analysis(
+            reel_vision_signals=raw_reel_signals,
+            audio_score=audio_score,
+            watch_time_pct=None,
+            reel_vision_status=str(vision.get("status") or vision_status),
+        )
+        logger.debug(
+            "[AIAnalysis] Reel analysis media_id=%s total=%s reel_vision_status=%s",
+            post.media_id,
+            post.reel_analysis.total,
+            post.reel_analysis.reel_vision_status,
+        )
+    vision.pop("raw_reel_signals", None)
 
     visual_quality_score = compute_visual_quality_score(vision)
     if external_ai_calls_enabled:
@@ -1910,19 +2130,20 @@ async def analyze_single_post_ai(
         s1=visual_quality_score.total,
         s2=caption_effectiveness_score.total_0_50,
         s3=content_clarity_score.total,
-        s4=audience_relevance_score.total_0_50,
+        s4=_available_audience_relevance_total(audience_relevance_score),
         s5=None,
         s6=brand_safety_score.total_0_50,
         s7=None,
     )
     post.weighted_post_score = weighted_post_score
+    preliminary_creative_score, preliminary_creative_band = _creative_score_payload(weighted_post_score)
     logger.debug(
         "[AIAnalysis] Deterministic scores media_id=%s s1=%s s2=%s s3=%s s4=%s s6=%s weighted=%s",
         post.media_id,
         visual_quality_score.total,
         caption_effectiveness_score.total_0_50,
         content_clarity_score.total,
-        audience_relevance_score.total_0_50,
+        _available_audience_relevance_total(audience_relevance_score),
         brand_safety_score.total_0_50,
         weighted_post_score.score,
     )
@@ -1936,8 +2157,6 @@ async def analyze_single_post_ai(
 
     context = build_ai_input_context(
         post,
-        score,
-        band,
         visual_quality_score,
         content_clarity_score,
         caption_effectiveness_score,
@@ -1945,6 +2164,8 @@ async def analyze_single_post_ai(
         brand_safety_score,
         weighted_post_score,
     )
+    if post.reel_analysis is not None:
+        context["reel_analysis"] = post.reel_analysis.model_dump()
     prompt = _build_prompt(context, vision)
 
     external_ai_enabled = bool((gemini_enabled or openai_enabled) and external_ai_calls_enabled)
@@ -1963,6 +2184,7 @@ async def analyze_single_post_ai(
             creator_next_step,
         ) = await _parse_llm_response_with_repair(llm_text, llm_client)
     else:
+        llm_text = None
         summary = None
         drivers = []
         recommendations = []
@@ -1981,8 +2203,9 @@ async def analyze_single_post_ai(
         len(recommendations or []),
     )
 
-    if summary is None:
-        summary = _fallback_summary(score, band)
+    summary_was_fallback = summary is None
+    if summary_was_fallback:
+        summary = _fallback_summary(preliminary_creative_score, preliminary_creative_band)
         drivers = deterministic_drivers
         recommendations = _fallback_recommendations(
             visual_quality_score,
@@ -1997,6 +2220,16 @@ async def analyze_single_post_ai(
         viral_opportunity = None
         creator_next_step = None
         fallback_used = True
+        if not external_ai_enabled:
+            fallback_reasons.append("coaching_disabled")
+        elif llm_text is None:
+            # Covers timeout, provider/network errors, and empty-content
+            # responses (e.g. a reasoning model exhausting its token budget
+            # on hidden reasoning) -- _call_llm_async collapses all of these
+            # to None since LLMClient raises on each.
+            fallback_reasons.append("coaching_llm_unavailable")
+        else:
+            fallback_reasons.append("coaching_llm_malformed")
         logger.info("[AIAnalysis] Using fallback summary media_id=%s", post.media_id)
     else:
         drivers = deterministic_drivers + drivers
@@ -2004,23 +2237,17 @@ async def analyze_single_post_ai(
         if engagement_potential_score is None:
             engagement_potential_score = _fallback_engagement_potential_score()
             fallback_used = True
+            fallback_reasons.append("s5_sanitization_failed")
             logger.info("[AIAnalysis] Using fallback S5 score media_id=%s", post.media_id)
 
     if vision_status in {"disabled", "error"}:
         fallback_used = True
-
-    # Extract percentile rank for deterministic S5 grounding
-    percentile_rank: float | None = None
-    if post.benchmark_metrics is not None:
-        raw_percentile = getattr(post.benchmark_metrics, "percentile_engagement_rank", None)
-        if isinstance(raw_percentile, (int, float)):
-            percentile_rank = float(raw_percentile)
+        fallback_reasons.append("vision_disabled" if vision_status == "disabled" else "vision_error")
 
     engagement_potential_score = _apply_s5_consistency_cap(
         engagement_potential_score,
         visual_quality_score,
         content_clarity_score,
-        percentile_rank=percentile_rank,
     )
     post.engagement_potential_score = engagement_potential_score
     weighted_post_score = compute_weighted_post_score(
@@ -2028,12 +2255,15 @@ async def analyze_single_post_ai(
         s1=visual_quality_score.total,
         s2=caption_effectiveness_score.total_0_50,
         s3=content_clarity_score.total,
-        s4=audience_relevance_score.total_0_50,
+        s4=_available_audience_relevance_total(audience_relevance_score),
         s5=engagement_potential_score.total,
         s6=brand_safety_score.total_0_50,
         s7=None,
     )
     post.weighted_post_score = weighted_post_score
+    creative_score, creative_band = _creative_score_payload(weighted_post_score)
+    if summary_was_fallback:
+        summary = _fallback_summary(creative_score, creative_band)
     logger.debug(
         "[AIAnalysis] Final scores media_id=%s s5=%s weighted=%s fallback_used=%s",
         post.media_id,
@@ -2100,8 +2330,13 @@ async def analyze_single_post_ai(
         "summary": summary,
         "drivers": drivers,
         "recommendations": recommendations,
-        "ai_content_score": score,
-        "ai_content_band": band,
+        "ai_content_score": creative_score,
+        "ai_content_band": creative_band,
+        "creative_score": creative_score,
+        "creative_band": creative_band,
+        "score_source": "ai_creative_weighted_score",
+        "performance_score": None,
+        "performance_score_status": "unavailable_not_part_of_ai_creative_analysis",
         "caption_effectiveness_score": caption_effectiveness_score.model_dump(),
         "visual_quality_score": visual_quality_score.model_dump(),
         "content_clarity_score": content_clarity_score.model_dump(),
@@ -2110,17 +2345,18 @@ async def analyze_single_post_ai(
         "brand_safety_score": brand_safety_score.model_dump(),
         "weighted_post_score": weighted_post_score.model_dump(),
         "vision_analysis": vision,
-        "tier_avg_engagement_rate": tier_avg_engagement_rate,
-        "predicted_engagement_rate": predicted_engagement_rate,
-        "predicted_engagement_rate_notes": predicted_engagement_rate_notes,
+        "tier_avg_engagement_rate": None,
+        "predicted_engagement_rate": None,
+        "predicted_engagement_rate_notes": ["Not part of the AI-only creative analysis contract."],
         "warnings": warnings,
         "vision_status": vision_status,
         "fallback_used": fallback_used,
+        "fallback_reason": ",".join(dict.fromkeys(fallback_reasons)) or None,
         # v2 enhanced analytics fields
         "caption_improvement": caption_improvement,
         "posting_intelligence": posting_intelligence,
         "hashtag_quality_note": hashtag_quality_note,
-        "predicted_er_confidence": predicted_er_confidence,
+        "predicted_er_confidence": "unavailable",
         # v3 creator-facing enhancement fields
         "hashtag_analysis": hashtag_analysis,
         "viral_opportunity": viral_opportunity,
@@ -2134,7 +2370,7 @@ async def analyze_single_post_ai(
     # Attach score_analysis as a top-level key on the result dict
     result["score_analysis"] = score_analysis  # type: ignore[typeddict-unknown-key]
 
-    if key is not None:
+    if key is not None and _should_cache_analysis_result(result):
         with _ANALYSIS_CACHE_LOCK:
             _ANALYSIS_CACHE[key] = _CacheEntry(
                 result=result,
@@ -2142,6 +2378,8 @@ async def analyze_single_post_ai(
                 last_regen_attempt_at=now_ts,
             )
             _prune_analysis_cache(now_ts)
+    elif key is not None:
+        logger.info("[AIAnalysis] Skipping cache for failed vision media_id=%s", post.media_id)
     logger.info(
         "[AIAnalysis] Completed media_id=%s vision_status=%s warnings=%d fallback_used=%s predicted_er_confidence=%s",
         post.media_id,

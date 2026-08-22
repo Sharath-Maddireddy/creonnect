@@ -226,6 +226,11 @@ def test_integration_single_post_includes_weighted_score_and_cache(monkeypatch) 
     monkeypatch.setattr(ai_analysis_service, "_call_llm_async", fake_call_llm_async)
 
     target_post = _build_post("m_weighted_target", media_type="IMAGE")
+    # Reproduce the URL-test case: engagement counts may be supplied while
+    # reach/impressions are absent. The creative score must still be canonical.
+    target_post.core_metrics.reach = None
+    target_post.core_metrics.impressions = None
+    target_post.derived_metrics = DerivedMetrics()
     history = [
         _build_post("m_weighted_h1"),
         _build_post("m_weighted_h2"),
@@ -238,13 +243,26 @@ def test_integration_single_post_includes_weighted_score_and_cache(monkeypatch) 
     assert response["ai_analysis"] is not None
     assert "weighted_post_score" in response["ai_analysis"]
     assert response["ai_analysis"]["weighted_post_score"]["score"] == response["post"].weighted_post_score.score
+    assert response["ai_analysis"]["ai_content_score"] == response["post"].weighted_post_score.score
+    assert response["ai_analysis"]["creative_score"] == response["post"].weighted_post_score.score
+    assert response["ai_analysis"]["ai_content_band"] != "NEEDS_WORK"
+    assert response["ai_analysis"]["performance_score"] is None
     assert response["post"].weighted_post_score.score == round(
         response["post"].weighted_post_score.normalized_score_0_50 * 2.0, 2
     )
+    assert response["post"].audience_relevance_score.status == "unavailable"
+    assert response["post"].weighted_post_score.components["S4"] is None
+    assert "S4" not in response["post"].weighted_post_score.weights_used
 
     assert captured_prompts
     payload = json.loads(captured_prompts[0]["user"])
     assert "weighted_post_score" in payload["context"]
+    assert payload["context"]["performance_metrics_used"] is False
+    assert "core_metrics" not in payload["context"]
+    assert "derived_metrics" not in payload["context"]
+    assert "benchmark_metrics" not in payload["context"]
+    assert payload["context"]["s4_audience_relevance"]["status"] == "unavailable"
+    assert "total_0_50" not in payload["context"]["s4_audience_relevance"]
 
     cache_key = ai_analysis_service._cache_key(target_post)
     assert cache_key in ai_analysis_service._ANALYSIS_CACHE

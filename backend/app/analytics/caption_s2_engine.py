@@ -15,14 +15,17 @@ from backend.app.utils.logger import logger
 _HOOK_KEYWORD_RE = re.compile(r"\b(you|your|this|secret|how|why|what|stop|never|always|mistake)\b", re.IGNORECASE)
 _HASHTAG_RE = re.compile(r"#\S+")
 _CTA_RE = re.compile(
-    r"\b(comment|share|save|link in bio|dm|follow|click|swipe|watch|subscribe|tag|like|send)\b",
+    r"\b(comment|share|save|link in bio|dm|follow|click|swipe|watch|subscribe|tag|like|send|"
+    r"book|buy|shop|order|download|register|sign up|pre-?order|reserve|grab|get tickets?|"
+    r"find (?:the )?(?:best )?seats?|set (?:a |your )?reminder|join (?:the )?hype|"
+    r"be (?:the )?first to know|tickets? (?:go |are )?live)\b",
     re.IGNORECASE,
 )
 # Weak opening phrases that add no value to a hook (case-insensitive prefix match)
 _WEAK_HOOK_RE = re.compile(
     r"^(happy|check out|my new|excited to|i am excited|so excited|just posted|new post|hi everyone|"
     r"hello everyone|good morning|good evening|hey guys|hey everyone|throwback|tbt|blessed|grateful|"
-    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|once upon a time)",
     re.IGNORECASE,
 )
 
@@ -54,6 +57,16 @@ def _coerce_notes(value: object) -> list[str]:
                     notes.append(text)
         return notes
     return []
+
+
+def _is_low_information_hook(preview: str) -> bool:
+    without_hashtags = _HASHTAG_RE.sub("", preview).strip()
+    tokens = re.findall(r"[a-z0-9]+", without_hashtags.lower())
+    if not tokens:
+        return True
+    if len(tokens) >= 5 and (len(set(tokens)) / len(tokens)) < 0.4:
+        return True
+    return False
 
 
 async def analyze_caption_via_llm(caption_text: str) -> CaptionEffectivenessScore:
@@ -123,22 +136,29 @@ def compute_s2_caption_effectiveness(caption_text: str | None) -> CaptionEffecti
     """
 
     caption = caption_text if isinstance(caption_text, str) else ""
-    first_line = caption.split("\n")[0] if caption else ""
+    first_line = caption.lstrip().splitlines()[0].strip() if caption.strip() else ""
+    # Instagram truncates long captions in-feed. Score the visible opening
+    # preview rather than treating an otherwise valid single-line caption as
+    # an invalid hook merely because the full line exceeds 125 characters.
+    hook_preview = first_line[:125]
     notes: list[str] = []
 
     # Hook scoring
-    first_line_len = len(first_line)
-    if 0 < first_line_len <= 125:
+    if hook_preview:
+        if _is_low_information_hook(hook_preview):
+            hook_score = 30
+            notes.append("Opening preview is dominated by hashtags or repeated low-information wording.")
         # Start at 55; apply weak-phrase penalty before adding bonuses
-        if _WEAK_HOOK_RE.search(first_line.strip()):
+        elif _WEAK_HOOK_RE.search(hook_preview):
             hook_score = 35
             notes.append("Opening line can create more curiosity, value, or tension to invite attention sooner.")
         else:
             hook_score = 60
-        if "?" in first_line or "!" in first_line:
-            hook_score += 15
-        if _HOOK_KEYWORD_RE.search(first_line):
-            hook_score += 15
+        if hook_score > 30:
+            if "?" in hook_preview or "!" in hook_preview:
+                hook_score += 15
+            if _HOOK_KEYWORD_RE.search(hook_preview):
+                hook_score += 15
         hook_score = min(100, hook_score)
     else:
         hook_score = 30

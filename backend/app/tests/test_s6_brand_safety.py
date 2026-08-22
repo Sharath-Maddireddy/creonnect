@@ -66,6 +66,46 @@ def test_missing_inputs_safe() -> None:
     assert score.penalties == []
 
 
+def test_blood_and_drinking_description_require_brand_suitability_review() -> None:
+    score = compute_s6_brand_safety(
+        caption_text="Movie tickets go live August 21.",
+        vision={
+            "signals": [
+                {
+                    "objects": ["man", "date", "blood", "snow"],
+                    "dominant_focus": "man drinking from bottle",
+                    "scene_description": "A man drinks from a bottle while blood stains the snow.",
+                }
+            ]
+        },
+        s1_total_0_50=44.0,
+        extracted_brand_mentions=None,
+        extra_flags=None,
+    )
+
+    assert score.s6_raw_0_100 == 75
+    assert score.total_0_50 == 37.5
+    assert score.flags["drinking_depiction_detected"] is True
+    assert score.flags["violence_gore_detected"] is True
+    assert {penalty.key for penalty in score.penalties} == {
+        "drinking_depiction",
+        "violence_gore_content",
+    }
+
+
+def test_ocr_title_alone_does_not_imply_visible_violence() -> None:
+    score = compute_s6_brand_safety(
+        caption_text="Classic film night.",
+        vision={"signals": [{"objects": ["poster"], "detected_text": "BLOOD DIAMOND"}]},
+        s1_total_0_50=40.0,
+        extracted_brand_mentions=None,
+        extra_flags=None,
+    )
+
+    assert score.flags["violence_gore_detected"] is False
+    assert score.s6_raw_0_100 == 100
+
+
 def test_upstream_controversy_and_misinformation_reduce_safety() -> None:
     score = compute_s6_brand_safety(
         caption_text="Clean caption",

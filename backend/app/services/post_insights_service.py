@@ -36,7 +36,7 @@ def _coerce_single_post_insights(post: SinglePostInsights | CreatorPostAIInput) 
     if isinstance(post, SinglePostInsights):
         return post
 
-    media_type = "REEL" if post.post_type == "REEL" else "IMAGE"
+    media_type = post.post_type if post.post_type in {"IMAGE", "REEL", "CAROUSEL"} else "IMAGE"
     reach = getattr(post, "reach", None)
     impressions = getattr(post, "impressions", None)
     views = getattr(post, "views", None)
@@ -58,8 +58,10 @@ def _coerce_single_post_insights(post: SinglePostInsights | CreatorPostAIInput) 
         account_id=post.creator_id if post.creator_id is not None else None,
         media_id=post.post_id,
         media_url=post.media_url if post.media_url is not None else None,
+        carousel_media_urls=post.media_urls,
         media_type=media_type,
         caption_text=post.caption_text,
+        audio_name=getattr(post, "audio_name", None),
         follower_count=None,
         published_at=post.posted_at,
         core_metrics=core_metrics,
@@ -147,6 +149,7 @@ async def build_single_post_insights(
     if isinstance(post_copy.media_id, str) and post_copy.media_id.strip():
         await asyncio.to_thread(
             write_post_insights_snapshot,
+            target_post_model.account_id or "",
             post_copy.media_id,
             post=post_copy,
             ai_analysis=ai_analysis,

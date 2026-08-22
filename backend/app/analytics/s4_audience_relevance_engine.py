@@ -104,6 +104,8 @@ async def analyze_audience_relevance_via_llm(
             post_category=normalized_post,
             creator_dominant_category=normalized_creator,
             affinity_band=affinity_band,
+            status="available",
+            unavailable_reason=None,
             s4_raw_0_100=s4_raw_0_100,
             total_0_50=total_0_50,
             notes=notes,
@@ -121,7 +123,8 @@ def compute_s4_audience_relevance(
     """Compute S4 from post/creator category affinity.
 
     Exact match = 100, adjacent (same broad group) = 75, unrelated = 15.
-    Missing category input returns neutral 50 with UNKNOWN affinity.
+    Missing category input retains a legacy neutral value but marks the score
+    unavailable so callers can exclude it from scoring and presentation.
     """
 
     normalized_post = _normalize_category(post_category)
@@ -134,6 +137,8 @@ def compute_s4_audience_relevance(
             post_category=normalized_post,
             creator_dominant_category=normalized_creator,
             affinity_band="UNKNOWN",
+            status="unavailable",
+            unavailable_reason="Creator niche context is required to score audience fit.",
             s4_raw_0_100=50,
             total_0_50=25.0,
             notes=notes,
@@ -144,6 +149,8 @@ def compute_s4_audience_relevance(
             post_category=normalized_post,
             creator_dominant_category=normalized_creator,
             affinity_band="EXACT",
+            status="available",
+            unavailable_reason=None,
             s4_raw_0_100=100,
             total_0_50=50.0,
             notes=[],
@@ -157,6 +164,8 @@ def compute_s4_audience_relevance(
             post_category=normalized_post,
             creator_dominant_category=normalized_creator,
             affinity_band="ADJACENT",
+            status="available",
+            unavailable_reason=None,
             s4_raw_0_100=75,
             total_0_50=37.5,
             notes=notes,
@@ -167,6 +176,8 @@ def compute_s4_audience_relevance(
         post_category=normalized_post,
         creator_dominant_category=normalized_creator,
         affinity_band="UNRELATED",
+        status="available",
+        unavailable_reason=None,
         s4_raw_0_100=15,
         total_0_50=7.5,
         notes=notes,

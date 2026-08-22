@@ -342,6 +342,36 @@ def test_s5_consistency_cap_for_low_s1_s3(monkeypatch) -> None:
     assert any("consistency cap applied" in note for note in capped.notes)
 
 
+def test_s5_ignores_observed_performance_percentile() -> None:
+    engagement_score = ai_analysis_service.EngagementPotentialScore(
+        emotional_resonance=6.0,
+        shareability=7.0,
+        save_worthiness=8.0,
+        comment_potential=6.0,
+        novelty_or_value=8.0,
+        total=35.0,
+        notes=[],
+    )
+    visual_quality = VisualQualityScore(total=40.0)
+    content_clarity = ContentClarityScore(total=40.0)
+
+    low_percentile = ai_analysis_service._apply_s5_consistency_cap(
+        engagement_score,
+        visual_quality,
+        content_clarity,
+        percentile_rank=1.0,
+    )
+    high_percentile = ai_analysis_service._apply_s5_consistency_cap(
+        engagement_score,
+        visual_quality,
+        content_clarity,
+        percentile_rank=99.0,
+    )
+
+    assert low_percentile == engagement_score
+    assert high_percentile == engagement_score
+
+
 def test_s5_integration_in_pipeline_prompt_and_cache(monkeypatch) -> None:
     ai_analysis_service._ANALYSIS_CACHE.clear()
     post_snapshot_store._POST_INSIGHTS_CACHE.clear()

@@ -1,4 +1,4 @@
-﻿"""Unit tests for shared utility functions introduced during the refactor.
+"""Unit tests for shared utility functions introduced during the refactor.
 
 Covers:
 - number_utils: safe_float, safe_float_or, now_iso
@@ -192,3 +192,43 @@ class TestClampVq:
 
     def test_incomplete_dict_returns_none(self):
         assert self._fn()({"composition": 5.0}) is None
+
+
+from pathlib import Path
+
+
+def test_root_requirements_txt_is_utf8_text_no_utf16_signatures() -> None:
+    """Regression: root requirements.txt must be reviewable UTF-8 text, NO BOM.
+
+    Past state: UTF-16 LE with FF FE BOM and NUL-bytes-per-ASCII-char caused
+    `git diff` to report "Binary files differ" and CI parsers to choke. This
+    test ONLY checks encoding + line structure; pin style is not asserted
+    (unpinned deps like google-genai and boto3 are valid in root file).
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    path = repo_root / "requirements.txt"
+    raw = path.read_bytes()
+
+    if raw[:2] == b"\xff\xfe":
+        raise AssertionError("requirements.txt still starts with UTF-16 LE BOM")
+    if raw[:2] == b"\xfe\xff":
+        raise AssertionError("requirements.txt starts with UTF-16 BE BOM")
+    if raw[:3] == b"\xef\xbb\xbf":
+        raise AssertionError("requirements.txt must not start with a UTF-8 BOM")
+
+    head = raw[:4096]
+    first_nul = head.find(b"\x00")
+    if first_nul != -1:
+        raise AssertionError(f"requirements.txt has NUL byte at offset {first_nul}")
+
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise AssertionError(f"requirements.txt is not valid strict UTF-8: {exc}") from None
+
+    has_dep = any(
+        ln.strip() and not ln.lstrip().startswith("#")
+        for ln in text.splitlines()
+    )
+    if not has_dep:
+        raise AssertionError("requirements.txt has zero non-blank dependency lines")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from backend.app.ai.cringe_analysis import build_cringe_section_for_brand_safety
+from backend.app.ai.cringe_analysis import CRINGE_DETECTION_THRESHOLD, build_cringe_section_for_brand_safety, is_cringe_detected
 from backend.app.domain.post_models import BrandSafetyPenalty, BrandSafetyScore, VisionSignal
 from backend.app.utils.math_utils import clamp as _clamp
 from backend.app.utils.logger import logger
@@ -35,6 +35,16 @@ _ALCOHOL_TOBACCO_KEYWORDS = {
     "vaping",
     "cigar",
 }
+_VIOLENCE_GORE_RE = re.compile(
+    r"\b(blood|bloody|bloodstain(?:ed|s)?|gore|gory|corpse|dead body|severed|wound(?:ed|s)?|"
+    r"gunshot|shooting|stabbing)\b",
+    re.IGNORECASE,
+)
+_DRINKING_DEPICTION_RE = re.compile(
+    r"\b(drink(?:s|ing)?|sip(?:s|ping)?)\b.{0,32}\b(bottle|glass|flask|can)\b|"
+    r"\b(bottle|glass|flask|can)\b.{0,32}\b(drink(?:s|ing)?|sip(?:s|ping)?)\b",
+    re.IGNORECASE,
+)
 
 
 
@@ -73,6 +83,20 @@ def _extract_objects(vision: VisionSignal | dict[str, Any] | None) -> list[str]:
     if not isinstance(objects, list):
         return []
     return _normalize_objects(objects)
+
+
+def _vision_search_text(vision: VisionSignal | dict[str, Any] | None) -> str:
+    """Collect descriptive vision fields used for conservative safety flags."""
+    signal = _extract_signal(vision)
+    values: list[str] = []
+    # Exclude OCR text so a title such as "Blood Diamond" does not become
+    # evidence of visible blood or violence by itself.
+    for key in ("scene_description", "dominant_focus"):
+        value = signal.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value)
+    values.extend(_extract_objects(vision))
+    return _normalize_text(" ".join(values))
 
 
 def _extract_bool_flag(extra_flags: dict[str, Any], key: str) -> bool:
@@ -163,6 +187,8 @@ def compute_s6_brand_safety(
     - low image quality (S1 < 15/50): -15
     - competitor brand mention: -20 (when explicit flag or competitor list match exists)
     - alcohol/tobacco content in visual objects: -35
+    - ambiguous drinking depiction in visual descriptions: -10
+    - blood/gore or explicit violence imagery: -15
 
     Optional upstream flags:
     - controversial_topic: -15
@@ -172,7 +198,7 @@ def compute_s6_brand_safety(
     notes: list[str] = []
     penalties: list[BrandSafetyPenalty] = []
     flags_payload = extra_flags if isinstance(extra_flags, dict) else {}
-    objects = _extract_objects(vision)
+    vision_search_text = _vision_search_text(vision)
     caption = caption_text if isinstance(caption_text, str) else ""
 
     profanity_detected = bool(_PROFANITY_RE.search(caption))
@@ -181,10 +207,11 @@ def compute_s6_brand_safety(
         low_image_quality = float(s1_total_0_50) < 15.0
     competitor_brand_mention = _has_competitor_mention(extracted_brand_mentions, flags_payload)
     alcohol_tobacco_detected = any(
-        keyword in obj
-        for obj in objects
+        re.search(rf"\b{re.escape(keyword)}\b", vision_search_text)
         for keyword in _ALCOHOL_TOBACCO_KEYWORDS
     )
+    drinking_depiction_detected = bool(_DRINKING_DEPICTION_RE.search(vision_search_text)) and not alcohol_tobacco_detected
+    violence_gore_detected = bool(_VIOLENCE_GORE_RE.search(vision_search_text))
     controversial_topic = _extract_bool_flag(flags_payload, "controversial_topic")
     misinformation_flag = _extract_bool_flag(flags_payload, "misinformation_flag")
 
@@ -234,6 +261,28 @@ def compute_s6_brand_safety(
         )
         notes.append("Alcohol/tobacco visual content detected.")
 
+    if drinking_depiction_detected:
+        raw_score -= 10.0
+        penalties.append(
+            BrandSafetyPenalty(
+                key="drinking_depiction",
+                penalty=10,
+                reason="A drinking-from-container depiction was detected in the visual description.",
+            )
+        )
+        notes.append("A drinking depiction was flagged for brand-suitability review.")
+
+    if violence_gore_detected:
+        raw_score -= 15.0
+        penalties.append(
+            BrandSafetyPenalty(
+                key="violence_gore_content",
+                penalty=15,
+                reason="Blood, gore, or explicit violence imagery was detected in the visual description.",
+            )
+        )
+        notes.append("Violence or blood imagery was flagged for brand-suitability review.")
+
     vision_payload: dict[str, Any]
     if isinstance(vision, VisionSignal):
         vision_payload = vision.model_dump(mode="python")
@@ -272,7 +321,7 @@ def compute_s6_brand_safety(
             )
             notes.append("High cringe signal reduced brand safety.")
             logger.info("[Cringe] Applied S6 penalty key=high_cringe score=%.1f", normalized_cringe_score)
-        elif normalized_cringe_score >= 45:
+        elif normalized_cringe_score >= CRINGE_DETECTION_THRESHOLD:
             raw_score -= 8.0
             penalties.append(
                 BrandSafetyPenalty(
@@ -331,7 +380,9 @@ def compute_s6_brand_safety(
         "low_image_quality": low_image_quality,
         "competitor_brand_mention": competitor_brand_mention,
         "alcohol_tobacco_detected": alcohol_tobacco_detected,
-        "cringe_detected": bool(normalized_cringe_score is not None and normalized_cringe_score >= 45.0),
+        "drinking_depiction_detected": drinking_depiction_detected,
+        "violence_gore_detected": violence_gore_detected,
+        "cringe_detected": is_cringe_detected(normalized_cringe_score),
         "adult_content_detected": adult_content_detected,
         "low_production": production_level == "low",
         "controversial_topic": controversial_topic,

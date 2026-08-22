@@ -24,6 +24,13 @@ from backend.app.utils.logger import logger
 from backend.app.utils.number_utils import now_iso as _now_iso
 
 
+SINGLE_POST_ANALYSIS_CONTRACT_VERSION = "v2"
+_PREDICTED_ER_UNAVAILABLE = {
+    "status": "not_supported",
+    "reason": "Predicted engagement is not part of the AI-only creative analysis contract.",
+    "value": None,
+    "confidence": "unavailable",
+}
 
 
 def _normalize_text(value: Any) -> str | None:
@@ -140,6 +147,38 @@ def _post_payload(post: SinglePostInsights, fallback_post_id: str, fallback_medi
     }
 
 
+def _result_payload(
+    *,
+    post: SinglePostInsights,
+    ai_analysis: dict[str, Any],
+    fallback_post_id: str,
+    fallback_media_url: str,
+) -> dict[str, Any]:
+    creative_score = ai_analysis.get("creative_score")
+    if not isinstance(creative_score, (int, float)):
+        creative_score = post.weighted_post_score.score if post.weighted_post_score else None
+    creative_band = str(ai_analysis.get("creative_band") or "UNAVAILABLE")
+    return {
+        "contract_version": SINGLE_POST_ANALYSIS_CONTRACT_VERSION,
+        "status": "succeeded",
+        "post": _post_payload(post, fallback_post_id=fallback_post_id, fallback_media_url=fallback_media_url),
+        "scores": {
+            "P": creative_score,
+            "predicted_engagement_rate": None,
+            "predicted_engagement_rate_notes": ["Not part of the AI-only creative analysis contract."],
+            "predicted_er_confidence": "unavailable",
+        },
+        "score": {
+            "value": creative_score,
+            "max": 100,
+            "band": creative_band,
+            "source": "ai_creative_weighted_score",
+        },
+        "predicted_er": dict(_PREDICTED_ER_UNAVAILABLE),
+        "ai_analysis": ai_analysis,
+    }
+
+
 async def run_single_post_analysis_inline(payload: dict[str, Any]) -> dict[str, Any]:
     """Run single-post analysis immediately when queue startup is unavailable."""
     normalized = _normalize_enqueue_payload(payload if isinstance(payload, dict) else {})
@@ -173,15 +212,12 @@ async def run_single_post_analysis_inline(payload: dict[str, Any]) -> dict[str, 
         "job_id": f"inline_{creator_post.post_id}",
         "status": "succeeded",
         "mode": "inline_fallback",
-        "result": {
-            "status": "succeeded",
-            "post": _post_payload(post, fallback_post_id=creator_post.post_id, fallback_media_url=creator_post.media_url),
-            "scores": {
-                "P": post.weighted_post_score.score if post.weighted_post_score else None,
-                "predicted_engagement_rate": post.predicted_engagement_rate,
-            },
-            "ai_analysis": ai_analysis,
-        },
+        "result": _result_payload(
+            post=post,
+            ai_analysis=ai_analysis,
+            fallback_post_id=creator_post.post_id,
+            fallback_media_url=creator_post.media_url,
+        ),
     }
 
 
@@ -229,15 +265,12 @@ def run_single_post_analysis_job(payload: dict[str, Any]) -> None:
         ai_analysis = pipeline_result.get("ai_analysis") if isinstance(pipeline_result.get("ai_analysis"), dict) else {}
         warnings = ai_analysis.get("warnings") if isinstance(ai_analysis.get("warnings"), list) else []
         fallback_used = bool(ai_analysis.get("fallback_used", False))
-        result_payload = {
-            "status": "succeeded",
-            "post": _post_payload(post, fallback_post_id=creator_post.post_id, fallback_media_url=creator_post.media_url),
-            "scores": {
-                "P": post.weighted_post_score.score if post.weighted_post_score else None,
-                "predicted_engagement_rate": post.predicted_engagement_rate,
-            },
-            "ai_analysis": ai_analysis,
-        }
+        result_payload = _result_payload(
+            post=post,
+            ai_analysis=ai_analysis,
+            fallback_post_id=creator_post.post_id,
+            fallback_media_url=creator_post.media_url,
+        )
         update_job_state(
             job_id,
             status="succeeded",

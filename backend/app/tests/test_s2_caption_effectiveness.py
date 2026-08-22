@@ -13,13 +13,13 @@ def test_hook_scoring_with_question_and_keyword() -> None:
     assert score.hook_score_0_100 == 90
 
 
-def test_hook_scoring_missing_first_line_or_too_long() -> None:
+def test_hook_scoring_missing_caption_and_long_single_line_preview() -> None:
     empty_score = compute_s2_caption_effectiveness("")
     assert empty_score.hook_score_0_100 == 30
 
     long_first_line = "x" * 126
     long_score = compute_s2_caption_effectiveness(long_first_line)
-    assert long_score.hook_score_0_100 == 30
+    assert long_score.hook_score_0_100 == 60
 
 
 def test_length_scoring_ranges() -> None:
@@ -40,6 +40,20 @@ def test_cta_regex() -> None:
     assert compute_s2_caption_effectiveness("Check this and link in bio now").cta_score_0_100 == 100
     assert compute_s2_caption_effectiveness("Please comment below").cta_score_0_100 == 100
     assert compute_s2_caption_effectiveness("No action words here").cta_score_0_100 == 20
+
+
+def test_commercial_ticket_cta_and_visible_preview_are_recognized() -> None:
+    caption = (
+        "Once upon a time, there was a gangster. And things got Toxic. "
+        "Tickets go live on August 21. Join the Hype and be the first to know. "
+        "Find Best Seats, only on District."
+    )
+
+    score = compute_s2_caption_effectiveness(caption)
+
+    assert score.hook_score_0_100 == 35
+    assert score.cta_score_0_100 == 100
+    assert "No CTA detected" not in score.notes
 
 
 def test_s2_weighted_total_matches_reference() -> None:

@@ -10,6 +10,8 @@ def test_exact_match_is_100() -> None:
     assert score.affinity_band == "EXACT"
     assert score.s4_raw_0_100 == 100
     assert score.total_0_50 == 50.0
+    assert score.status == "available"
+    assert score.unavailable_reason is None
 
 
 def test_adjacent_match_is_75() -> None:
@@ -32,11 +34,13 @@ def test_unrelated_is_15() -> None:
     assert score.total_0_50 == 7.5
 
 
-def test_missing_inputs_neutral_50() -> None:
+def test_missing_inputs_keep_legacy_neutral_value_but_are_unavailable() -> None:
     score = compute_s4_audience_relevance(None, "fitness")
     assert score.affinity_band == "UNKNOWN"
     assert score.s4_raw_0_100 == 50
     assert score.total_0_50 == 25.0
+    assert score.status == "unavailable"
+    assert "niche context" in str(score.unavailable_reason).lower()
     assert any("missing" in note.lower() for note in score.notes)
 
 

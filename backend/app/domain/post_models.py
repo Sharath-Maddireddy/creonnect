@@ -7,10 +7,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
-
-CRINGE_DETECTION_THRESHOLD = 45
-CRINGE_NOT_CRINGE_MAX = 30
-CRINGE_UNCERTAIN_MAX = 59
+from backend.app.ai.cringe_analysis import (
+    CRINGE_DETECTION_THRESHOLD,
+    CRINGE_NOT_CRINGE_MAX,
+    CRINGE_UNCERTAIN_MAX,
+)
 
 
 # -----------------------------
@@ -165,6 +166,9 @@ class VisionSignal(BaseModel):
     """Normalized Gemini vision signal payload for a single post."""
 
     model_config = ConfigDict(extra="forbid")
+
+    slide_index: int | None = Field(default=None, ge=0, description="One-based carousel slide index; zero denotes an aggregate signal.")
+    is_carousel_aggregate: bool = Field(default=False, description="Whether this signal summarizes all carousel slides.")
 
     objects: list[str] = Field(
         default_factory=list,
@@ -402,6 +406,15 @@ class VisionAnalysis(BaseModel):
         description="Vision analysis status.",
     )
     signals: list[VisionSignal] = Field(default_factory=list, description="Normalized vision signal payloads.")
+    error_reason: str | None = Field(default=None, description="Bounded diagnostic reason when vision status is error.")
+
+    @field_validator("error_reason", mode="before")
+    @classmethod
+    def _bound_error_reason(cls, value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text[:300] if text else None
 
 
 class ReelAnalysis(BaseModel):
@@ -794,9 +807,19 @@ class AudienceRelevanceScore(BaseModel):
     affinity_band: Literal["EXACT", "HIGH_OVERLAP", "ADJACENT", "UNRELATED", "UNKNOWN"] = Field(
         default="UNKNOWN"
     )
+    status: Literal["available", "unavailable"] = Field(default="unavailable")
+    unavailable_reason: str | None = Field(default="Creator niche context is required to score audience fit.")
     s4_raw_0_100: int = Field(default=50, ge=0, le=100)
     total_0_50: float = Field(default=25.0, ge=0.0, le=50.0)
     notes: list[str] = Field(default_factory=list)
+
+    @field_validator("unavailable_reason", mode="before")
+    @classmethod
+    def _sanitize_unavailable_reason(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text[:160] if text else None
 
     @field_validator("s4_raw_0_100", mode="before")
     @classmethod
@@ -949,8 +972,10 @@ class SinglePostInsights(BaseModel):
     media_id: str | None = Field(default=None, description="Platform media identifier for the post.")
     shortcode: str | None = Field(default=None, description="Platform shortcode used to link to the post.")
     media_url: str | None = Field(default=None, description="Public or signed media URL for vision analysis.")
+    carousel_media_urls: list[str] = Field(default_factory=list, description="Ordered child media URLs for carousel analysis.")
     media_type: str | None = Field(default=None, description="Instagram media type (e.g., IMAGE, VIDEO, CAROUSEL).")
     caption_text: str = Field(default="", description="Post caption text used for deterministic clarity scoring.")
+    audio_name: str | None = Field(default=None, description="Audio/sound track name for REEL posts, used for reel audio scoring.")
     hashtags: list[str] = Field(default_factory=list, description="Hashtags supplied by the platform for this post.")
     post_category: str | None = Field(default=None, description="Predicted/assigned post category for audience relevance.")
     creator_dominant_category: str | None = Field(default=None, description="Creator dominant category for audience relevance.")

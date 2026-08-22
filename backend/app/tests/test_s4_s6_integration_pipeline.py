@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
+from backend.app.analytics.s4_audience_relevance_engine import compute_s4_audience_relevance
 from backend.app.services import ai_analysis_service
 from backend.app.services.post_insights_service import build_single_post_insights
 
@@ -89,8 +90,16 @@ def test_pipeline_result_and_cache_include_s4_s6_and_weighted_uses_them(monkeypa
             }
         )
 
+    async def fake_analyze_audience_relevance(post_category, creator_category):
+        return compute_s4_audience_relevance(post_category, creator_category)
+
     monkeypatch.setattr(ai_analysis_service, "run_vision_analysis", fake_run_vision_analysis)
     monkeypatch.setattr(ai_analysis_service, "_call_llm_async", fake_call_llm_async)
+    monkeypatch.setattr(
+        ai_analysis_service,
+        "analyze_audience_relevance_via_llm",
+        fake_analyze_audience_relevance,
+    )
 
     target_post = _build_post("m_s4s6_target")
     history = [

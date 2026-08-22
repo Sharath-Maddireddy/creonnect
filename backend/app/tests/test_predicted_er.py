@@ -11,6 +11,7 @@ from backend.app.analytics.derived_metrics import compute_derived_metrics
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
 from backend.app.services import ai_analysis_service
 from backend.app.services.post_insights_service import build_single_post_insights
+from backend.app.services.single_post_analysis_jobs import _result_payload
 
 
 def _build_post(media_id: str, reach: int = 2000, likes: int = 120, comments: int = 20) -> SinglePostInsights:
@@ -72,7 +73,10 @@ def test_external_ai_disabled_uses_deterministic_fallback(monkeypatch) -> None:
 
     assert result["vision_status"] == "disabled"
     assert result["fallback_used"] is True
-    assert result["summary"].startswith("Post scored")
+    assert result["summary"].startswith("AI creative score:")
+    assert result["ai_content_score"] == result["weighted_post_score"]["score"]
+    assert result["ai_content_band"] != "NEEDS_WORK"
+    assert result["performance_score"] is None
     assert any(
         warning.get("message") == "External AI calls are disabled by AI_EXTERNAL_CALLS_ENABLED."
         for warning in result["warnings"]
@@ -95,6 +99,28 @@ def test_unit_consistency() -> None:
     predicted, _ = compute_predicted_engagement_rate(tier_avg_er=derived.engagement_rate, s5_total=25.0)
     assert predicted is not None
     assert 0.0 <= predicted <= 1.0
+
+
+def test_queued_result_contract_hides_performance_prediction() -> None:
+    post = _build_post("queued_contract")
+    post.weighted_post_score.score = 66.22
+
+    payload = _result_payload(
+        post=post,
+        ai_analysis={"creative_score": 66.22, "creative_band": "STRONG_FOUNDATION"},
+        fallback_post_id="queued_contract",
+        fallback_media_url=post.media_url or "",
+    )
+
+    assert payload["contract_version"] == "v2"
+    assert payload["score"] == {
+        "value": 66.22,
+        "max": 100,
+        "band": "STRONG_FOUNDATION",
+        "source": "ai_creative_weighted_score",
+    }
+    assert payload["scores"]["predicted_engagement_rate"] is None
+    assert payload["predicted_er"]["status"] == "not_supported"
 
 
 def test_predicted_er_integration_result_and_cache(monkeypatch) -> None:
@@ -162,8 +188,12 @@ def test_predicted_er_integration_result_and_cache(monkeypatch) -> None:
     assert "tier_avg_engagement_rate" in response["ai_analysis"]
     assert "predicted_engagement_rate" in response["ai_analysis"]
     assert "predicted_engagement_rate_notes" in response["ai_analysis"]
-    assert response["post"].predicted_engagement_rate == response["ai_analysis"]["predicted_engagement_rate"]
-    assert response["post"].tier_avg_engagement_rate == response["ai_analysis"]["tier_avg_engagement_rate"]
+    # The prediction engine remains available for internal consumers, while
+    # the AI-only single-post report deliberately does not expose it.
+    assert isinstance(response["post"].predicted_engagement_rate_notes, list)
+    assert response["ai_analysis"]["predicted_engagement_rate"] is None
+    assert response["ai_analysis"]["tier_avg_engagement_rate"] is None
+    assert response["ai_analysis"]["predicted_er_confidence"] == "unavailable"
 
     cache_key = ai_analysis_service._cache_key(target_post)
     assert cache_key in ai_analysis_service._ANALYSIS_CACHE
