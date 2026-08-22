@@ -505,6 +505,9 @@ function Dashboard() {
                     <Link className="dashboard-header-link" to="/creator-intelligence">
                         Creator Intelligence
                     </Link>
+                    <Link className="dashboard-header-link" to="/post-analysis">
+                        Test Post Analysis
+                    </Link>
                 </div>
             </div>
 

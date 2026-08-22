@@ -10,25 +10,36 @@ from backend.app.infra.redis_client import get_json, set_json
 from backend.app.utils.logger import logger
 
 
-POST_INSIGHTS_CACHE_KEY_PREFIX = "post:insights:"
+POST_INSIGHTS_CACHE_KEY_PREFIX = "post:insights:v2r2:"
 POST_INSIGHTS_CACHE_TTL_SECONDS = 86400
 _POST_INSIGHTS_CACHE: dict[str, dict[str, Any]] = {}
 _POST_INSIGHTS_CACHE_LOCK = threading.Lock()
 
 
-def _post_insights_key(media_id: str) -> str:
-    return f"{POST_INSIGHTS_CACHE_KEY_PREFIX}{media_id}"
+def _normalize_cache_identity(account_id: str, media_id: str) -> tuple[str, str] | None:
+    normalized_account_id = account_id.strip() if isinstance(account_id, str) else ""
+    normalized_media_id = media_id.strip() if isinstance(media_id, str) else ""
+    if not normalized_account_id or not normalized_media_id:
+        return None
+    return normalized_account_id, normalized_media_id
+
+
+def _post_insights_key(account_id: str, media_id: str) -> str:
+    return f"{POST_INSIGHTS_CACHE_KEY_PREFIX}{account_id}:{media_id}"
 
 
 def write_post_insights_snapshot(
+    account_id: str,
     media_id: str,
     *,
     post: SinglePostInsights,
     ai_analysis: dict[str, Any] | None,
 ) -> None:
-    normalized_media_id = media_id.strip() if isinstance(media_id, str) else ""
-    if not normalized_media_id:
+    identity = _normalize_cache_identity(account_id, media_id)
+    if identity is None:
         return
+    normalized_account_id, normalized_media_id = identity
+    cache_key = _post_insights_key(normalized_account_id, normalized_media_id)
 
     payload = {
         "post": post.model_dump(mode="json"),
@@ -37,7 +48,7 @@ def write_post_insights_snapshot(
 
     try:
         set_json(
-            _post_insights_key(normalized_media_id),
+            cache_key,
             payload,
             ttl_seconds=POST_INSIGHTS_CACHE_TTL_SECONDS,
         )
@@ -49,16 +60,18 @@ def write_post_insights_snapshot(
         )
 
     with _POST_INSIGHTS_CACHE_LOCK:
-        _POST_INSIGHTS_CACHE[normalized_media_id] = payload
+        _POST_INSIGHTS_CACHE[cache_key] = payload
 
 
-def read_post_insights_snapshot(media_id: str) -> dict[str, Any] | None:
-    normalized_media_id = media_id.strip() if isinstance(media_id, str) else ""
-    if not normalized_media_id:
+def read_post_insights_snapshot(account_id: str, media_id: str) -> dict[str, Any] | None:
+    identity = _normalize_cache_identity(account_id, media_id)
+    if identity is None:
         return None
+    normalized_account_id, normalized_media_id = identity
+    cache_key = _post_insights_key(normalized_account_id, normalized_media_id)
 
     try:
-        payload = get_json(_post_insights_key(normalized_media_id))
+        payload = get_json(cache_key)
     except Exception as exc:
         logger.warning(
             "[PostSnapshotStore] Failed to read post insights snapshot for media_id=%s: %s",
@@ -69,9 +82,9 @@ def read_post_insights_snapshot(media_id: str) -> dict[str, Any] | None:
 
     if isinstance(payload, dict):
         with _POST_INSIGHTS_CACHE_LOCK:
-            _POST_INSIGHTS_CACHE[normalized_media_id] = payload
+            _POST_INSIGHTS_CACHE[cache_key] = payload
         return payload
 
     with _POST_INSIGHTS_CACHE_LOCK:
-        cached_payload = _POST_INSIGHTS_CACHE.get(normalized_media_id)
+        cached_payload = _POST_INSIGHTS_CACHE.get(cache_key)
     return cached_payload if isinstance(cached_payload, dict) else None

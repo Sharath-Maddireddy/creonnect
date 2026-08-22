@@ -76,6 +76,7 @@ async def materialize_account_source_payload(payload: dict[str, Any], *, post_li
     sanitized_payload["username"] = normalized.username
     sanitized_payload["bio"] = normalized.bio
     sanitized_payload["follower_count"] = normalized.follower_count
+    sanitized_payload["account_insights"] = normalized.account_insights
     if normalized.creator_dominant_category and not sanitized_payload.get("creator_dominant_category"):
         sanitized_payload["creator_dominant_category"] = normalized.creator_dominant_category
     if normalized.niche_tags and not sanitized_payload.get("niche_tags"):

@@ -63,6 +63,7 @@ def _cache_key(
     niche_avg_engagement_rate: float | None,
     follower_band: str | None,
     follower_count: int | None,
+    account_insights: dict[str, object] | None,
     now_ts: datetime | None,
 ) -> str:
     account_id = posts[0].account_id if posts and isinstance(posts[0].account_id, str) else "unknown_account"
@@ -71,7 +72,7 @@ def _cache_key(
     return (
         f"{account_id}:{fingerprint}:"
         f"{_format_rate(account_avg_engagement_rate)}:{_format_rate(niche_avg_engagement_rate)}:{follower_band or ''}:"
-        f"{follower_count or 0}:"
+        f"{follower_count or 0}:{json.dumps(account_insights or {}, sort_keys=True, separators=(',', ':'))}:"
         f"{now_str}"
     )
 
@@ -113,6 +114,7 @@ def analyze_account_health(
     niche_avg_engagement_rate: float | None = None,
     follower_band: str | None = None,
     follower_count: int | None = None,
+    account_insights: dict[str, object] | None = None,
     now_ts: datetime | None = None,
     use_cache: bool = True,
 ) -> AccountHealthScore:
@@ -122,7 +124,7 @@ def analyze_account_health(
     cache windows; it does not affect the underlying score calculation.
     """
 
-    key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band, follower_count, now_ts)
+    key = _cache_key(posts, account_avg_engagement_rate, niche_avg_engagement_rate, follower_band, follower_count, account_insights, now_ts)
     account_id = posts[0].account_id if posts and isinstance(posts[0].account_id, str) else "unknown_account"
     logger.info(
         "[AccountHealth] Start account_id=%s post_count=%d use_cache=%s follower_band=%s",
@@ -146,6 +148,7 @@ def analyze_account_health(
         niche_avg_engagement_rate=niche_avg_engagement_rate,
         follower_band=follower_band,
         follower_count=follower_count,
+        account_insights=account_insights,
     )
     logger.info(
         "[AccountHealth] Computed account_id=%s score=%s band=%s",

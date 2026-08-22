@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from backend.app.infra.database import get_sync_sessionmaker
 from backend.app.infra.job_defaults import ACTIVE_REUSABLE_STATUSES
@@ -68,6 +68,66 @@ def initialize_job_state(
     return state
 
 
+def initialize_idempotent_job_state(
+    *,
+    job_id: str,
+    queue_name: str,
+    job_name: str,
+    payload: dict[str, Any] | None,
+    account_id: str,
+    idempotency_key_hash: str,
+    source_ref: str | None = None,
+    post_limit: int | None = None,
+    payload_hash: str | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Atomically create a job or return the job that owns the dedupe key."""
+    state = {
+        "job_id": job_id,
+        "status": "queued",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": None,
+        "finished_at": None,
+        "progress": None,
+        "error": None,
+        "result": None,
+        "warnings": [],
+        "quality": None,
+    }
+    session_factory = get_sync_sessionmaker()
+    with session_factory() as session:
+        session.add(
+            BackgroundJob(
+                job_id=job_id,
+                queue_name=queue_name,
+                job_name=job_name,
+                status="queued",
+                account_id=account_id,
+                source_ref=source_ref,
+                post_limit=post_limit,
+                payload_hash=payload_hash,
+                idempotency_key_hash=idempotency_key_hash,
+                payload_json=payload,
+                warnings_json=[],
+            )
+        )
+        try:
+            session.commit()
+            return state, True
+        except IntegrityError:
+            session.rollback()
+            row = session.execute(
+                select(BackgroundJob)
+                .where(BackgroundJob.queue_name == queue_name)
+                .where(BackgroundJob.account_id == account_id)
+                .where(BackgroundJob.idempotency_key_hash == idempotency_key_hash)
+            ).scalars().first()
+            if row is None:
+                # The integrity failure was unrelated (for example, a job-id
+                # collision), so do not disguise it as a dedupe hit.
+                raise
+            return serialize_job_state(row), False
+
+
 def update_job_state(job_id: str, **updates: Any) -> dict[str, Any]:
     session_factory = get_sync_sessionmaker()
     with session_factory() as session:
@@ -90,6 +150,8 @@ def update_job_state(job_id: str, **updates: Any) -> dict[str, Any]:
             row.started_at = parse_iso_datetime(updates["started_at"])
         if "finished_at" in updates:
             row.finished_at = parse_iso_datetime(updates["finished_at"])
+        if updates.pop("release_idempotency_key", False):
+            row.idempotency_key_hash = None
         session.commit()
         session.refresh(row)
         return serialize_job_state(row)
@@ -111,6 +173,7 @@ def serialize_job_state(row: BackgroundJob) -> dict[str, Any]:
         "account_id": row.account_id,
         "source_ref": row.source_ref,
         "created_at": row.created_at.astimezone(timezone.utc).isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.astimezone(timezone.utc).isoformat() if row.updated_at else None,
         "started_at": row.started_at.astimezone(timezone.utc).isoformat() if row.started_at else None,
         "finished_at": row.finished_at.astimezone(timezone.utc).isoformat() if row.finished_at else None,
         "progress": row.progress_json,
@@ -119,6 +182,48 @@ def serialize_job_state(row: BackgroundJob) -> dict[str, Any]:
         "warnings": row.warnings_json or [],
         "quality": row.quality_json,
     }
+
+
+def find_background_job_by_payload_hash(*, queue_name: str, account_id: str, payload_hash: str) -> dict[str, Any] | None:
+    """Return the original job for an idempotency key, including terminal jobs."""
+    session_factory = get_sync_sessionmaker()
+    with session_factory() as session:
+        row = session.execute(
+            select(BackgroundJob)
+            .where(BackgroundJob.queue_name == queue_name)
+            .where(BackgroundJob.account_id == account_id)
+            .where(BackgroundJob.payload_hash == payload_hash)
+            .order_by(BackgroundJob.created_at.desc())
+        ).scalars().first()
+        return serialize_job_state(row) if row is not None else None
+
+
+def find_background_job_by_idempotency_key(
+    *, queue_name: str, account_id: str, idempotency_key_hash: str
+) -> dict[str, Any] | None:
+    session_factory = get_sync_sessionmaker()
+    with session_factory() as session:
+        row = session.execute(
+            select(BackgroundJob)
+            .where(BackgroundJob.queue_name == queue_name)
+            .where(BackgroundJob.account_id == account_id)
+            .where(BackgroundJob.idempotency_key_hash == idempotency_key_hash)
+        ).scalars().first()
+        return serialize_job_state(row) if row is not None else None
+
+
+def list_background_jobs(*, queue_name: str, account_id: str, limit: int, skip: int) -> list[dict[str, Any]]:
+    session_factory = get_sync_sessionmaker()
+    with session_factory() as session:
+        rows = session.execute(
+            select(BackgroundJob)
+            .where(BackgroundJob.queue_name == queue_name)
+            .where(BackgroundJob.account_id == account_id)
+            .order_by(BackgroundJob.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        ).scalars().all()
+        return [serialize_job_state(row) for row in rows]
 
 
 def find_reusable_background_job(

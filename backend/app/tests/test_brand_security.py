@@ -34,8 +34,9 @@ def test_brand_api_key_configuration_succeeds_when_present(monkeypatch: pytest.M
 
 def test_campaign_route_rate_limiter_blocks_repeated_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(campaign_routes, "rate_limiter", InMemoryRateLimiter(max_requests=1, window_seconds=3600))
+    actor = "api-key:brand-secret"
 
-    assert campaign_routes._rate_limit_by_api_key(api_key="brand-secret") == "brand-secret"
+    assert campaign_routes._rate_limit_campaign_actor(actor=actor) == actor
 
     with pytest.raises(HTTPException, match="Rate limit exceeded"):
-        campaign_routes._rate_limit_by_api_key(api_key="brand-secret")
+        campaign_routes._rate_limit_campaign_actor(actor=actor)

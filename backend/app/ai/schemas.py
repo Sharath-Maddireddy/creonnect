@@ -56,8 +56,9 @@ class CreatorPostAIInput(BaseModel):
     creator_id: str = ""
     platform: str = "instagram"
 
-    post_type: Literal["IMAGE", "REEL"] = "IMAGE"
+    post_type: Literal["IMAGE", "REEL", "CAROUSEL"] = "IMAGE"
     media_url: str = ""
+    media_urls: List[str] = []
     thumbnail_url: str = ""
 
     caption_text: str = ""
@@ -77,10 +78,12 @@ class CreatorPostAIInput(BaseModel):
 
     @field_validator("post_type", mode="before")
     @classmethod
-    def normalize_post_type(cls, value: str | None) -> Literal["IMAGE", "REEL"]:
+    def normalize_post_type(cls, value: str | None) -> Literal["IMAGE", "REEL", "CAROUSEL"]:
         normalized = value.strip().upper() if isinstance(value, str) else ""
         if normalized in {"REEL", "VIDEO", "CLIPS"}:
             return "REEL"
+        if normalized in {"CAROUSEL", "ALBUM"}:
+            return "CAROUSEL"
         return "IMAGE"
 
     @field_validator("media_url", "thumbnail_url", mode="before")
@@ -89,5 +92,12 @@ class CreatorPostAIInput(BaseModel):
         if not isinstance(value, str):
             return ""
         return value.strip()
+
+    @field_validator("media_urls", mode="before")
+    @classmethod
+    def normalize_carousel_media_urls(cls, value: object) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()][:10]
 
 

@@ -125,7 +125,13 @@ def build_asset_metadata_response(asset: ImageAsset) -> ImageAssetMetadataRespon
 
 
 def read_asset_bytes(asset: ImageAsset) -> bytes:
-    return Path(asset.storage_path).read_bytes()
+    path = Path(asset.storage_path)
+    try:
+        return path.read_bytes()
+    except FileNotFoundError as exc:
+        raise ValueError("Image asset data is no longer available. Please upload the source again.") from exc
+    except OSError as exc:
+        raise ValueError("Image asset data could not be read. Please try again.") from exc
 
 
 async def create_derived_asset(

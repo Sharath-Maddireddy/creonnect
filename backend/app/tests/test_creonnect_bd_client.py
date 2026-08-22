@@ -69,3 +69,35 @@ def test_hmac_headers_allow_user_id_only_by_default(monkeypatch) -> None:
     assert headers.get("X-Service-Id") == client.internal_service_id
     assert "X-Signature" in headers
     assert "X-User-Email" not in headers
+
+
+def test_client_fetches_connection_account_insights(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        status = 200
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001, ANN002, ANN003
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"success": True, "data": {"reach": 9000, "profile_views": 240}}).encode("utf-8")
+
+    def _fake_urlopen(request, timeout: float):  # noqa: ANN001
+        captured["url"] = request.full_url
+        return _FakeResponse()
+
+    monkeypatch.setattr("backend.app.account_sources.creonnect_bd_client.urlopen", _fake_urlopen)
+    result = asyncio.run(
+        CreonnectBDClient(base_url="https://bd.example").get_connection_account_insights(
+            connection_id="conn_1"
+        )
+    )
+
+    parsed = urlparse(captured["url"])
+    assert parsed.path == "/api/social/instagram/connections/conn_1/account-insights"
+    assert parse_qs(parsed.query) == {"period": ["days_28"]}
+    assert result == {"reach": 9000, "profile_views": 240}

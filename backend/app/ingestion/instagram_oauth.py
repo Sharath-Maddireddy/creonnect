@@ -20,6 +20,17 @@ _REEL_INSIGHT_METRICS = (
     "clips_replays_count",
     "reels_skip_rate",
 )
+_ACCOUNT_INSIGHT_METRICS = (
+    "reach",
+    "views",
+    "profile_views",
+    "website_clicks",
+    "profile_links_taps",
+    "follower_count",
+    "accounts_engaged",
+    "total_interactions",
+    "follows_and_unfollows",
+)
 
 
 INSTAGRAM_APP_ID = os.getenv("INSTAGRAM_APP_ID")
@@ -104,6 +115,32 @@ async def fetch_instagram_profile(access_token: str) -> dict[str, Any]:
     payload = response.json()
     _raise_for_api_error(response.status_code, payload)
     return payload
+
+
+async def fetch_instagram_account_insights(access_token: str) -> dict[str, Any]:
+    """Fetch supported 28-day professional-account insights.
+
+    Instagram's available insight metrics vary by account type and API version.
+    Each metric is retried independently so an unavailable optional metric never
+    hides the rest of the account's data.
+    """
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+        async def fetch_metric(metric: str) -> tuple[str, Any | None]:
+            response = await client.get(
+                f"{GRAPH_API_BASE}/me/insights",
+                params={"metric": metric, "period": "days_28", "access_token": access_token},
+            )
+            payload = response.json()
+            if response.status_code != 200 or payload.get("error"):
+                logger.info("Instagram account insight unavailable metric=%s", metric)
+                return metric, None
+            data = payload.get("data")
+            if not isinstance(data, list) or not data:
+                return metric, None
+            return metric, _insight_value(data[0])
+
+        pairs = await asyncio.gather(*(fetch_metric(metric) for metric in _ACCOUNT_INSIGHT_METRICS))
+    return {metric: value for metric, value in pairs if value is not None}
 
 
 async def fetch_instagram_media(access_token: str, limit: int = 30) -> list[dict[str, Any]]:

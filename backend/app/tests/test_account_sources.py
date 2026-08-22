@@ -58,6 +58,36 @@ def test_materialize_fixture_source_returns_normalized_posts(tmp_path: Path) -> 
     assert result["posts"][0]["core_metrics"]["likes"] == 10
 
 
+def test_materialize_instagram_oauth_source_preserves_account_insights(monkeypatch) -> None:
+    async def _profile(_token: str) -> dict[str, object]:
+        return {"id": "ig_1", "username": "creator", "followers_count": 1_250}
+
+    async def _media(_token: str, limit: int) -> list[dict[str, object]]:
+        assert limit == 1
+        return []
+
+    async def _account_insights(_token: str) -> dict[str, object]:
+        return {"reach": 9_000, "profile_views": 240, "website_clicks": 36}
+
+    monkeypatch.setattr("backend.app.account_sources.instagram_oauth_source.fetch_instagram_profile", _profile)
+    monkeypatch.setattr("backend.app.account_sources.instagram_oauth_source.fetch_instagram_media", _media)
+    monkeypatch.setattr(
+        "backend.app.account_sources.instagram_oauth_source.fetch_instagram_account_insights",
+        _account_insights,
+    )
+
+    result = asyncio.run(
+        materialize_account_source_payload(
+            {"source": "instagram_oauth", "access_token": "secret", "post_limit": 1},
+            post_limit=1,
+        )
+    )
+
+    assert result["follower_count"] == 1_250
+    assert result["account_insights"] == {"reach": 9_000, "profile_views": 240, "website_clicks": 36}
+    assert result["source_meta"]["account_insights_enriched"] is True
+
+
 def test_materialize_creonnect_bd_source_pages_posts(monkeypatch) -> None:
     class _FakeClient:
         def __init__(self, *args, **kwargs) -> None:  # noqa: D401, ANN002, ANN003
@@ -123,6 +153,12 @@ def test_materialize_creonnect_bd_source_pages_posts(monkeypatch) -> None:
                 "pagination": {"hasNext": False},
             }
 
+        async def get_connection_account_insights(self, *, platform: str, connection_id: str, period: str):
+            assert platform == "instagram"
+            assert connection_id == "conn_1"
+            assert period == "days_28"
+            return {"follower_count": 1_500, "reach": 9_000, "profile_views": 240}
+
     monkeypatch.setattr(
         "backend.app.account_sources.creonnect_bd_source.CreonnectBDClient",
         _FakeClient,
@@ -144,9 +180,42 @@ def test_materialize_creonnect_bd_source_pages_posts(monkeypatch) -> None:
     assert payload["account_id"] == "ig_123"
     assert payload["username"] == "creator_one"
     assert payload["follower_count"] == 1234
+    assert payload["account_insights"] == {"follower_count": 1_500, "reach": 9_000, "profile_views": 240}
+    assert payload["source_meta"]["account_insights_enriched"] is True
     assert len(payload["posts"]) == 2
     assert payload["posts"][0]["media_id"] == "post_1"
     assert payload["posts"][0]["media_url"] == "https://cdn.example/storage_post_1.mp4"
     assert payload["posts"][0]["media_type"] == "REEL"
     assert payload["posts"][1]["media_url"] == "https://cdn.example/source_post_2.jpg"
     assert payload["posts"][1]["core_metrics"]["reach"] == 202
+
+
+def test_creonnect_bd_source_continues_when_account_insights_are_unavailable(monkeypatch) -> None:
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: D401, ANN002, ANN003
+            return None
+
+        async def get_creator_profile(self) -> dict[str, Any]:
+            return {"creator": {}}
+
+        async def list_connections(self, **kwargs) -> list[dict[str, Any]]:  # noqa: ANN003
+            return [{"id": "conn_1", "platformUserId": "ig_123", "platformProfile": {}}]
+
+        async def get_connection_account_insights(self, **kwargs) -> dict[str, Any]:  # noqa: ANN003
+            raise ValueError("creonnect-bd request failed for account-insights: HTTP 404")
+
+        async def list_posts_page(self, **kwargs) -> dict[str, Any]:  # noqa: ANN003
+            return {"posts": [], "pagination": {"hasNext": False}}
+
+    monkeypatch.setattr("backend.app.account_sources.creonnect_bd_source.CreonnectBDClient", _FakeClient)
+
+    payload = asyncio.run(
+        materialize_account_source_payload(
+            {"source": "creonnect_bd", "connection_id": "conn_1", "bd_base_url": "http://bd.local"},
+            post_limit=1,
+        )
+    )
+
+    assert payload["account_insights"] == {}
+    assert payload["source_meta"]["account_insights_enriched"] is False
+    assert "HTTP 404" in payload["source_meta"]["account_insights_error"]

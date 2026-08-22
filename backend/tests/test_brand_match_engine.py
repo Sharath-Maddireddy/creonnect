@@ -52,6 +52,10 @@ def test_low_score_low_followers():
         creator_dominant_category="fitness",
         follower_count=50000, # Less than 100k
         ahs_score=85,
+        predicted_engagement_rate=0.04,
+        visual_quality_score_total=40.0,
+        brand_safety_score_total_0_50=45.0,
+        adult_content_detected=False,
     )
     
     # It does not disqualify, but the audience size score should drop heavily.

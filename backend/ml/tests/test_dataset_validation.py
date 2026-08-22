@@ -33,7 +33,7 @@ def _base_training_entry():
         "output": {
             "niche": {"primary_niche": "tech"},
             "growth": {"growth_score": 55},
-            "post_insights": {"summary": "ok"},
+            "post_insights": [{"summary": "ok"}],
         },
         "quality": "high",
     }

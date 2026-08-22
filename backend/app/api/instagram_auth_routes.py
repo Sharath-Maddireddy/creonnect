@@ -7,6 +7,7 @@ Provides endpoints for initiating and completing the Instagram OAuth flow.
 from __future__ import annotations
 
 import hmac
+import os
 import secrets
 from dataclasses import dataclass
 
@@ -24,6 +25,7 @@ from backend.app.infra.token_store import (
     save_token_async,
 )
 from backend.app.utils.logger import logger
+from backend.app.utils.env import is_production_environment
 
 
 router = APIRouter(prefix="/api/auth", tags=["Instagram Auth"])
@@ -41,6 +43,12 @@ class AuthenticatedInstagramUser:
 def get_current_instagram_user(request: Request) -> AuthenticatedInstagramUser:
     user_id = request.session.get(SESSION_USER_ID_KEY)
     if not user_id:
+        bypass_enabled = (os.getenv("DEV_AUTH_BYPASS") or "").strip().lower() in {"1", "true", "yes"}
+        if bypass_enabled and not is_production_environment():
+            bypass_user_id = (os.getenv("DEV_AUTH_BYPASS_ACCOUNT_ID") or "local-dev-user").strip()
+            if bypass_user_id:
+                logger.warning("[InstagramAuth] Development authentication bypass is active for account_id=%s", bypass_user_id)
+                return AuthenticatedInstagramUser(id=bypass_user_id, username="local-dev")
         raise HTTPException(status_code=401, detail="Not authenticated")
     username = request.session.get(SESSION_USERNAME_KEY)
     return AuthenticatedInstagramUser(id=str(user_id), username=str(username) if username else None)

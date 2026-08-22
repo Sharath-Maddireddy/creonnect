@@ -588,10 +588,22 @@ def _calculate_brand_readiness(
     )
 
 
-def _build_core_metrics_dashboard(posts: list[SinglePostInsights], follower_count: int | None) -> CoreMetricsDashboard:
+def _account_insight_number(account_insights: dict[str, Any] | None, *names: str) -> float | None:
+    if not isinstance(account_insights, dict):
+        return None
+    for name in names:
+        value = _safe_float(account_insights.get(name))
+        if value is not None and value >= 0:
+            return value
+    return None
+
+
+def _build_core_metrics_dashboard(
+    posts: list[SinglePostInsights],
+    follower_count: int | None,
+    account_insights: dict[str, Any] | None = None,
+) -> CoreMetricsDashboard:
     """Build dashboard core metrics from posts."""
-    if not posts:
-        return CoreMetricsDashboard()
     reach_values = [_safe_float(getattr(post.core_metrics, "reach", None)) for post in posts]
     reach_values = [v for v in reach_values if v is not None]
     impression_values = [_safe_float(getattr(post.core_metrics, "impressions", None)) for post in posts]
@@ -601,13 +613,19 @@ def _build_core_metrics_dashboard(posts: list[SinglePostInsights], follower_coun
     pv_values = [_safe_float(getattr(post.core_metrics, "profile_visits", None)) for post in posts]
     pv_values = [v for v in pv_values if v is not None]
 
-    total_reach = sum(reach_values)
+    total_reach = _account_insight_number(account_insights, "reach")
+    if total_reach is None:
+        total_reach = sum(reach_values)
     total_impressions = sum(impression_values)
     avg_er = round(sum(er_values) / len(er_values), 4) if er_values else None
-    total_pv = sum(pv_values)
+    total_pv = _account_insight_number(account_insights, "profile_views", "profile_visits")
+    if total_pv is None:
+        total_pv = sum(pv_values)
 
     followers_metric = MetricWithTrend(
-        current_value=float(follower_count or 0), trend_percentage=None, label="Followers"
+        current_value=float(follower_count) if follower_count is not None and follower_count >= 0 else None,
+        trend_percentage=None,
+        label="Followers",
     )
     reach_metric = MetricWithTrend(
         current_value=total_reach if total_reach > 0 else None, trend_percentage=None, label="30D Reach"
@@ -753,18 +771,36 @@ def _aggregate_hashtag_performance(posts: list[SinglePostInsights]) -> list[Hash
     return results
 
 
-def _calculate_funnel_metrics(posts: list[SinglePostInsights]) -> ConversionFunnel:
+def _calculate_funnel_metrics(
+    posts: list[SinglePostInsights], account_insights: dict[str, Any] | None = None
+) -> ConversionFunnel:
     """Calculate profile-to-conversion funnel from post metrics."""
     total_pv = 0
     total_wt = 0
     for post in posts:
         total_pv += int(_safe_float(getattr(post.core_metrics, "profile_visits", None)) or 0)
         total_wt += int(_safe_float(getattr(post.core_metrics, "website_taps", None)) or 0)
+    profile_visits = _account_insight_number(account_insights, "profile_views", "profile_visits")
+    website_clicks = _account_insight_number(account_insights, "website_clicks", "profile_links_taps")
+    if profile_visits is None:
+        profile_visits = total_pv if total_pv > 0 else None
+    if website_clicks is None:
+        website_clicks = total_wt if total_wt > 0 else None
+    follows = _account_insight_number(account_insights, "follows")
+    if follows is None and isinstance(account_insights, dict):
+        growth = account_insights.get("follows_and_unfollows")
+        if isinstance(growth, dict):
+            follows = _safe_float(growth.get("follows"))
+    profile_visit_to_follow_pct = (
+        round((follows / profile_visits) * 100, 2)
+        if follows is not None and profile_visits is not None and profile_visits > 0
+        else None
+    )
     return ConversionFunnel(
-        profile_visits=total_pv if total_pv > 0 else None,
-        website_clicks=total_wt if total_wt > 0 else None,
-        follows=None,
-        profile_visit_to_follow_pct=None,
+        profile_visits=int(profile_visits) if profile_visits is not None else None,
+        website_clicks=int(website_clicks) if website_clicks is not None else None,
+        follows=int(follows) if follows is not None else None,
+        profile_visit_to_follow_pct=profile_visit_to_follow_pct,
     )
 
 
@@ -835,6 +871,7 @@ def compute_account_health_score(
     niche_avg_engagement_rate: float | None = None,
     follower_band: str | None = None,
     follower_count: int | None = None,
+    account_insights: dict[str, Any] | None = None,
 ) -> AccountHealthScore:
     """Compute deterministic Account Health Score (AHS) from recent posts.
 
@@ -950,7 +987,7 @@ def compute_account_health_score(
         # New dashboard fields
         growth_stage=_derive_growth_stage(ahs_band),
         brand_readiness=_calculate_brand_readiness(recent_posts, pillars),
-        core_metrics=_build_core_metrics_dashboard(recent_posts, follower_count),
+        core_metrics=_build_core_metrics_dashboard(recent_posts, follower_count, account_insights),
         growth_overview_chart=_build_growth_overview_chart(recent_posts, follower_count),
         content_type_performance=compute_content_type_performance(recent_posts),
         content_pillars=_pillars,
@@ -960,7 +997,7 @@ def compute_account_health_score(
         audience_insights=_build_audience_insights(recent_posts),
         niche_benchmark=_build_niche_benchmark(recent_posts, niche_avg_engagement_rate),
         audience_demographics=_stub_audience_demographics(),
-        conversion_funnel=_calculate_funnel_metrics(recent_posts),
+        conversion_funnel=_calculate_funnel_metrics(recent_posts, account_insights),
         ai_summary=_build_ai_summary(recent_posts, ahs_band, _pillars, _heatmap),
     )
 

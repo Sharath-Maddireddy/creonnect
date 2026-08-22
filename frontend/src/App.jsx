@@ -6,7 +6,9 @@ const BrandCampaign = lazy(() => import('./pages/BrandCampaign'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const CreatorIntelligence = lazy(() => import('./pages/CreatorIntelligence'))
 const ImageEditor = lazy(() => import('./pages/ImageEditor'))
+const CreatorImageEditor = lazy(() => import('./pages/CreatorImageEditor'))
 const SinglePostInsights = lazy(() => import('./pages/SinglePostInsights'))
+const PostAnalysisLab = lazy(() => import('./pages/PostAnalysisLab'))
 const TrendRecommendations = lazy(() => import('./pages/TrendRecommendations'))
 
 function PageLoader() {
@@ -23,8 +25,10 @@ function App() {
                     <Route path="/analytics" element={<Dashboard />} />
                     <Route path="/creator-intelligence" element={<CreatorIntelligence />} />
                     <Route path="/image-editor" element={<ImageEditor />} />
+                    <Route path="/creator/image-editor" element={<CreatorImageEditor />} />
                     <Route path="/brand/campaign" element={<BrandCampaign />} />
                     <Route path="/post/:media_id" element={<SinglePostInsights />} />
+                    <Route path="/post-analysis" element={<PostAnalysisLab />} />
                     <Route path="/trends" element={<TrendRecommendations />} />
                     <Route path="/auth/callback" element={<Callback />} />
                 </Routes>

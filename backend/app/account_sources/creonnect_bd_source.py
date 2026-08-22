@@ -94,6 +94,27 @@ class CreonnectBDAccountSource(AccountSource):
             metrics = metrics if isinstance(metrics, dict) else {}
             follower_count = safe_int_or_none(metrics.get("followers_count"))
 
+        account_insights: dict[str, Any] = {}
+        account_insights_available = False
+        try:
+            account_insights = await client.get_connection_account_insights(
+                platform="instagram",
+                connection_id=resolved_connection_id,
+                period="days_28",
+            )
+            account_insights_available = True
+        except ValueError as exc:
+            # Insight availability varies by account and Meta API version. Do
+            # not make post-based analysis unavailable when optional account
+            # insights cannot be fetched.
+            account_insights = {}
+            account_insights_error = str(exc)
+        else:
+            account_insights_error = None
+
+        if follower_count is None:
+            follower_count = safe_int_or_none(account_insights.get("follower_count"))
+
         posts: list[dict[str, Any]] = []
         page = 1
         page_size = min(100, request.post_limit)
@@ -132,11 +153,14 @@ class CreonnectBDAccountSource(AccountSource):
                 "platform": "instagram",
                 "platform_user_id": platform_user_id,
                 "platform_username": platform_username,
+                "account_insights_enriched": account_insights_available,
+                "account_insights_error": account_insights_error,
             },
             account_id=account_id,
             username=request.username or platform_username,
             bio=request.bio or _strip_text(platform_profile.get("biography")) or _strip_text(platform_profile.get("bio")),
             follower_count=follower_count,
+            account_insights=account_insights,
             creator_dominant_category=request.creator_dominant_category,
             niche_tags=list(request.niche_tags or creator_niche_tags),
             posts=normalized_posts,

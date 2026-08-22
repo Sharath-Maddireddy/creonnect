@@ -68,3 +68,23 @@ def get_image_editor_provider_settings() -> ImageEditorProviderSettings:
             requires_endpoint=False,
         ),
     )
+
+
+def get_image_editor_generation_provider(settings: ImageEditorProviderSettings | None = None) -> str:
+    """Resolve the explicitly selected provider for Creator Image Editor jobs."""
+    configured = settings or get_image_editor_provider_settings()
+    preferred = _env("IMAGE_EDITOR_GENERATION_PROVIDER").lower() or "gemini"
+    aliases = {
+        "gpt": "gpt-image",
+        "gpt-image": "gpt-image",
+        "azure-openai": "gpt-image",
+        "gemini": "gemini",
+        "google-gemini": "gemini",
+    }
+    provider = aliases.get(preferred)
+    if provider is None:
+        raise ValueError("IMAGE_EDITOR_GENERATION_PROVIDER must be gpt-image or gemini")
+    provider_settings = configured.gpt_image if provider == "gpt-image" else configured.gemini
+    if not provider_settings.is_configured:
+        raise ValueError(f"Selected image editor provider is not configured: {provider}")
+    return provider

@@ -141,7 +141,9 @@ def test_cringe_summary_endpoint_returns_cached_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(post_analysis_routes, "build_single_post_insights", _fake_build_single_post_insights)
 
+    monkeypatch.setenv("TEST_ACCOUNT_ID", "acct_1")
     client = TestClient(app)
+    assert client.get("/api/dev/login").status_code == 200
     post_response = client.post(
         "/api/post-analysis",
         json={

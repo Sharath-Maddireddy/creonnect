@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import backend.app.infra.redis_client as redis_client
 from backend.app.domain.post_models import BenchmarkMetrics, CoreMetrics, DerivedMetrics, SinglePostInsights
+from backend.app.api.instagram_auth_routes import AuthenticatedInstagramUser, get_current_instagram_user
 from backend.app.services import account_analysis_jobs
 import backend.app.services.ai_analysis_service as ai_analysis_service
 import backend.app.services.post_insights_service as post_insights_service
@@ -44,25 +45,35 @@ EXPECTED_POST_SCORE_KEYS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def authenticated_api_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUEUE_BACKEND", "rq")
+    app.dependency_overrides[get_current_instagram_user] = lambda: AuthenticatedInstagramUser(id="acct_runner")
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_current_instagram_user, None)
+
+
 class _DeferredQueue:
     def __init__(self) -> None:
         self.calls: list[tuple[object, dict, dict]] = []
 
     def enqueue(self, func, payload, **kwargs):  # noqa: ANN001
         self.calls.append((func, payload, kwargs))
-        return SimpleNamespace(id=kwargs.get("job_id", "job_deferred"))
+        return SimpleNamespace(id=kwargs.get("job_id", "job_deferred"), get_status=lambda refresh=False: "queued")
 
 
 class _ImmediateQueue:
     def enqueue(self, func, payload, **kwargs):  # noqa: ANN001
         func(payload)
-        return SimpleNamespace(id=kwargs.get("job_id", "job_immediate"))
+        return SimpleNamespace(id=kwargs.get("job_id", "job_immediate"), get_status=lambda refresh=False: "finished")
 
 
 def _post_payload(media_url: str = "https://example.com/post.jpg") -> dict:
     return {
         "post_id": "anti_gravity_post_1",
-        "account_id": "anti_gravity_acct_1",
+        "account_id": "acct_runner",
         "platform": "instagram",
         "post_type": "IMAGE",
         "media_url": media_url,
@@ -255,7 +266,7 @@ def test_account_dedupe_storm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(account_analysis_jobs, "ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR", 999)
 
     client = TestClient(app)
-    payload = {"account_id": "acct_runner_storm", "post_limit": 12}
+    payload = {"account_id": "acct_runner", "post_limit": 12, "posts": []}
     responses = [client.post("/api/account-analysis", json=payload) for _ in range(5)]
 
     assert all(response.status_code == 200 for response in responses)
@@ -271,10 +282,10 @@ def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(account_analysis_jobs, "ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR", 3)
 
     client = TestClient(app)
-    first = client.post("/api/account-analysis", json={"account_id": "acct_runner_rate", "post_limit": 5})
-    second = client.post("/api/account-analysis", json={"account_id": "acct_runner_rate", "post_limit": 6})
-    third = client.post("/api/account-analysis", json={"account_id": "acct_runner_rate", "post_limit": 7})
-    fourth = client.post("/api/account-analysis", json={"account_id": "acct_runner_rate", "post_limit": 8})
+    first = client.post("/api/account-analysis", json={"account_id": "acct_runner", "post_limit": 5, "posts": [{"media_id": "p5"}]})
+    second = client.post("/api/account-analysis", json={"account_id": "acct_runner", "post_limit": 6, "posts": [{"media_id": "p6"}]})
+    third = client.post("/api/account-analysis", json={"account_id": "acct_runner", "post_limit": 7, "posts": [{"media_id": "p7"}]})
+    fourth = client.post("/api/account-analysis", json={"account_id": "acct_runner", "post_limit": 8, "posts": [{"media_id": "p8"}]})
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -303,6 +314,7 @@ def test_posts_summary_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
         job_id,
         {
             "job_id": job_id,
+            "account_id": "acct_runner",
             "status": "succeeded",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "started_at": datetime.now(timezone.utc).isoformat(),
@@ -346,7 +358,7 @@ def test_quality_flags_correctness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "stub-key")
     enabled_resp = client.post(
         "/api/account-analysis",
-        json={"account_id": "acct_quality_enabled", "post_limit": 3, "posts": posts},
+        json={"account_id": "acct_runner", "post_limit": 2, "posts": posts},
     )
     assert enabled_resp.status_code == 200
     enabled_job_id = enabled_resp.json()["job_id"]
@@ -357,9 +369,10 @@ def test_quality_flags_correctness(monkeypatch: pytest.MonkeyPatch) -> None:
     assert enabled_payload["quality"]["vision_error_count"] == 0
 
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    posts[0]["caption_text"] = "Changed input to force a fresh analysis job."
     disabled_resp = client.post(
         "/api/account-analysis",
-        json={"account_id": "acct_quality_disabled", "post_limit": 3, "posts": posts},
+        json={"account_id": "acct_runner", "post_limit": 3, "posts": posts},
     )
     assert disabled_resp.status_code == 200
     disabled_job_id = disabled_resp.json()["job_id"]

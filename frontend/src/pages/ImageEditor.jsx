@@ -428,6 +428,7 @@ export default function ImageEditor() {
                                 </div>
                             ) : null}
 
+                            {editMode === 'filter-only' ? <>
                             <div className="image-editor-field">
                                 <label htmlFor="style_id">Style</label>
                                 <select
@@ -488,6 +489,7 @@ export default function ImageEditor() {
                                     These are all backend-approved global adjustments. Structural edits are blocked in filter-only mode.
                                 </p>
                             </div>
+                            </> : null}
 
                             {(uploadError || applyError) ? (
                                 <div className="image-editor-alert image-editor-alert--error">

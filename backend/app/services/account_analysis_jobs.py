@@ -1185,7 +1185,7 @@ async def _run_single_post_pipeline_if_needed(
         try:
             async with semaphore:
                 media_id = post.media_id if isinstance(post.media_id, str) else ""
-                cached_snapshot = read_post_insights_snapshot(media_id) if media_id else None
+                cached_snapshot = read_post_insights_snapshot(post.account_id or "", media_id) if media_id else None
                 if isinstance(cached_snapshot, dict):
                     cached_post_raw = cached_snapshot.get("post")
                     cached_ai_raw = cached_snapshot.get("ai_analysis")
@@ -1390,6 +1390,7 @@ def run_account_analysis_job(payload: dict[str, Any]) -> None:
             niche_avg_engagement_rate=payload.get("niche_avg_engagement_rate"),
             follower_band=payload.get("follower_band"),
             follower_count=payload.get("follower_count"),
+            account_insights=payload.get("account_insights") if isinstance(payload.get("account_insights"), dict) else None,
             use_cache=True,
         )
         creator_score = _try_nonfatal(

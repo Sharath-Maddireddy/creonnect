@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from backend.app.account_sources.base import AccountSource
 from backend.app.account_sources.mappers import build_seed_post_from_creator_post, safe_float_or_none, safe_int_or_none
 from backend.app.account_sources.models import AccountSourceRequest, AccountSourceType, NormalizedAccountPayload
 from backend.app.ai.schemas import CreatorPostAIInput
-from backend.app.ingestion.instagram_oauth import fetch_instagram_media, fetch_instagram_profile
+from backend.app.ingestion.instagram_oauth import (
+    fetch_instagram_account_insights,
+    fetch_instagram_media,
+    fetch_instagram_profile,
+)
 
 
 class InstagramOAuthAccountSource(AccountSource):
@@ -17,8 +23,10 @@ class InstagramOAuthAccountSource(AccountSource):
     async def load(self, request: AccountSourceRequest) -> NormalizedAccountPayload:
         if not request.access_token:
             raise ValueError("A connected Instagram account is required for this source.")
-        profile, media = await fetch_instagram_profile(request.access_token), await fetch_instagram_media(
-            request.access_token, limit=request.post_limit
+        profile, media, account_insights = await asyncio.gather(
+            fetch_instagram_profile(request.access_token),
+            fetch_instagram_media(request.access_token, limit=request.post_limit),
+            fetch_instagram_account_insights(request.access_token),
         )
         account_id = str(profile.get("id") or request.account_id or "")
         if not account_id:
@@ -50,5 +58,6 @@ class InstagramOAuthAccountSource(AccountSource):
                     "watch_through_rate": safe_float_or_none(item.get("watch_through_rate"))},
             ))
         return NormalizedAccountPayload(source_type=self.source_type, source_ref=account_id,
-            source_meta={"insights_enriched": True}, account_id=account_id,
-            username=profile.get("username"), bio=profile.get("biography"), follower_count=follower_count, posts=posts)
+            source_meta={"insights_enriched": True, "account_insights_enriched": True}, account_id=account_id,
+            username=profile.get("username"), bio=profile.get("biography"), follower_count=follower_count,
+            account_insights=account_insights, posts=posts)

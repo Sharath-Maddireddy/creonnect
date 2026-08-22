@@ -113,6 +113,39 @@ def test_happy_path_30_posts() -> None:
     assert result.pillars["content_quality"].score >= 70.0
 
 
+def test_account_insights_populate_core_and_conversion_metrics() -> None:
+    result = compute_account_health_score(
+        [_build_post(1)],
+        follower_count=1_250,
+        account_insights={
+            "reach": 9_000,
+            "profile_views": 240,
+            "website_clicks": 36,
+            "follows_and_unfollows": {"follows": 24, "unfollows": 4},
+        },
+    )
+
+    assert result.core_metrics is not None
+    assert result.core_metrics.followers is not None
+    assert result.core_metrics.followers.current_value == 1_250
+    assert result.core_metrics.reach_30d is not None
+    assert result.core_metrics.reach_30d.current_value == 9_000
+    assert result.core_metrics.profile_visits_30d is not None
+    assert result.core_metrics.profile_visits_30d.current_value == 240
+    assert result.conversion_funnel is not None
+    assert result.conversion_funnel.website_clicks == 36
+    assert result.conversion_funnel.follows == 24
+    assert result.conversion_funnel.profile_visit_to_follow_pct == 10.0
+
+
+def test_missing_follower_count_remains_unavailable_not_zero() -> None:
+    result = compute_account_health_score([_build_post(1)], follower_count=None)
+
+    assert result.core_metrics is not None
+    assert result.core_metrics.followers is not None
+    assert result.core_metrics.followers.current_value is None
+
+
 def test_low_content_quality() -> None:
     posts = [
         _build_post(

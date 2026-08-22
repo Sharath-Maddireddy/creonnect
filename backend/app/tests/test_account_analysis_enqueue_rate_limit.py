@@ -25,8 +25,11 @@ class _QueueStub:
 
 @pytest.fixture(autouse=True)
 def _stub_analysis_generation(monkeypatch) -> None:
-    """Keep enqueue tests isolated from the Redis-backed disconnect generation."""
+    """Keep enqueue tests isolated from Redis and the developer queue configuration."""
     monkeypatch.setattr(account_analysis_jobs, "_read_analysis_generation", lambda _account_id: 0)
+    # RQ is the documented local default. Individual SQS tests opt in explicitly;
+    # this prevents a local production-style .env from sending unit tests to AWS.
+    monkeypatch.setenv("QUEUE_BACKEND", "rq")
 
 
 def _build_post(index: int) -> SinglePostInsights:

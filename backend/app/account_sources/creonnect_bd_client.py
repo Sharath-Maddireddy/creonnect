@@ -181,6 +181,23 @@ class CreonnectBDClient:
             },
         )
 
+    async def get_connection_account_insights(
+        self,
+        *,
+        platform: str = "instagram",
+        connection_id: str,
+        period: str = "days_28",
+    ) -> dict[str, Any]:
+        """Read normalized account insights without exposing the provider token.
+
+        Creonnect-BD owns the encrypted Instagram token. This internal request
+        asks it to call Meta server-side and return only safe metrics.
+        """
+        return await self._get_json(
+            f"/api/social/{platform}/connections/{connection_id}/account-insights",
+            params={"period": period},
+        )
+
     async def get_creator_profile(self) -> dict[str, Any]:
         """Fetch creator profile for the authenticated/impersonated user context."""
         return await self._get_json("/api/creator/profile")

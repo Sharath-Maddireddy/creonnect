@@ -26,12 +26,15 @@ from backend.app.domain.post_models import (
     WeightedPostScore,
 )
 import backend.app.api.post_analysis_routes as post_analysis_routes
+from backend.app.api.instagram_auth_routes import AuthenticatedInstagramUser, get_current_instagram_user
 from backend.app.services import account_analysis_jobs
 import backend.app.services.post_insights_service as post_insights_service
 from backend.main import app
 
 
 EXPECTED_POST_ANALYSIS_TOP_LEVEL_KEYS = {
+    "contract_version",
+    "data_sources",
     "status",
     "post",
     "vision",
@@ -41,6 +44,14 @@ EXPECTED_POST_ANALYSIS_TOP_LEVEL_KEYS = {
     "score_analysis",
     "warnings",
     "quality",
+    "score",
+    "confidence",
+    "predicted_er",
+    "score_evidence",
+    "score_components",
+    "account_score_baseline",
+    "unavailable_features",
+    "reel_analysis",
 }
 EXPECTED_SCORE_KEYS = {
     "S1",
@@ -56,13 +67,23 @@ EXPECTED_SCORE_KEYS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def authenticated_api_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUEUE_BACKEND", "rq")
+    app.dependency_overrides[get_current_instagram_user] = lambda: AuthenticatedInstagramUser(id="acct_api")
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_current_instagram_user, None)
+
+
 class _DeferredQueue:
     def __init__(self) -> None:
         self.calls: list[tuple[object, dict[str, Any], dict[str, Any]]] = []
 
     def enqueue(self, func, payload, **kwargs):  # noqa: ANN001
         self.calls.append((func, payload, kwargs))
-        return SimpleNamespace(id=kwargs.get("job_id", "job_deferred"))
+        return SimpleNamespace(id=kwargs.get("job_id", "job_deferred"), get_status=lambda refresh=False: "queued")
 
 
 class _ImmediateQueue:
@@ -72,7 +93,7 @@ class _ImmediateQueue:
         # synchronously (before the job runs) so the result is visible afterwards.
         account_analysis_jobs.initialize_job_status(job_id)
         func(payload)
-        return SimpleNamespace(id=job_id)
+        return SimpleNamespace(id=job_id, get_status=lambda refresh=False: "finished")
 
 
 
@@ -181,8 +202,8 @@ def _patch_post_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
                 "warnings": [],
                 "fallback_used": False,
                 "vision_status": "ok",
-                "predicted_engagement_rate": 0.08,
-                "predicted_engagement_rate_notes": ["deterministic-note"],
+                "creative_score": 55.0,
+                "creative_band": "BUILDING_MOMENTUM",
             },
         }
 
@@ -193,7 +214,7 @@ def _patch_post_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
 def _post_analysis_request_payload() -> dict[str, Any]:
     return {
         "post_id": "post_123",
-        "account_id": "creator_1",
+        "account_id": "acct_api",
         "platform": "instagram",
         "post_type": "IMAGE",
         "media_url": "https://example.com/post.jpg",
@@ -214,9 +235,16 @@ def test_post_analysis_schema_lock(monkeypatch: pytest.MonkeyPatch) -> None:
 
     payload = response.json()
     assert set(payload.keys()) == EXPECTED_POST_ANALYSIS_TOP_LEVEL_KEYS
+    assert payload["contract_version"] == "v2"
+    assert payload["data_sources"] == {
+        "media": "request_supplied",
+        "engagement_metrics": "request_supplied_not_used_for_ai_score",
+        "score": "ai_creative_weighted_score",
+        "account_baseline": "durable_post_analysis_history",
+    }
     assert payload["status"] == "succeeded"
     assert set(payload["post"].keys()) == {"post_id", "post_type", "media_url", "caption_text"}
-    assert set(payload["vision"].keys()) == {"provider", "status", "signals"}
+    assert set(payload["vision"].keys()) == {"provider", "status", "signals", "error_reason"}
     assert set(payload["ai"].keys()) == {
         "summary",
         "drivers",
@@ -226,10 +254,55 @@ def test_post_analysis_schema_lock(monkeypatch: pytest.MonkeyPatch) -> None:
         "caption_improvement",
         "posting_intelligence",
         "hashtag_quality_note",
+        "creative_score",
+        "creative_band",
+        "score_source",
     }
     assert isinstance(payload.get("scores"), dict)
     assert set(payload["scores"].keys()) == EXPECTED_SCORE_KEYS
     assert isinstance(payload["scores"]["predicted_engagement_rate_notes"], list)
+    assert payload["score"] == {
+        "value": 55.0,
+        "max": 100,
+        "band": "BUILDING_MOMENTUM",
+        "source": "ai_creative_weighted_score",
+    }
+    assert payload["confidence"]["level"] == "high"
+    assert payload["score_components"][0] == {
+        "id": "S1",
+        "label": "Visual quality",
+        "raw_value": 40.0,
+        "raw_max": 50,
+        "normalized_value": 80.0,
+        "normalized_max": 100,
+        "confidence": "high",
+        "status": "available",
+        "reason": None,
+    }
+    audience_fit_component = next(item for item in payload["score_components"] if item["id"] == "S4")
+    assert audience_fit_component == {
+        "id": "S4",
+        "label": "Audience fit",
+        "raw_value": None,
+        "raw_max": 50,
+        "normalized_value": None,
+        "normalized_max": 100,
+        "confidence": "unavailable",
+        "status": "unavailable",
+        "reason": "Creator niche context is required to score audience fit.",
+    }
+    assert payload["predicted_er"] == {
+        "status": "not_supported",
+        "reason": "Predicted engagement is not part of the AI-only creative analysis contract.",
+        "value": None,
+        "confidence": "unavailable",
+    }
+    assert set(payload["unavailable_features"]) == {
+        "retention_curve",
+        "post_attributed_follows",
+        "post_demographics",
+    }
+    assert {item["status"] for item in payload["unavailable_features"].values()} == {"not_supported"}
     assert set(payload["cringe"].keys()) == {
         "cringe_score",
         "cringe_label",
@@ -264,7 +337,7 @@ def test_account_enqueue_dedupe_storm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(account_analysis_jobs, "ACCOUNT_ANALYSIS_RATE_LIMIT_PER_HOUR", 999)
 
     client = TestClient(app)
-    payload = {"account_id": "acct_storm", "post_limit": 12}
+    payload = {"account_id": "acct_api", "post_limit": 12, "posts": []}
     responses = [client.post("/api/account-analysis", json=payload) for _ in range(5)]
 
     assert all(response.status_code == 200 for response in responses)
@@ -280,11 +353,11 @@ def test_account_rate_limit_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(account_analysis_jobs, "get_queue", lambda: deferred_queue)
 
     client = TestClient(app)
-    first = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 5})
-    second = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 6})
-    third = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 7})
-    fourth = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 5})
-    fifth = client.post("/api/account-analysis", json={"account_id": "acct_limit", "post_limit": 8})
+    first = client.post("/api/account-analysis", json={"account_id": "acct_api", "post_limit": 5, "posts": [{"media_id": "p5"}]})
+    second = client.post("/api/account-analysis", json={"account_id": "acct_api", "post_limit": 6, "posts": [{"media_id": "p6"}]})
+    third = client.post("/api/account-analysis", json={"account_id": "acct_api", "post_limit": 7, "posts": [{"media_id": "p7"}]})
+    fourth = client.post("/api/account-analysis", json={"account_id": "acct_api", "post_limit": 5, "posts": [{"media_id": "p5"}]})
+    fifth = client.post("/api/account-analysis", json={"account_id": "acct_api", "post_limit": 8, "posts": [{"media_id": "p8"}]})
 
     assert first.status_code == 200
     assert second.status_code == 200

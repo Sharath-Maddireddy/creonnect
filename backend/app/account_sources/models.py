@@ -70,6 +70,7 @@ class NormalizedAccountPayload(BaseModel):
     username: str | None = None
     bio: str | None = None
     follower_count: int | None = None
+    account_insights: dict[str, Any] = Field(default_factory=dict)
     creator_dominant_category: str | None = None
     niche_tags: list[str] = Field(default_factory=list)
     posts: list[SinglePostInsights] = Field(default_factory=list)
