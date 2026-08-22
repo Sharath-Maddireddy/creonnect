@@ -35,6 +35,14 @@ def _mock_oauth_url_builder(monkeypatch) -> None:
 
 
 def test_instagram_logout_requires_authenticated_session(monkeypatch) -> None:
+    # Importing backend.app.infra.database (transitively, via other test
+    # modules collected earlier in the suite) leaks DEV_AUTH_BYPASS from
+    # backend/.env into os.environ process-wide via load_app_env(override=
+    # False) — that only protects already-set vars, not unset ones. Without
+    # this, this test passes in isolation but fails in full-suite order
+    # because the dev bypass silently activates.
+    monkeypatch.delenv("DEV_AUTH_BYPASS", raising=False)
+
     deleted_user_ids: list[str] = []
 
     async def fake_delete_token_async(user_id: str) -> None:
