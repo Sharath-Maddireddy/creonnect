@@ -118,6 +118,7 @@ def run_reel_analysis_job(payload: dict[str, Any]) -> None:
         audio_score = compute_reel_audio_score(
             audio_name=audio_name if isinstance(audio_name, str) else None,
             caption_text=caption_text,
+            reel_vision_signals=signals,
         )
         logger.debug(
             "[ReelAnalysisJob] Audio score job_id=%s total=%s",

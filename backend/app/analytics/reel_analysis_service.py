@@ -29,7 +29,24 @@ def compute_reel_analysis(
                         +5 if watch_time_pct >= 0.5
                         -5 if watch_time_pct < 0.25
     - total = (0.30*hook + 0.20*pacing + 0.25*audio + 0.25*retention) * 2
+
+    ``audio_score.audio_available`` is only False when neither a real
+    ``audio_name`` nor Gemini's own audio analysis produced a signal (see
+    ``compute_reel_audio_score``) -- Instagram's read API does not expose
+    audio track names for existing media, so ``audio_name`` alone is
+    essentially never populated; Gemini's audio observation of the video
+    itself is the primary signal in practice. When truly nothing is
+    available, the audio component is dropped and its weight is
+    redistributed proportionally across hook/pacing/retention instead of
+    silently scoring 25% of the total as zero (capping every unaudited
+    reel at 75/100) -- the same "normalize over available components"
+    pattern already used by ``compute_weighted_post_score`` for missing
+    S5/S7.
     """
+    _WEIGHTS_WITH_AUDIO = {"hook": 0.30, "pacing": 0.20, "audio": 0.25, "retention": 0.25}
+    _WEIGHTS_WITHOUT_AUDIO_TOTAL = (
+        _WEIGHTS_WITH_AUDIO["hook"] + _WEIGHTS_WITH_AUDIO["pacing"] + _WEIGHTS_WITH_AUDIO["retention"]
+    )
     notes: list[str] = []
     signals = reel_vision_signals if isinstance(reel_vision_signals, dict) else {}
 
@@ -61,11 +78,30 @@ def compute_reel_analysis(
             retention_score = _clamp(retention_score - 5.0, 0.0, 50.0)
             notes.append("Watch-time <25% penalises retention.")
 
-    total = _clamp(
-        (hook_score * 0.30 + pacing_score * 0.20 + audio_alignment_score * 0.25 + retention_score * 0.25) * 2.0,
-        0.0,
-        100.0,
-    )
+    if audio_score.audio_available:
+        total = _clamp(
+            (
+                hook_score * _WEIGHTS_WITH_AUDIO["hook"]
+                + pacing_score * _WEIGHTS_WITH_AUDIO["pacing"]
+                + audio_alignment_score * _WEIGHTS_WITH_AUDIO["audio"]
+                + retention_score * _WEIGHTS_WITH_AUDIO["retention"]
+            )
+            * 2.0,
+            0.0,
+            100.0,
+        )
+    else:
+        total = _clamp(
+            (
+                hook_score * (_WEIGHTS_WITH_AUDIO["hook"] / _WEIGHTS_WITHOUT_AUDIO_TOTAL)
+                + pacing_score * (_WEIGHTS_WITH_AUDIO["pacing"] / _WEIGHTS_WITHOUT_AUDIO_TOTAL)
+                + retention_score * (_WEIGHTS_WITH_AUDIO["retention"] / _WEIGHTS_WITHOUT_AUDIO_TOTAL)
+            )
+            * 2.0,
+            0.0,
+            100.0,
+        )
+        notes.append("Normalized over available components; missing: audio")
 
     return ReelAnalysis(
         hook_score=round(hook_score, 2),

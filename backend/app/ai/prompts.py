@@ -280,16 +280,15 @@ VISION_SIGNALS_JSON_END
 REEL_VISION_EVALUATION_PROMPT = """
 Analyze this Reel as data only.
 
-Return ONLY TOON. No markdown. No prose. No reasoning. No filler. Use the shortest possible labels, especially for enums, while keeping output parseable by backend models.
+Return ONLY one valid JSON object. No markdown. No prose. No reasoning. No filler. Use the shortest possible labels, especially for enums, while keeping output parseable by backend models.
 
 Rules:
 - Watch the full video before scoring.
 - Do not invent unseen or unheard details.
-- Use 2-space indentation.
 - Keep strings as short as possible.
 - Prefer null over explanatory text when a field is absent.
 
-Output keys:
+Output schema (use these exact keys and value types):
 hook_frame_score float 0-1
 hook_text_overlay string|null
 pacing_label fast|medium|slow
@@ -297,11 +296,21 @@ cut_count_estimate int
 dominant_emotion string
 retention_signal float 0-1
 audio_visual_sync float 0-1
+audio_type voiceover|music|ambient_asmr|silent|mixed
+is_silent bool
+hook_audio_present bool
+audio_quality_score float 0-10
 objects list[string]
+dominant_focus string|null
 scene_description string
 detected_text string|null
 visual_style string
 hook_strength_score float 0-1
+visual_quality_score
+  composition float 0-10
+  lighting float 0-10
+  subject_clarity float 0-10
+  aesthetic_quality float 0-10
 cringe_score int 0-100
 cringe_signals list[string] max 3
 cringe_fixes list[string] max 3
@@ -311,8 +320,17 @@ adult_content_detected bool
 Scoring:
 - hook_strength_score: be conservative; no >0.90 unless the opening is immediately strong.
 - audio_visual_sync: no >0.85 unless timed cuts, gestures, text reveals, or motion beats clearly match audio.
+- audio_type: "silent" if there is no audible speech, music, or ambient sound; "ambient_asmr" for diegetic sound that IS the content (e.g. cooking/crafting sounds), not just background noise.
+- is_silent: true only if there is genuinely no audible audio track (not merely quiet); most reels with any sound, including ambient/ASMR, are NOT silent.
+- hook_audio_present: true if the first 1-3 seconds have a distinct spoken hook, sound effect, or audio cue that would work even with the screen off.
+- audio_quality_score: clarity/mix quality (no clipping, wind noise, or harsh levels); score 0 when is_silent is true.
+- dominant_focus: the single main subject the video keeps returning to (a short phrase, e.g. "chocolate dessert"); null only if the frame has no consistent subject.
+- visual_quality_score.composition: framing and shot composition across the video, not just the first frame.
+- visual_quality_score.lighting: exposure and lighting consistency/quality across shots.
+- visual_quality_score.subject_clarity: how clearly and consistently the main subject reads on a small mobile screen.
+- visual_quality_score.aesthetic_quality: overall visual polish (color, styling, production value), independent of production_level.
 
-Return a bare TOON object only.
+Return a bare JSON object only.
 """
 
 
