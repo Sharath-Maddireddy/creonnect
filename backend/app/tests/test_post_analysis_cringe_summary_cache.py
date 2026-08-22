@@ -315,6 +315,29 @@ def test_score_confidence_and_missing_er_are_explained() -> None:
     assert "ai-only creative analysis" in er["reason"].lower()
 
 
+def test_confidence_downgrades_for_partially_analyzed_carousel() -> None:
+    """A carousel that lost slides to a download/parse failure must not
+    report the same confidence as one that fully succeeded."""
+    confidence = post_analysis_routes._confidence_payload(
+        vision={"status": "ok", "slide_coverage": {"analyzed": 5, "submitted": 8}},
+        fallback_used=False,
+        warnings=[],
+    )
+
+    assert confidence["level"] == "standard"
+    assert "5 of 8" in confidence["reason"]
+
+
+def test_confidence_stays_high_when_coverage_is_complete() -> None:
+    confidence = post_analysis_routes._confidence_payload(
+        vision={"status": "ok", "slide_coverage": {"analyzed": 8, "submitted": 8}},
+        fallback_used=False,
+        warnings=[],
+    )
+
+    assert confidence["level"] == "high"
+
+
 def test_score_evidence_does_not_invent_a_caption_assessment() -> None:
     evidence = post_analysis_routes._score_evidence_payload(
         {"S1": 30.0, "S2": 0.0, "S3": 20.0, "S4": 20.0, "S5": 20.0, "S6": 50.0},

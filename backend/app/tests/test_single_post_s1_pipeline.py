@@ -372,6 +372,118 @@ def test_run_vision_analysis_aggregates_carousel_slides_with_bounded_fanout(monk
     assert result["signals"][0]["hook_strength_score"] == pytest.approx(0.55)
     assert [signal["slide_index"] for signal in result["signals"][1:]] == [1, 2]
 
+def test_run_vision_analysis_carousel_routes_video_slides_to_reel_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: video slides were forced through media_type=IMAGE, so
+    they always failed the image-only downloader -- silently, since a
+    partially-succeeded carousel still returned status='ok' with no
+    indication a slide was never analyzed."""
+    async def _public_host(_hostname: str) -> bool:
+        return True
+
+    async def _image_signal(*, media_url: str, **_kwargs):
+        return {
+            "objects": ["static-object"],
+            "primary_objects": ["static-object"],
+            "hook_strength_score": 0.5,
+            "virality_potential": 5,
+            "cringe_score": 10,
+            "is_cringe": False,
+            "adult_content_detected": False,
+        }
+
+    def _reel_signal(media_url: str):
+        return {
+            "status": "ok",
+            "signals": {
+                "hook_frame_score": 0.9,
+                "retention_signal": 0.6,
+                "objects": ["video-object"],
+                "cringe_score": 5,
+            },
+        }
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_analysis_service, "_is_safe_public_hostname", _public_host)
+    monkeypatch.setattr(ai_analysis_service, "_retry_parse_with_retry_only", _image_signal)
+    monkeypatch.setattr(ai_analysis_service, "run_reel_gemini_analysis", _reel_signal)
+
+    post = _build_post("carousel_mixed", reach=100, engagement_rate=0.1, media_url="https://cdn.example/slide-1.jpg")
+    post.media_type = "CAROUSEL"
+    post.carousel_media_urls = ["https://cdn.example/slide-1.jpg", "https://cdn.example/slide-2.mp4"]
+
+    result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
+
+    assert result["status"] == "ok"
+    assert result.get("error_reason") is None
+    assert result.get("slide_coverage") is None  # full coverage -> not surfaced
+    slide_signals = result["signals"][1:]
+    assert {s["slide_index"]: s["objects"] for s in slide_signals} == {
+        1: ["static-object"],
+        2: ["video-object"],
+    }
+
+
+def test_run_vision_analysis_carousel_caps_video_slides_and_reports_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _public_host(_hostname: str) -> bool:
+        return True
+
+    async def _image_signal(*, media_url: str, **_kwargs):
+        return {"objects": [], "primary_objects": [], "hook_strength_score": 0.5, "virality_potential": 5}
+
+    reel_calls: list[str] = []
+
+    def _reel_signal(media_url: str):
+        reel_calls.append(media_url)
+        return {"status": "ok", "signals": {"hook_frame_score": 0.5, "retention_signal": 0.5}}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_analysis_service, "_is_safe_public_hostname", _public_host)
+    monkeypatch.setattr(ai_analysis_service, "_retry_parse_with_retry_only", _image_signal)
+    monkeypatch.setattr(ai_analysis_service, "run_reel_gemini_analysis", _reel_signal)
+    monkeypatch.setattr(ai_analysis_service, "CAROUSEL_VIDEO_SLIDE_LIMIT", 1)
+
+    post = _build_post("carousel_many_videos", reach=100, engagement_rate=0.1, media_url="https://cdn.example/a.mp4")
+    post.media_type = "CAROUSEL"
+    post.carousel_media_urls = ["https://cdn.example/a.mp4", "https://cdn.example/b.mp4", "https://cdn.example/c.jpg"]
+
+    result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
+
+    assert result["status"] == "ok"
+    assert reel_calls == ["https://cdn.example/a.mp4"]  # second video slide capped
+    assert result["slide_coverage"] == {"analyzed": 2, "submitted": 3}
+    assert "video slide limit" in (result["error_reason"] or "")
+
+
+def test_run_vision_analysis_carousel_surfaces_partial_errors_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A carousel that partially fails must not read identically to one
+    where every slide succeeded."""
+    async def _public_host(_hostname: str) -> bool:
+        return True
+
+    async def _flaky_signal(*, media_url: str, **_kwargs):
+        if media_url.endswith("bad.jpg"):
+            raise ValueError("simulated provider failure")
+        return {"objects": ["ok"], "primary_objects": ["ok"], "hook_strength_score": 0.5, "virality_potential": 5}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_analysis_service, "_is_safe_public_hostname", _public_host)
+    monkeypatch.setattr(ai_analysis_service, "_retry_parse_with_retry_only", _flaky_signal)
+
+    post = _build_post("carousel_flaky", reach=100, engagement_rate=0.1, media_url="https://cdn.example/good.jpg")
+    post.media_type = "CAROUSEL"
+    post.carousel_media_urls = ["https://cdn.example/good.jpg", "https://cdn.example/bad.jpg"]
+
+    result = asyncio.run(ai_analysis_service.run_vision_analysis(post))
+
+    assert result["status"] == "ok"
+    assert result["slide_coverage"] == {"analyzed": 1, "submitted": 2}
+    assert "slide 2" in result["error_reason"]
+
+
 @pytest.mark.parametrize(
     "private_ip",
     ["127.0.0.1", "10.0.0.4", "100.64.0.1", "169.254.169.254", "::1"],

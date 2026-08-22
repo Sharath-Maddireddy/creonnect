@@ -52,6 +52,10 @@ MIN_REGEN_SECONDS = 1
 ANALYSIS_CACHE_MAX_ENTRIES = 1024
 AI_ANALYSIS_CACHE_VERSION = "creative-v2r2"
 CAROUSEL_VISION_CONCURRENCY = 3
+# Bounds worst case (an all-video carousel) from turning into N full inline
+# reel analyses; the common case of 1-3 video slides in an otherwise-image
+# carousel is fully covered.
+CAROUSEL_VIDEO_SLIDE_LIMIT = 3
 VISION_MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 30.0
 MAX_VISION_MEDIA_BYTES = 15 * 1024 * 1024
 VISION_MEDIA_MAX_REDIRECTS = 3
@@ -774,19 +778,46 @@ async def run_vision_analysis(
     if media_type_upper == "CAROUSEL" and carousel_urls:
         semaphore = asyncio.Semaphore(CAROUSEL_VISION_CONCURRENCY)
 
+        # Video slides were previously forced through the image downloader
+        # (media_type hardcoded to IMAGE for every slide), which rejects
+        # video/mp4 outright. That failure was silent to the caller: a
+        # carousel with e.g. 3 of 8 slides being video returned status="ok"
+        # with no indication a third of the post was never analyzed. Video
+        # slides are now routed through the same inline reel-vision path as
+        # single-post reels, capped so one video-heavy carousel can't turn
+        # into CAROUSEL_VIDEO_SLIDE_LIMIT full video analyses.
+        errors: list[str] = []
+        slide_media_types: dict[int, str] = {}
+        video_slide_count = 0
+        for index, url in enumerate(carousel_urls, start=1):
+            if _infer_mime_type(url) == "video/mp4":
+                video_slide_count += 1
+                if video_slide_count > CAROUSEL_VIDEO_SLIDE_LIMIT:
+                    errors.append(
+                        f"slide {index}: skipped -- carousel video slide limit "
+                        f"({CAROUSEL_VIDEO_SLIDE_LIMIT}) reached"
+                    )
+                    continue
+                slide_media_types[index] = "REEL"
+            else:
+                slide_media_types[index] = "IMAGE"
+
+        analyzed_indices = list(slide_media_types.keys())
+
         async def _analyse_slide(index: int, url: str) -> dict[str, Any]:
             async with semaphore:
-                slide_post = post.model_copy(update={"media_url": url, "media_type": "IMAGE", "carousel_media_urls": []})
+                slide_post = post.model_copy(
+                    update={"media_url": url, "media_type": slide_media_types[index], "carousel_media_urls": []}
+                )
                 return await run_vision_analysis(slide_post)
 
         slide_results = await asyncio.gather(
-            *[_analyse_slide(index, url) for index, url in enumerate(carousel_urls, start=1)],
+            *[_analyse_slide(index, carousel_urls[index - 1]) for index in analyzed_indices],
             return_exceptions=True,
         )
         slide_signals: list[dict[str, Any]] = []
         providers: list[str] = []
-        errors: list[str] = []
-        for index, result in enumerate(slide_results, start=1):
+        for index, result in zip(analyzed_indices, slide_results):
             if isinstance(result, Exception):
                 errors.append(f"slide {index}: {result}")
                 continue
@@ -808,6 +839,7 @@ async def run_vision_analysis(
         if not slide_signals:
             failure_payload = VisionAnalysis(provider="gemini", status="error", signals=[]).model_dump(mode="python")
             failure_payload["error_reason"] = "; ".join(errors)[:300]
+            failure_payload["slide_coverage"] = {"analyzed": 0, "submitted": len(carousel_urls)}
             return failure_payload
 
         numeric_keys = ("hook_strength_score", "virality_potential", "subject_clarity", "aesthetic_quality")
@@ -839,7 +871,15 @@ async def run_vision_analysis(
             aggregate["cringe_score"] = round(sum(cringe_values) / len(cringe_values))
         aggregate["is_cringe"] = any(signal.get("is_cringe") is True for signal in slide_signals)
         aggregate["adult_content_detected"] = any(signal.get("adult_content_detected") is True for signal in slide_signals)
-        return VisionAnalysis(provider=providers[0] if providers else "gemini", status="ok", signals=[aggregate, *slide_signals]).model_dump(mode="python")
+        payload = VisionAnalysis(
+            provider=providers[0] if providers else "gemini",
+            status="ok",
+            signals=[aggregate, *slide_signals],
+            error_reason="; ".join(errors)[:300] if errors else None,
+        ).model_dump(mode="python")
+        if len(slide_signals) < len(carousel_urls):
+            payload["slide_coverage"] = {"analyzed": len(slide_signals), "submitted": len(carousel_urls)}
+        return payload
 
     parsed_url = urlparse(media_url)
     hostname = parsed_url.hostname

@@ -406,7 +406,22 @@ class VisionAnalysis(BaseModel):
         description="Vision analysis status.",
     )
     signals: list[VisionSignal] = Field(default_factory=list, description="Normalized vision signal payloads.")
-    error_reason: str | None = Field(default=None, description="Bounded diagnostic reason when vision status is error.")
+    error_reason: str | None = Field(
+        default=None,
+        description=(
+            "Bounded diagnostic reason. Always populated when status is error; "
+            "also populated when status is ok but some carousel slides failed "
+            "or were skipped (see slide_coverage)."
+        ),
+    )
+    slide_coverage: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "For carousel posts only: {'analyzed': N, 'submitted': M}. Present "
+            "whenever analyzed < submitted, so a partially-analyzed carousel "
+            "does not read as full coverage."
+        ),
+    )
 
     @field_validator("error_reason", mode="before")
     @classmethod

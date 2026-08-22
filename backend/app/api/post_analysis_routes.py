@@ -404,6 +404,17 @@ def _confidence_payload(*, vision: dict[str, Any], fallback_used: bool, warnings
         return {"level": "estimated", "reason": "A fallback analysis path was used; treat this as a preliminary score."}
     if vision.get("status") != "ok":
         return {"level": "limited", "reason": "Visual analysis was unavailable or incomplete, so some score inputs are limited."}
+    coverage = vision.get("slide_coverage")
+    if isinstance(coverage, dict):
+        analyzed, submitted = coverage.get("analyzed"), coverage.get("submitted")
+        if isinstance(analyzed, int) and isinstance(submitted, int) and submitted > 0 and analyzed < submitted:
+            return {
+                "level": "standard",
+                "reason": (
+                    f"Only {analyzed} of {submitted} carousel slides were analyzed; "
+                    "treat visual scores as a partial sample."
+                ),
+            }
     if warnings:
         return {"level": "standard", "reason": "Primary analysis completed with non-blocking warnings."}
     return {"level": "high", "reason": "Primary visual and scoring inputs completed successfully."}
