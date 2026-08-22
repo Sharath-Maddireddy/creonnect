@@ -8,6 +8,7 @@ Lists are represented by "- " items.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -58,8 +59,53 @@ def _parse_scalar(value: str) -> Any:
         return text
 
 
+def _split_inline_list_items(inner: str) -> list[str]:
+    """Split bracket-list contents on top-level commas, respecting quotes."""
+    items: list[str] = []
+    current: list[str] = []
+    quote_char: str | None = None
+    for char in inner:
+        if quote_char is not None:
+            current.append(char)
+            if char == quote_char:
+                quote_char = None
+            continue
+        if char in {"'", '"'}:
+            quote_char = char
+            current.append(char)
+            continue
+        if char == ",":
+            items.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    tail = "".join(current).strip()
+    if tail or items:
+        items.append(tail)
+    return [item for item in items if item]
+
+
+def _parse_inline_list(text: str) -> list[Any] | None:
+    """Parse a bracket-style inline list, e.g. ``[a, "b, c", 3]``.
+
+    Some LLM providers emit TOON list fields inline (JSON-like brackets)
+    instead of the multi-line ``- item`` form. Without this, the entire
+    bracket text was stored as one opaque string and then silently dropped
+    by downstream ``isinstance(value, list)`` checks.
+    """
+    stripped = text.strip()
+    if len(stripped) < 2 or stripped[0] != "[" or stripped[-1] != "]":
+        return None
+    inner = stripped[1:-1].strip()
+    if not inner:
+        return []
+    return [_parse_scalar(item) for item in _split_inline_list_items(inner)]
+
+
 def _needs_quoting(text: str) -> bool:
     if text == "" or " " in text or text.startswith("-") or text.startswith("#"):
+        return True
+    if len(text) >= 2 and text[0] == "[" and text[-1] == "]":
         return True
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
         return True
@@ -100,6 +146,52 @@ def _format_scalar(value: Any) -> str:
     return text
 
 
+_FORMAT_LABEL_KEYS = {"toon", "json"}
+
+
+def _strip_leading_format_label(text: str) -> str:
+    """Drop a stray leading ``TOON:`` (or ``JSON:``) label line some models
+    emit despite being told to return a bare object, and de-indent the rest
+    of the document by one level to undo the accidental nesting it causes.
+
+    Without this, a response like::
+
+        TOON:
+          hook_frame_score 0.7
+          cringe_score 0
+
+    parses as ``{"TOON": {"hook_frame_score": 0.7, "cringe_score": 0}}``
+    instead of a flat object, silently defaulting every downstream field
+    that reads top-level keys.
+    """
+    lines = text.splitlines()
+    start = 0
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    if start >= len(lines):
+        return text
+
+    first = lines[start].strip()
+    if not first.endswith(":"):
+        return text
+    if first[:-1].strip().lower() not in _FORMAT_LABEL_KEYS:
+        return text
+
+    remaining = lines[start + 1 :]
+    if not remaining:
+        return text
+
+    dedented: list[str] = []
+    for line in remaining:
+        if not line.strip():
+            dedented.append(line)
+            continue
+        stripped = line.lstrip(" ")
+        removed = len(line) - len(stripped)
+        dedented.append(" " * max(0, removed - INDENT_SPACES) + stripped)
+    return "\n".join(dedented)
+
+
 def loads(text: str) -> dict[str, Any]:
     """
     Parse TOON text into a Python dictionary.
@@ -109,6 +201,7 @@ def loads(text: str) -> dict[str, Any]:
     - key/value separated by a space
     - lists use "- " prefix
     """
+    text = _strip_leading_format_label(text)
     root: dict[str, Any] = {}
     stack: list[tuple[int, Any]] = [(0, root)]
     pending: tuple[str, Any, Any] | None = None
@@ -153,15 +246,16 @@ def loads(text: str) -> dict[str, Any]:
                 container.append({})
                 pending = ("list", container, len(container) - 1)
                 continue
-            value = _parse_scalar(item_text)
-            container.append(value)
+            inline_list = _parse_inline_list(item_text)
+            container.append(inline_list if inline_list is not None else _parse_scalar(item_text))
             continue
 
         if " " in content:
             key, value_text = content.split(" ", 1)
             key = key.rstrip(":")
             if isinstance(container, dict):
-                container[key] = _parse_scalar(value_text)
+                inline_list = _parse_inline_list(value_text)
+                container[key] = inline_list if inline_list is not None else _parse_scalar(value_text)
             else:
                 raise ValueError("Key/value pair found inside a list.")
             continue
@@ -173,6 +267,28 @@ def loads(text: str) -> dict[str, Any]:
         pending = ("dict", container, key)
 
     return root
+
+
+def loads_object(text: str) -> dict[str, Any]:
+    """Parse text that should be one object, trying JSON before TOON.
+
+    Providers prompted for TOON output (a token-saving format) sometimes
+    emit plain JSON instead — observed in practice from Gemini reel
+    analysis, whose braces/quoted-keys/trailing-commas the TOON parser
+    cannot read at all. JSON is checked first since it is unambiguous
+    when present; TOON is the fallback for genuinely TOON-shaped output.
+    """
+    stripped = text.strip()
+    if "{" in stripped and "}" in stripped:
+        start = stripped.find("{")
+        end = stripped.rfind("}") + 1
+        try:
+            candidate = json.loads(stripped[start:end])
+        except (ValueError, json.JSONDecodeError):
+            candidate = None
+        if isinstance(candidate, dict):
+            return candidate
+    return loads(stripped)
 
 
 def dumps(obj: dict[str, Any]) -> str:

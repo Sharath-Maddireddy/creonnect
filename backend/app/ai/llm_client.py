@@ -46,6 +46,32 @@ class LLMClientError(Exception):
     pass
 
 
+def _is_reasoning_model(model_name: str) -> bool:
+    return "5.6" in model_name or "o1" in model_name
+
+
+def _reasoning_max_completion_tokens(default_max_tokens: int) -> int:
+    """Token budget for reasoning models (e.g. gpt-5.6, o1).
+
+    ``max_completion_tokens`` on these models caps hidden reasoning tokens
+    *and* the visible answer combined. Reusing a plain-model ``max_tokens``
+    default (historically 1200) left rich prompts (like single-post coaching)
+    with zero tokens left for visible output after reasoning, so the API
+    call "succeeded" with an empty completion and silently fell back to
+    generic deterministic text. Give reasoning models a much larger budget,
+    tunable via env for further calibration.
+    """
+    raw = os.getenv("LLM_REASONING_MAX_COMPLETION_TOKENS", "")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return int(raw.strip())
+        except ValueError:
+            logger.warning(
+                "[LLM] Invalid LLM_REASONING_MAX_COMPLETION_TOKENS=%r; using default", raw
+            )
+    return max(default_max_tokens, 4000)
+
+
 def _should_log_finetune_dataset() -> bool:
     raw = os.getenv("LLM_LOG_FINETUNE_DATASET", "")
     return raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -73,11 +99,13 @@ def _append_finetune_dataset_record(prompt: Dict[str, Any], content: str) -> Non
 class LLMClient:
     """
     Thin abstraction over an LLM provider.
-    Supports both Azure OpenAI and direct OpenAI API.
+    Supports Azure OpenAI, direct OpenAI, and OpenRouter's OpenAI-compatible API.
 
-    Provider selection (automatic):
-      - If AZURE_OPENAI_ENDPOINT is set → uses Azure OpenAI (credits pay)
-      - Otherwise → falls back to direct OpenAI API
+    Provider selection:
+      - ``LLM_PROVIDER=openrouter`` → OpenRouter
+      - ``LLM_PROVIDER=azure`` → Azure OpenAI
+      - ``LLM_PROVIDER=openai`` → direct OpenAI
+      - unset / ``auto`` → Azure OpenAI when configured, otherwise direct OpenAI
 
     Can be swapped with QLoRA / local models later.
     Includes timeout and retry logic for production reliability.
@@ -103,12 +131,39 @@ class LLMClient:
         self.retry_base_delay_seconds = retry_base_delay_seconds
         self.retry_max_delay_seconds = retry_max_delay_seconds
         self._is_azure = False
+        self._is_openrouter = False
 
         # Lazy import so this file doesn't hard-depend on OpenAI
         try:
+            provider = os.getenv("LLM_PROVIDER", "auto").strip().lower()
+            if provider not in {"auto", "azure", "openai", "openrouter"}:
+                raise ValueError(
+                    "LLM_PROVIDER must be one of: auto, azure, openai, openrouter"
+                )
             azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
 
-            if azure_endpoint:
+            if provider == "openrouter":
+                import httpx
+                from openai import OpenAI
+
+                api_key = os.getenv("OPENROUTER_API_KEY")
+                if not api_key:
+                    logger.warning("[LLM] OPENROUTER_API_KEY not set in environment")
+                app_url = os.getenv("OPENROUTER_APP_URL", "").strip()
+                app_name = os.getenv("OPENROUTER_APP_NAME", "Creonnect").strip()
+                headers = {"X-Title": app_name} if app_name else {}
+                if app_url:
+                    headers["HTTP-Referer"] = app_url
+                self._client = OpenAI(
+                    api_key=api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                    default_headers=headers,
+                    timeout=timeout,
+                    http_client=httpx.Client(timeout=timeout, trust_env=False),
+                )
+                self._is_openrouter = True
+                logger.info("[LLM] Initialized OpenRouter client (model: %s)", self.model_name)
+            elif provider == "azure" or (provider == "auto" and azure_endpoint):
                 # ── Azure OpenAI path (uses Azure credits) ──
                 from openai import AzureOpenAI
                 azure_key = os.getenv("AZURE_OPENAI_API_KEY")
@@ -140,7 +195,7 @@ class LLMClient:
                 )
                 logger.info("[LLM] Initialized direct OpenAI client (model: %s)", self.model_name)
         except Exception as e:
-            logger.error(f"[LLM] Failed to initialize OpenAI client: {e}")
+            logger.error(f"[LLM] Failed to initialize LLM client: {e}")
             self._client = None
 
     @property
@@ -163,7 +218,7 @@ class LLMClient:
         if self._client is None:
             raise LLMClientError(
                 "LLM client not initialized. "
-                "Ensure OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT is set."
+                "Configure the credentials for the selected LLM_PROVIDER."
             )
 
         if not isinstance(prompt, dict):
@@ -189,8 +244,8 @@ class LLMClient:
                             {"role": "user", "content": prompt["user"]}
                         ],
                     }
-                    if "5.6" in self.model_name or "o1" in self.model_name:
-                        request_payload["max_completion_tokens"] = self.max_tokens
+                    if _is_reasoning_model(self.model_name):
+                        request_payload["max_completion_tokens"] = _reasoning_max_completion_tokens(self.max_tokens)
                         # Do not include temperature for o1/5.6 models
                     else:
                         request_payload["max_tokens"] = self.max_tokens
@@ -230,7 +285,16 @@ class LLMClient:
                 
                 if not response.choices:
                     raise LLMClientError("LLM returned empty choices -- no response generated")
-                content = response.choices[0].message.content.strip()
+                raw_content = response.choices[0].message.content
+                content = raw_content.strip() if isinstance(raw_content, str) else ""
+                if not content:
+                    finish_reason = getattr(response.choices[0], "finish_reason", None)
+                    raise LLMClientError(
+                        "LLM returned empty content "
+                        f"(finish_reason={finish_reason!r}); for reasoning models this usually means "
+                        "hidden reasoning tokens consumed the entire max_completion_tokens budget "
+                        f"(model={self.model_name!r})"
+                    )
                 try:
                     if _should_log_finetune_dataset():
                         _append_finetune_dataset_record(prompt, content)
@@ -267,7 +331,7 @@ class LLMClient:
         if self._client is None:
             raise LLMClientError(
                 "LLM client not initialized. "
-                "Ensure OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT is set."
+                "Configure the credentials for the selected LLM_PROVIDER."
             )
 
         if not isinstance(messages, list) or not messages:
@@ -294,8 +358,8 @@ class LLMClient:
                         "tools": tools,
                         "tool_choice": tool_choice,
                     }
-                    if "5.6" in self.model_name or "o1" in self.model_name:
-                        payload["max_completion_tokens"] = self.max_tokens
+                    if _is_reasoning_model(self.model_name):
+                        payload["max_completion_tokens"] = _reasoning_max_completion_tokens(self.max_tokens)
                         # Do not include temperature for o1/5.6 models
                     else:
                         payload["max_tokens"] = self.max_tokens
@@ -341,15 +405,22 @@ class LLMClient:
         if self._client is None:
             raise LLMClientError(
                 "LLM client not initialized. "
-                "Ensure OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT is set."
+                "Configure the credentials for the selected LLM_PROVIDER."
             )
 
-        # On Azure, use the embedding deployment name; on direct OpenAI, use the model name
-        embedding_model = (
-            os.getenv("AZURE_EMBEDDING_DEPLOYMENT", CREATOR_EMBEDDING_MODEL_NAME)
-            if self._is_azure
-            else CREATOR_EMBEDDING_MODEL_NAME
-        )
+        # Azure requires a deployment name. OpenRouter model IDs are provider
+        # specific, so require an explicit embedding model rather than silently
+        # sending OpenAI's default model to a router that may not support it.
+        if getattr(self, "_is_azure", False):
+            embedding_model = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", CREATOR_EMBEDDING_MODEL_NAME)
+        elif getattr(self, "_is_openrouter", False):
+            embedding_model = os.getenv("OPENROUTER_EMBEDDING_MODEL", "").strip()
+            if not embedding_model:
+                raise LLMClientError(
+                    "OPENROUTER_EMBEDDING_MODEL is required when LLM_PROVIDER=openrouter."
+                )
+        else:
+            embedding_model = CREATOR_EMBEDDING_MODEL_NAME
 
         start_time = time.time()
         try:

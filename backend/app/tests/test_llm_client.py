@@ -28,11 +28,12 @@ def _build_llm_client_with_create_mock(create_mock: Mock, max_retries: int = 0) 
     return client
 
 
-def _mock_response(content: str) -> SimpleNamespace:
+def _mock_response(content: str | None, finish_reason: str = "stop") -> SimpleNamespace:
     return SimpleNamespace(
         choices=[
             SimpleNamespace(
                 message=SimpleNamespace(content=content),
+                finish_reason=finish_reason,
             )
         ]
     )
@@ -136,6 +137,50 @@ def test_generate_logs_finetune_dataset_when_explicitly_enabled(monkeypatch: pyt
     append_mock.assert_called_once()
 
 
+def test_generate_raises_on_empty_content_instead_of_returning_empty_string() -> None:
+    """Regression: an empty completion (e.g. a reasoning model exhausting its
+    token budget on hidden reasoning) must not look like a successful call
+    with a blank answer -- callers rely on exceptions to trigger fallback."""
+    create_mock = Mock(return_value=_mock_response("", finish_reason="length"))
+    llm = _build_llm_client_with_create_mock(create_mock=create_mock, max_retries=0)
+
+    with pytest.raises(LLMClientError, match="empty content"):
+        llm.generate({"system": "sys", "user": "usr"})
+
+
+def test_generate_raises_on_none_content() -> None:
+    create_mock = Mock(return_value=_mock_response(None, finish_reason="content_filter"))
+    llm = _build_llm_client_with_create_mock(create_mock=create_mock, max_retries=0)
+
+    with pytest.raises(LLMClientError, match="empty content"):
+        llm.generate({"system": "sys", "user": "usr"})
+
+
+def test_generate_uses_larger_completion_budget_for_reasoning_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LLM_REASONING_MAX_COMPLETION_TOKENS", raising=False)
+    create_mock = Mock(return_value=_mock_response("ok"))
+    llm = _build_llm_client_with_create_mock(create_mock=create_mock, max_retries=0)
+    llm.model_name = "gpt-5.6-terra"
+    llm.max_tokens = 1200
+
+    llm.generate({"system": "sys", "user": "usr"})
+
+    call_kwargs = create_mock.call_args.kwargs
+    assert "temperature" not in call_kwargs
+    assert call_kwargs["max_completion_tokens"] >= 4000
+
+
+def test_generate_reasoning_completion_budget_respects_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_REASONING_MAX_COMPLETION_TOKENS", "8000")
+    create_mock = Mock(return_value=_mock_response("ok"))
+    llm = _build_llm_client_with_create_mock(create_mock=create_mock, max_retries=0)
+    llm.model_name = "o1-mini"
+
+    llm.generate({"system": "sys", "user": "usr"})
+
+    assert create_mock.call_args.kwargs["max_completion_tokens"] == 8000
+
+
 def test_init_uses_env_model_name_when_model_not_provided(monkeypatch: pytest.MonkeyPatch) -> None:
     openai_stub = SimpleNamespace(OpenAI=lambda **kwargs: SimpleNamespace(kwargs=kwargs))
     monkeypatch.setitem(sys.modules, "openai", openai_stub)
@@ -154,3 +199,27 @@ def test_init_falls_back_to_default_model_when_env_missing(monkeypatch: pytest.M
     client = LLMClient()
 
     assert client.model_name == LLMClient.DEFAULT_MODEL
+
+
+def test_init_uses_openrouter_when_explicitly_selected(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_openai(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(kwargs=kwargs)
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=fake_openai))
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-key")
+    monkeypatch.setenv("OPENROUTER_APP_URL", "https://app.creonnect.example")
+    monkeypatch.setenv("OPENROUTER_APP_NAME", "Creonnect Test")
+
+    client = LLMClient()
+
+    assert client._is_openrouter is True
+    assert captured["api_key"] == "router-key"
+    assert captured["base_url"] == "https://openrouter.ai/api/v1"
+    assert captured["default_headers"] == {
+        "HTTP-Referer": "https://app.creonnect.example",
+        "X-Title": "Creonnect Test",
+    }
